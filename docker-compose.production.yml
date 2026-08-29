@@ -18,11 +18,12 @@ services:
       AGENT_ENDPOINT_ALLOWED_HOSTS: agent-codex:4202
       AGENT_COMPUTER_URL: http://127.0.0.1:4100
     ports:
-      - "127.0.0.1:3001:3001"
+      - "127.0.0.1:3021:3001"
     volumes:
       - openbot-postgres:/var/lib/postgresql
       - openbot-workspace:/workspace
       - openbot-profiles:/profiles
+      - ./docker/s6/scripts/migrate.sh:/etc/s6-overlay/scripts/migrate.sh:ro
     depends_on:
       agent-codex:
         condition: service_healthy
