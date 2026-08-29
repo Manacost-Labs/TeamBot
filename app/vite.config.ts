@@ -13,10 +13,6 @@ export default defineConfig({
     tailwindcss(),
   ],
   resolve: {
-    // CopilotKit pins Streamdown 1.x, whose entry eagerly imports Mermaid, KaTeX and Shiki. The app
-    // already uses compatible Streamdown 2.x, which loads those renderers only when content needs
-    // them. One copy keeps the ordinary chat path hundreds of kilobytes smaller.
-    dedupe: ["streamdown"],
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
