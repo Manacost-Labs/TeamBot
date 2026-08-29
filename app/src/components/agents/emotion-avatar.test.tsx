@@ -14,14 +14,6 @@ describe("emotionAppearance", () => {
       emotionAppearance("researcher"),
     );
   });
-
-  test("uses an explicitly selected shape and palette", () => {
-    expect(emotionAppearance("avatar:cloud:7")).toEqual({
-      color: "#2f80ed",
-      eyes: "#07101c",
-      shape: "cloud",
-    });
-  });
 });
 
 describe("EmotionAvatar", () => {
@@ -34,19 +26,5 @@ describe("EmotionAvatar", () => {
     expect(html).toContain("Контроль данных: готов к работе");
     expect(html).not.toContain("iframe");
     expect(html).not.toContain("grok-emotion/embed.js");
-  });
-
-  test("contains visibly different emotional features", () => {
-    const html = renderToStaticMarkup(
-      <EmotionAvatar
-        name="Контроль данных"
-        seed="avatar:gem:4"
-        state="happy"
-      />,
-    );
-
-    expect(html).toContain("emotion-avatar-mouth-happy");
-    expect(html).toContain('data-state="happy"');
-    expect(html).toContain("задача завершена");
   });
 });

@@ -339,7 +339,7 @@ export function createAgentProfileStore(
           ownerUserId: actor.id,
           title: input.title,
           roleDescription: input.roleDescription,
-          avatarSeed: input.avatarSeed ?? id,
+          avatarSeed: id,
           visibility: input.visibility,
         });
 
@@ -355,9 +355,6 @@ export function createAgentProfileStore(
           await lockProfileMutationRows(transaction, id);
           const profile = await findAccessibleProfile(transaction, actor, id);
           if (!profile) throw new AgentNotFoundError(id);
-          if (profile.systemOwned && actor.role !== "admin") {
-            throw new ProtectedAgentError(profile.id);
-          }
           requireManageable(actor, profile);
 
           const updatedAt = new Date();
@@ -421,7 +418,6 @@ export function createAgentProfileStore(
             .set({
               title: input.title,
               roleDescription: input.roleDescription,
-              ...(input.avatarSeed ? { avatarSeed: input.avatarSeed } : {}),
               visibility: input.visibility,
               updatedAt,
             })

@@ -188,7 +188,6 @@ function ChannelRow({
       transition={{ duration: ENTRANCE_SECONDS, ease: EASE_OUT }}
     >
       <Channel
-        avatarSeed={channel.avatarSeeds?.[0]}
         channelId={channel.id}
         participantIds={channel.agentIds}
         name={channel.name}

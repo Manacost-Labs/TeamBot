@@ -245,21 +245,13 @@ body {
 
 .emotion-avatar-head,
 .emotion-avatar-eyes,
-.emotion-avatar-happy-eyes,
-.emotion-avatar-mouth,
-.emotion-avatar-focused-brows,
-.emotion-avatar-thought {
+.emotion-avatar-happy-eyes {
   transform-box: fill-box;
   transform-origin: center;
 }
 
 .emotion-avatar-happy-eyes,
-.emotion-avatar-alert,
-.emotion-avatar-focused-brows,
-.emotion-avatar-mouth-happy,
-.emotion-avatar-mouth-alert,
-.emotion-avatar-thought,
-.emotion-avatar-scan {
+.emotion-avatar-alert {
   display: none;
 }
 
@@ -277,28 +269,13 @@ body {
   animation: emotion-think 1.8s ease-in-out infinite;
 }
 
-.emotion-avatar-svg[data-state="thinking"] .emotion-avatar-thought {
-  display: block;
-  animation: emotion-thought 1.4s ease-in-out infinite;
-}
-
 .emotion-avatar-svg[data-state="searching"] .emotion-avatar-eyes {
   animation: emotion-search 1.25s ease-in-out infinite;
-}
-
-.emotion-avatar-svg[data-state="searching"] .emotion-avatar-scan {
-  display: block;
-  animation: emotion-scan 1.15s ease-in-out infinite;
 }
 
 .emotion-avatar-svg[data-state="working"] .emotion-avatar-head,
 .emotion-avatar-svg[data-state="writing"] .emotion-avatar-head {
   animation: emotion-work 0.72s ease-in-out infinite;
-}
-
-.emotion-avatar-svg[data-state="working"] .emotion-avatar-focused-brows,
-.emotion-avatar-svg[data-state="writing"] .emotion-avatar-focused-brows {
-  display: block;
 }
 
 .emotion-avatar-svg[data-state="writing"] .emotion-avatar-eyes {
@@ -314,28 +291,11 @@ body {
   animation: emotion-happy 1.1s ease-in-out infinite;
 }
 
-.emotion-avatar-svg[data-state="happy"] .emotion-avatar-mouth-neutral {
-  display: none;
-}
-
-.emotion-avatar-svg[data-state="happy"] .emotion-avatar-mouth-happy {
-  display: block;
-  animation: emotion-happy 1.1s ease-in-out infinite;
-}
-
 .emotion-avatar-svg[data-state="alerting"] {
   animation: emotion-alert 0.38s ease-in-out 2;
 }
 
 .emotion-avatar-svg[data-state="alerting"] .emotion-avatar-alert {
-  display: block;
-}
-
-.emotion-avatar-svg[data-state="alerting"] .emotion-avatar-mouth-neutral {
-  display: none;
-}
-
-.emotion-avatar-svg[data-state="alerting"] .emotion-avatar-mouth-alert {
   display: block;
 }
 
@@ -378,30 +338,6 @@ body {
   }
   50% {
     transform: translateX(6px);
-  }
-}
-
-@keyframes emotion-thought {
-  0%,
-  100% {
-    opacity: 0.35;
-    transform: translateY(2px) scale(0.9);
-  }
-  50% {
-    opacity: 1;
-    transform: translateY(-2px) scale(1.05);
-  }
-}
-
-@keyframes emotion-scan {
-  0%,
-  100% {
-    opacity: 0.35;
-    transform: translateY(-12px);
-  }
-  50% {
-    opacity: 0.9;
-    transform: translateY(13px);
   }
 }
 

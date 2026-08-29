@@ -11,7 +11,6 @@ import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { AgentProfile } from "@/components/agents/agent-profile";
 import {
-  EMOTION_STATE_LABELS,
   EmotionAvatar,
   type EmotionState,
 } from "@/components/agents/emotion-avatar";
@@ -196,7 +195,7 @@ function RouteComponent() {
               {agentId ? (
                 <EmotionAvatar
                   name={channel.data?.name ?? "Сотрудник"}
-                  seed={channel.data?.avatarSeeds?.[0] ?? agentId}
+                  seed={agentId}
                   size={32}
                   state={presence}
                 />
@@ -204,13 +203,13 @@ function RouteComponent() {
                 <ChannelAvatar participantIds={[]} size={22} />
               )}
             </motion.div>
-            <motion.div
+            <motion.span
               animate={
                 prefersReducedMotion
                   ? { opacity: 1 }
                   : { opacity: 1, transform: "translateY(0px)" }
               }
-              className="flex min-w-0 flex-col leading-none"
+              className="min-w-0 text-sm tracking-tight truncate"
               initial={
                 prefersReducedMotion
                   ? { opacity: 0 }
@@ -222,18 +221,8 @@ function RouteComponent() {
                 ease: EASE_OUT,
               }}
             >
-              <span className="truncate text-sm tracking-tight">
-                {channel.data?.name ?? "Диалог"}
-              </span>
-              <motion.span
-                animate={{ opacity: 1, transform: "translateY(0px)" }}
-                className="mt-1 truncate text-[10px] text-muted-foreground"
-                initial={{ opacity: 0, transform: "translateY(2px)" }}
-                key={presence}
-              >
-                {EMOTION_STATE_LABELS[presence]}
-              </motion.span>
-            </motion.div>
+              {channel.data?.name ?? "Диалог"}
+            </motion.span>
           </div>
           <div className="flex flex-row gap-1.5">
             <Button

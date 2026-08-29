@@ -39,8 +39,6 @@ export type AgentChannel = {
   id: string;
   name: string;
   agentIds: string[];
-  /** Visual presets in the same order as agentIds. Optional for older test/runtime adapters. */
-  avatarSeeds?: string[];
   threadId: string;
   active: boolean;
 };
@@ -276,18 +274,7 @@ export function createChannelStore(
       threadId,
     });
 
-    return {
-      id,
-      name,
-      agentIds,
-      avatarSeeds: agentIds.map((agentId) => {
-        const profile = profilesById.get(agentId);
-        if (!profile) throw new AgentNotFoundError(agentId);
-        return profile.avatarSeed;
-      }),
-      threadId,
-      active: true,
-    };
+    return { id, name, agentIds, threadId, active: true };
   };
 
   const store: ChannelStore = {
@@ -369,7 +356,6 @@ export function createChannelStore(
           id: channels.id,
           name: channels.name,
           agentId: channelAgents.agentId,
-          avatarSeed: agentProfiles.avatarSeed,
           threadId: intelligenceChannelMappings.threadId,
           deletedAt: agentProfiles.deletedAt,
         })
@@ -403,7 +389,6 @@ export function createChannelStore(
         id: first.id,
         name: first.name,
         agentIds: rows.map((row) => row.agentId),
-        avatarSeeds: rows.map((row) => row.avatarSeed),
         threadId: first.threadId,
         active: rows.every((row) => row.deletedAt === null),
       };
@@ -469,7 +454,6 @@ export function createChannelStore(
           id: channels.id,
           name: channels.name,
           agentId: channelAgents.agentId,
-          avatarSeed: agentProfiles.avatarSeed,
           threadId: intelligenceChannelMappings.threadId,
           deletedAt: agentProfiles.deletedAt,
           lastMessage: channels.lastMessage,
@@ -521,7 +505,6 @@ export function createChannelStore(
         const summary = summaries.get(row.id);
         if (summary) {
           summary.agentIds.push(row.agentId);
-          summary.avatarSeeds?.push(row.avatarSeed);
           summary.active &&= row.deletedAt === null;
           continue;
         }
@@ -529,7 +512,6 @@ export function createChannelStore(
           id: row.id,
           name: row.name,
           agentIds: [row.agentId],
-          avatarSeeds: [row.avatarSeed],
           threadId: row.threadId,
           active: row.deletedAt === null,
           lastMessage: row.lastMessage,
@@ -1066,7 +1048,6 @@ function channelDto(channel: AgentChannel): AgentChannel {
     id: channel.id,
     name: channel.name,
     agentIds: channel.agentIds,
-    avatarSeeds: channel.avatarSeeds ?? channel.agentIds,
     threadId: channel.threadId,
     active: channel.active,
   };

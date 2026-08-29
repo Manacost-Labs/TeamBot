@@ -1,9 +1,5 @@
 import { useForm } from "@tanstack/react-form";
 import { useState } from "react";
-import {
-  AVATAR_PRESETS,
-  EmotionAvatar,
-} from "@/components/agents/emotion-avatar";
 import { Button } from "@/components/ui/button";
 import {
   Field,
@@ -74,43 +70,6 @@ export function AgentFields({
       }}
     >
       <FieldGroup>
-        <form.Field name="avatarSeed">
-          {(field) => (
-            <Field>
-              <FieldLabel>Аватар</FieldLabel>
-              <fieldset className="grid grid-cols-4 gap-2">
-                <legend className="sr-only">Выберите аватар сотрудника</legend>
-                {AVATAR_PRESETS.map((preset) => {
-                  const selected = field.state.value === preset.seed;
-                  return (
-                    <button
-                      aria-label={preset.label}
-                      aria-pressed={selected}
-                      className={`grid min-h-16 place-items-center rounded-lg border p-2 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
-                        selected
-                          ? "border-foreground bg-accent"
-                          : "border-border"
-                      }`}
-                      key={preset.seed}
-                      onClick={() => field.handleChange(preset.seed)}
-                      title={preset.label}
-                      type="button"
-                    >
-                      <EmotionAvatar
-                        name={preset.label}
-                        seed={preset.seed}
-                        size={42}
-                      />
-                    </button>
-                  );
-                })}
-              </fieldset>
-              <p className="text-sm text-muted-foreground">
-                Выбранный образ сохранится во всех диалогах сотрудника.
-              </p>
-            </Field>
-          )}
-        </form.Field>
         <form.Field name="name">
           {(field) => {
             const isInvalid =

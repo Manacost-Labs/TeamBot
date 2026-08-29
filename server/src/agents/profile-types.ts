@@ -33,8 +33,6 @@ export type CreateAgentInput = Pick<
   AgentProfile,
   "name" | "title" | "roleDescription" | "visibility"
 > & {
-  /** Chosen visual preset. Absent keeps compatibility with API clients that predate avatars. */
-  avatarSeed?: string;
   /**
    * The AG-UI endpoint this Bot runs on, or undefined for the one in the box.
    *

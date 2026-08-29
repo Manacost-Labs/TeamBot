@@ -24,7 +24,6 @@ describe("coworker form validation", () => {
         name: "  Expense Manager  ",
         title: "Finance Operations",
         roleDescription: "Review receipts and prepare reimbursement reports.",
-        avatarSeed: "avatar:gem:4",
         visibility: "private",
         endpoint: "",
         authValue: "",
@@ -37,7 +36,6 @@ describe("coworker form validation", () => {
       name: "Expense Manager",
       title: "Finance Operations",
       roleDescription: "Review receipts.",
-      avatarSeed: "avatar:gem:4",
       visibility: "private" as const,
       authValue: "",
     };
@@ -63,7 +61,6 @@ describe("coworker form validation", () => {
       name: "Expense Manager",
       title: "Finance Operations",
       roleDescription: "Review receipts.",
-      avatarSeed: "avatar:gem:4",
       visibility: "private" as const,
       endpoint: "",
       authValue: "",

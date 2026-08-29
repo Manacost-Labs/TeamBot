@@ -72,21 +72,6 @@ const PALETTES = [
   { color: "#b7b7b7", eyes: "#0a0a0a" },
 ] as const;
 
-export const AVATAR_PRESETS = [
-  { seed: "avatar:gem:4", label: "Янтарь" },
-  { seed: "avatar:cloud:7", label: "Облако" },
-  { seed: "avatar:shield:5", label: "Щит" },
-  { seed: "avatar:bean:2", label: "Искра" },
-  { seed: "avatar:crystal:8", label: "Кристалл" },
-  { seed: "avatar:leaf:6", label: "Лист" },
-  { seed: "avatar:teardrop:9", label: "Капля" },
-  { seed: "avatar:squircle:1", label: "Квадрат" },
-  { seed: "avatar:egg:3", label: "Пламя" },
-  { seed: "avatar:hex:10", label: "Графит" },
-  { seed: "avatar:dome:0", label: "Снег" },
-  { seed: "avatar:wedge:7", label: "Стрела" },
-] as const;
-
 export const EMOTION_STATE_LABELS: Record<EmotionState, string> = {
   alerting: "ошибка",
   happy: "задача завершена",
@@ -111,15 +96,6 @@ export function emotionAppearance(seed: string): {
   eyes: string;
   shape: string;
 } {
-  const selected = /^avatar:([a-z]+):(\d+)$/.exec(seed);
-  if (selected) {
-    const shape = selected[1] as (typeof SHAPES)[number];
-    const paletteIndex = Number.parseInt(selected[2] ?? "0", 10);
-    const palette = PALETTES[paletteIndex];
-    if (SHAPES.includes(shape) && palette) {
-      return { color: palette.color, eyes: palette.eyes, shape };
-    }
-  }
   const value = hash(seed);
   const palette = PALETTES[value % PALETTES.length] ?? PALETTES[0];
   return {
@@ -195,53 +171,6 @@ export const EmotionAvatar = memo(function EmotionAvatar({
           <path d="M30 52Q36 43 42 52" />
           <path d="M58 52Q64 43 70 52" />
         </g>
-        <g
-          className="emotion-avatar-focused-brows"
-          fill="none"
-          stroke={eyes}
-          strokeLinecap="round"
-          strokeWidth="4"
-        >
-          <path d="M29 37 41 41" />
-          <path d="M59 41 71 37" />
-        </g>
-        <path
-          className="emotion-avatar-mouth emotion-avatar-mouth-neutral"
-          d="M43 68Q50 70 57 68"
-          fill="none"
-          stroke={eyes}
-          strokeLinecap="round"
-          strokeWidth="4"
-        />
-        <path
-          className="emotion-avatar-mouth emotion-avatar-mouth-happy"
-          d="M38 65Q50 80 62 65"
-          fill="none"
-          stroke={eyes}
-          strokeLinecap="round"
-          strokeWidth="4.5"
-        />
-        <path
-          className="emotion-avatar-mouth emotion-avatar-mouth-alert"
-          d="M40 74Q50 62 60 74"
-          fill="none"
-          stroke={eyes}
-          strokeLinecap="round"
-          strokeWidth="4.5"
-        />
-        <g className="emotion-avatar-thought" fill={eyes}>
-          <circle cx="75" cy="34" r="2.5" />
-          <circle cx="83" cy="27" r="3.5" />
-          <circle cx="91" cy="17" r="5" />
-        </g>
-        <path
-          className="emotion-avatar-scan"
-          d="M22 50H78"
-          fill="none"
-          stroke="#ffffff"
-          strokeLinecap="round"
-          strokeWidth="3"
-        />
         <circle
           className="emotion-avatar-alert"
           cx="78"

@@ -219,15 +219,12 @@ describe("channel routes", () => {
         id: "channel-1",
         name: "Assistant channel",
         agentIds: ["agent-1"],
-        avatarSeeds: ["agent-1"],
         threadId: "thread-1",
         active: true,
       },
     });
     expect(fetched.status).toBe(200);
-    expect(await json(fetched)).toEqual({
-      channel: { ...channel(), avatarSeeds: ["agent-1", "agent-2"] },
-    });
+    expect(await json(fetched)).toEqual({ channel: channel() });
   });
 
   test.each([
@@ -981,7 +978,6 @@ describe("channel store integration", () => {
       id: created.id,
       name: "Zulu, Alpha",
       agentIds: canonicalAgentIds,
-      avatarSeeds: canonicalAgentIds,
       threadId: created.threadId,
       active: true,
     });

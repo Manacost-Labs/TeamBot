@@ -24,7 +24,6 @@ type AgentInputParseResult =
   | { ok: false; error: string };
 
 type AgentInputObject = {
-  avatarSeed?: unknown;
   name?: unknown;
   title?: unknown;
   roleDescription?: unknown;
@@ -71,17 +70,6 @@ export function parseAgentInput(
   );
   if (typeof roleDescription !== "string") return roleDescription;
 
-  let avatarSeed: string | undefined;
-  if (input.avatarSeed !== undefined) {
-    const parsed = boundedText(
-      input.avatarSeed,
-      120,
-      "Avatar must be text between 1 and 120 characters.",
-    );
-    if (typeof parsed !== "string") return parsed;
-    avatarSeed = parsed;
-  }
-
   if (typeof input.visibility !== "string") {
     return { ok: false, error: "Visibility must be public or private." };
   }
@@ -124,15 +112,7 @@ export function parseAgentInput(
 
   return {
     ok: true,
-    value: {
-      name,
-      title,
-      roleDescription,
-      visibility,
-      ...(endpoint ? { endpoint } : {}),
-      ...(auth ? { auth } : {}),
-      ...(avatarSeed ? { avatarSeed } : {}),
-    },
+    value: { name, title, roleDescription, visibility, endpoint, auth },
   };
 }
 
