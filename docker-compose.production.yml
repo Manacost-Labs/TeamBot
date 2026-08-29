@@ -1,5 +1,6 @@
 services:
   openbot:
+    image: openbot-work:local
     build:
       context: .
       dockerfile: Dockerfile
@@ -17,6 +18,8 @@ services:
       MANAGED_AGENT_AG_UI_URL: http://agent-codex:4202/ag-ui
       AGENT_ENDPOINT_ALLOWED_HOSTS: agent-codex:4202
       AGENT_COMPUTER_URL: http://127.0.0.1:4100
+      PARSER_OPS_URL: http://host.docker.internal:4031
+      WORKER_SHARED_SECRET: ${AGENT_TOOL_TOKEN}
     ports:
       - "127.0.0.1:3021:3001"
     volumes:
@@ -29,6 +32,30 @@ services:
         condition: service_healthy
     networks:
       - app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  routine-worker:
+    image: openbot-work:local
+    restart: unless-stopped
+    # Embedded Postgres generates its password inside the data volume, outside `.env`. The worker is
+    # trusted server code, so it reads that one file through a read-only mount and never puts the
+    # password in Compose, an image layer, or the model-facing agent container.
+    entrypoint:
+      - /bin/sh
+      - -eu
+      - -c
+      - password=$$(cat /run/openbot-postgres/pgpassword); export DATABASE_URL="postgres://openbot:$${password}@127.0.0.1:5432/openbot"; exec bun worker/src/index.ts
+    env_file: .env
+    environment:
+      SERVER_INTERNAL_URL: http://127.0.0.1:3001
+      WORKER_SHARED_SECRET: ${AGENT_TOOL_TOKEN}
+    volumes:
+      - openbot-postgres:/run/openbot-postgres:ro
+    network_mode: service:openbot
+    depends_on:
+      openbot:
+        condition: service_healthy
 
   agent-codex:
     build:
@@ -43,12 +70,20 @@ services:
       OPENBOT_TOOL_URL: http://openbot:3001/api/agent-tools/call
     volumes:
       - /home/debian/.codex/auth.json:/home/bun/.codex/auth.json
+      - /srv/projects/agents/control-data/api:/workspace
     security_opt:
-      # Codex creates its own unprivileged bwrap namespace. Docker's default seccomp profile blocks
-      # that syscall; opening it here preserves the inner read-only profile and credential deny rule.
+      # Codex creates its own bwrap namespace. Docker's default seccomp profile blocks that setup;
+      # opening it here preserves the inner workspace-only profile and credential deny rule.
       - seccomp=unconfined
       - apparmor=unconfined
-      - no-new-privileges:true
+    cap_add:
+      # Required by OpenAI's supported secure-container profile so setuid bubblewrap can build the
+      # inner filesystem sandbox as the non-root service user.
+      - SYS_ADMIN
+      - SYS_CHROOT
+      - SETUID
+      - SETGID
+      - SYS_PTRACE
     networks:
       - app
 

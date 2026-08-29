@@ -4,6 +4,22 @@ default_permissions = "openbot-agent"
 [history]
 persistence = "none"
 
+[features]
+apps = false
+browser_use = false
+computer_use = false
+goals = false
+hooks = false
+image_generation = false
+in_app_browser = false
+in_app_local_automation = false
+multi_agent = false
+plugin_sharing = false
+plugins = false
+remote_plugin = false
+skill_search = false
+workspace_dependencies = false
+
 [permissions.openbot-agent]
 description = "Read-only runtime for the private OpenBot Codex adapter."
 extends = ":read-only"
@@ -14,4 +30,16 @@ extends = ":read-only"
 "~/.codex" = "deny"
 
 [permissions.openbot-agent.network]
+enabled = false
+
+[permissions.data-control-agent]
+description = "Workspace-scoped repair runtime for the parser maintainer."
+extends = ":read-only"
+
+[permissions.data-control-agent.filesystem]
+":minimal" = "read"
+":workspace_roots" = "write"
+"~/.codex" = "deny"
+
+[permissions.data-control-agent.network]
 enabled = false

@@ -288,6 +288,20 @@ export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
     ]),
     docsUrl: "https://github.com/CopilotKit/OpenBot/blob/main/docs/routines.md",
   },
+  {
+    key: "parser-ops",
+    title: "Parser Ops",
+    vendor: "Manacost Labs",
+    summary:
+      "Governed monitoring, repair validation and rollback-capable deployment for the 99 Hearthstone data sources.",
+    host: "builtin://parser-ops",
+    path: "/",
+    transport: "builtin-parser-ops",
+    auth: Object.freeze({ kind: "builtin" }),
+    writeTools: Object.freeze(["retry_sources", "publish_and_verify"]),
+    docsUrl:
+      "https://github.com/Manacost-Labs/api.kolodahearthstone.com/blob/main/docs/PARSER_CONTROL_API.md",
+  },
 ]);
 
 const BY_KEY = new Map(CATALOGUE.map((entry) => [entry.key, entry]));

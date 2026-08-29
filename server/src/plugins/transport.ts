@@ -1,3 +1,4 @@
+import * as builtinParserOps from "./builtin-parser-ops";
 import * as builtinRoutines from "./builtin-routines";
 import type { CatalogueEntry } from "./catalogue";
 import * as driveRest from "./google-drive-rest";
@@ -79,12 +80,17 @@ export type VendorTransport = {
  * A closed union rather than a string, so adding one is a change to this file and to the registry
  * below together. An entry naming a transport that does not exist should not typecheck.
  */
-export type TransportKind = "mcp" | "google-drive-rest" | "builtin-routines";
+export type TransportKind =
+  | "mcp"
+  | "google-drive-rest"
+  | "builtin-routines"
+  | "builtin-parser-ops";
 
 const TRANSPORTS: Record<TransportKind, VendorTransport> = {
   mcp,
   "google-drive-rest": driveRest,
   "builtin-routines": builtinRoutines,
+  "builtin-parser-ops": builtinParserOps,
 };
 
 /**

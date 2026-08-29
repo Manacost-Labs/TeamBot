@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { RunAgentInput } from "@ag-ui/core";
-import { deploymentToolNames, instructionsFor, transcriptFor } from "../src/history";
+import {
+  deploymentToolNames,
+  instructionsFor,
+  permissionProfileFor,
+  transcriptFor,
+} from "../src/history";
 
 const input = {
   threadId: "thread",
@@ -17,6 +22,13 @@ const input = {
 } as unknown as RunAgentInput;
 
 describe("Codex prompt translation", () => {
+  test("gives only the data-control agent a writable parser workspace", () => {
+    expect(permissionProfileFor(input)).toBe("openbot-agent");
+    const dataControl = { ...input, agentId: "data-control" } as RunAgentInput;
+    expect(permissionProfileFor(dataControl)).toBe("data-control-agent");
+    expect(instructionsFor(dataControl)).toContain("dedicated clone");
+  });
+
   test("keeps higher-priority instructions out of the quoted transcript", () => {
     expect(instructionsFor(input)).toContain("Tenant rule.");
     expect(transcriptFor(input)).not.toContain("Tenant rule.");
@@ -25,5 +37,24 @@ describe("Codex prompt translation", () => {
 
   test("accepts only deployment-declared tool names", () => {
     expect([...deploymentToolNames(input)]).toEqual(["allowed"]);
+  });
+
+  test("keeps data-control history bounded to the last outcome and current firing", () => {
+    const dataControl = {
+      ...input,
+      agentId: "data-control",
+      messages: [
+        { id: "u1", role: "user", content: "Old firing" },
+        { id: "a1", role: "assistant", content: "Last outcome" },
+        { id: "t1", role: "tool", content: "Large old audit" },
+        { id: "u2", role: "user", content: "Current firing" },
+      ],
+    } as unknown as RunAgentInput;
+
+    const transcript = transcriptFor(dataControl);
+    expect(transcript).toContain("Last outcome");
+    expect(transcript).toContain("Current firing");
+    expect(transcript).not.toContain("Old firing");
+    expect(transcript).not.toContain("Large old audit");
   });
 });

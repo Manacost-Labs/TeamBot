@@ -96,7 +96,7 @@ describe("which servers this deployment will talk to", () => {
         // First-party and in-process: there is no host outside this process to reach, so the
         // https requirement below does not apply. Asserted positively instead, so this branch
         // cannot quietly become a loophole for a future entry that DOES dial a real host.
-        expect(entry.host).toBe("builtin://routines");
+        expect(entry.host.startsWith("builtin://")).toBe(true);
       } else {
         expect(entry.host.startsWith("https://")).toBe(true);
       }
@@ -282,6 +282,17 @@ describe("Routines", () => {
     ]) {
       expect(classifyTool(entry, name, false)).toBe("write");
     }
+  });
+});
+
+describe("Parser Ops", () => {
+  const entry = catalogueEntry("parser-ops");
+
+  test("is a pinned first-party transport with an explicit write boundary", () => {
+    expect(resolveServerUrl("parser-ops")?.url).toBe("builtin://parser-ops");
+    expect(entry?.auth.kind).toBe("builtin");
+    expect(entry?.transport).toBe("builtin-parser-ops");
+    expect(entry?.writeTools).toEqual(["retry_sources", "publish_and_verify"]);
   });
 });
 

@@ -14,6 +14,13 @@ async function runAgent(input: RunAgentInput): Promise<Response> {
     async start(controller) {
       const utf8 = new TextEncoder();
       const send = (event: BaseEvent) => controller.enqueue(utf8.encode(encoder.encodeSSE(event)));
+      // Bun cannot keep an HTTP request idle for more than 255 seconds. A validation or deployment
+      // tool may legitimately run longer, so SSE comments keep the transport alive without adding
+      // fake AG-UI events to the conversation.
+      const keepAlive = setInterval(
+        () => controller.enqueue(utf8.encode(": keep-alive\n\n")),
+        30_000,
+      );
       let openMessage: string | null = null;
       const closeMessage = () => {
         if (!openMessage) return;
@@ -57,6 +64,7 @@ async function runAgent(input: RunAgentInput): Promise<Response> {
           message: error instanceof Error ? error.message : "Codex could not answer.",
         } as BaseEvent);
       } finally {
+        clearInterval(keepAlive);
         controller.close();
       }
     },
@@ -72,7 +80,8 @@ async function runAgent(input: RunAgentInput): Promise<Response> {
 
 serve({
   port: PORT,
-  idleTimeout: 120,
+  // Bun caps this at 255 seconds; use the maximum for long validation tool calls.
+  idleTimeout: 255,
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/health") {

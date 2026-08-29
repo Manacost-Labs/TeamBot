@@ -1,7 +1,8 @@
 FROM oven/bun:1.3.14-slim
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates \
+  && apt-get install -y --no-install-recommends bubblewrap ca-certificates git nodejs ripgrep \
+  && chmod u+s /usr/bin/bwrap \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/codex

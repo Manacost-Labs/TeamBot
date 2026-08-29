@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+EXPECTED_COMMIT="${1:-}"
+INSTALL_DIR="/srv/hs-data-api"
+
+[[ "$EXPECTED_COMMIT" =~ ^[a-f0-9]{40}$ ]] || {
+  echo "A full expected commit is required." >&2
+  exit 2
+}
+
+cd "$INSTALL_DIR"
+git fetch --quiet origin main
+[[ "$(git rev-parse origin/main)" == "$EXPECTED_COMMIT" ]] || {
+  echo "origin/main no longer matches the approved commit." >&2
+  exit 3
+}
+
+"$INSTALL_DIR/scripts/deploy-server.sh"
+[[ "$(git rev-parse HEAD)" == "$EXPECTED_COMMIT" ]] || {
+  echo "Production did not land on the expected commit." >&2
+  exit 4
+}

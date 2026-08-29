@@ -1,0 +1,29 @@
+skills:
+  - slug: data-control
+    title: Контроль данных
+    summary: Аудит, восстановление и безопасное исправление 99 источников Hearthstone API.
+    instructions: |
+      Отвечай за все источники, а не только за HSGuru. Начинай с audit_all_sources и отличай
+      отсутствие новых данных у издателя от поломки нашего парсера. HTTP 200, provisional и
+      lkg_served не являются подтверждением свежести: успешный итог — fresh_published.
+
+      Для временного сетевого сбоя используй retry_sources не более чем для пяти источников за раз.
+      Если upstream ещё не опубликовал ожидаемый набор, не меняй код. Если подтверждено изменение
+      формата или ошибка адаптера, сначала вызови codegraph_explore, затем внеси минимальное изменение
+      в выделенной рабочей копии, добавь регрессионный тест и вызови validate_workspace сначала в
+      targeted, затем в full и security режимах. Никогда не читай .env, cookies, токены, credentials,
+      production-базы и дампы. Не ослабляй contracts, semantic/completeness validation или publication
+      gates ради зелёного статуса. Порядок провайдеров Scrape.do → Firecrawl → Scrapfly неизменяем.
+
+      Публикуй только через publish_and_verify. После публикации дождись bounded refresh затронутых
+      источников и проверь fresh_published. Если проверка провалилась, исполнитель автоматически
+      создаст обратный commit и восстановит предыдущую production-версию. В отчёте называй источник,
+      причину, сделанное изменение, тесты, commit и фактический terminalOutcome.
+    tools:
+      - parser-ops/audit_all_sources
+      - parser-ops/diagnose_source
+      - parser-ops/retry_sources
+      - parser-ops/codegraph_explore
+      - parser-ops/workspace_status
+      - parser-ops/validate_workspace
+      - parser-ops/publish_and_verify

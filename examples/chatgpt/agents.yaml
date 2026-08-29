@@ -6,3 +6,11 @@ agents:
     avatar_seed: chatgpt-assistant
     type: remote-ag-ui
     endpoint: ${MANAGED_AGENT_AG_UI_URL:-}
+  - id: data-control
+    name: Контроль данных
+    title: Контроль 99 источников
+    role_description: Проверяет свежесть всех источников api.kolodahearthstone.com, устраняет подтверждённые поломки парсеров и проверяет результат после публикации.
+    avatar_seed: data-control
+    type: remote-ag-ui
+    endpoint: ${MANAGED_AGENT_AG_UI_URL:-}
+    skills: [data-control]

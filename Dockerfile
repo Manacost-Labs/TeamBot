@@ -100,21 +100,22 @@ RUN case "${TARGETARCH}" in \
 
 WORKDIR /app
 
-COPY --from=deps /prod/node_modules node_modules
-COPY --from=deps /src/package.json package.json
-COPY --from=deps /src/bun.lock bun.lock
-COPY --from=deps /src/server/node_modules server/node_modules
-COPY --from=deps /src/agent-computer/node_modules agent-computer/node_modules
+COPY --chown=pwuser:pwuser --from=deps /prod/node_modules node_modules
+COPY --chown=pwuser:pwuser --from=deps /src/package.json package.json
+COPY --chown=pwuser:pwuser --from=deps /src/bun.lock bun.lock
+COPY --chown=pwuser:pwuser --from=deps /src/server/node_modules server/node_modules
+COPY --chown=pwuser:pwuser --from=deps /src/agent-computer/node_modules agent-computer/node_modules
 
-COPY server server
-COPY shared shared
-COPY examples examples
-COPY agent-computer/src agent-computer/src
-COPY agent-computer/package.json agent-computer/package.json
+COPY --chown=pwuser:pwuser server server
+COPY --chown=pwuser:pwuser worker worker
+COPY --chown=pwuser:pwuser shared shared
+COPY --chown=pwuser:pwuser examples examples
+COPY --chown=pwuser:pwuser agent-computer/src agent-computer/src
+COPY --chown=pwuser:pwuser agent-computer/package.json agent-computer/package.json
 
 # The built app, served by the API on the same origin. There is no CORS in this server, so this is
 # not a convenience: two origins would simply fail.
-COPY --from=app-build /src/app/dist app/dist
+COPY --chown=pwuser:pwuser --from=app-build /src/app/dist app/dist
 ENV APP_DIST_DIR=/app/app/dist
 
 COPY docker/s6 /etc/s6-overlay
@@ -198,7 +199,7 @@ ENV AGENT_COMPUTER_URL=http://127.0.0.1:4100
 # keeps a Bot signed in between turns. Owned here, because a non-root process cannot create them at
 # the root of the filesystem and the failure surfaces as EACCES on the first navigation.
 RUN mkdir -p /workspace /profiles \
-  && chown -R pwuser:pwuser /workspace /profiles /app
+  && chown -R pwuser:pwuser /workspace /profiles
 
 # Where the embedded database answers, when there is one. Overridden by whatever you set, so an
 # external database needs no special case: set DATABASE_URL and EMBEDDED_POSTGRES stays off.

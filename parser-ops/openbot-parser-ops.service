@@ -1,0 +1,26 @@
+[Unit]
+Description=Governed Parser Ops boundary for OpenBot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=debian
+Group=ai-agents
+WorkingDirectory=/srv/projects/web/work.kolodahearthstone.com
+EnvironmentFile=/srv/projects/web/work.kolodahearthstone.com/.env
+Environment=PARSER_OPS_WORKSPACE=/srv/projects/agents/control-data/api
+Environment=PARSER_OPS_VALIDATION_FILE=/var/lib/openbot-parser-ops/validation.json
+ExecStart=/usr/bin/python3 /srv/projects/web/work.kolodahearthstone.com/parser-ops/parser_ops_service.py --bind 172.17.0.1 --port 4031
+Restart=on-failure
+RestartSec=5s
+StateDirectory=openbot-parser-ops
+UMask=0007
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/srv/projects/agents/control-data/api /var/lib/openbot-parser-ops
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

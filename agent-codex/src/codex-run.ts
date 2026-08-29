@@ -1,9 +1,10 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import readline from "node:readline";
 import type { RunAgentInput } from "@ag-ui/core";
 import {
   deploymentToolNames,
   instructionsFor,
+  permissionProfileFor,
   runAssertion,
   transcriptFor,
 } from "./history";
@@ -42,6 +43,8 @@ class CodexProcess {
   private nextId = 1;
   private turnCompleted = false;
   private stderr = "";
+  private readonly protocolTrace: string[] = [];
+  private readonly toolNames = new Map<string, string>();
 
   constructor(
     private readonly input: RunAgentInput,
@@ -63,7 +66,12 @@ class CodexProcess {
     this.process.once("error", (error) => this.fail(error));
     this.process.once("exit", (code) => {
       if (!this.turnCompleted) {
-        this.fail(new Error(`Codex app-server stopped with code ${code ?? "unknown"}. ${this.stderr}`.trim()));
+        const trace = this.protocolTrace.length > 0 ? ` Protocol: ${this.protocolTrace.join(" -> ")}` : "";
+        this.fail(
+          new Error(
+            `Codex app-server stopped with code ${code ?? "unknown"}.${trace} ${this.stderr}`.trim(),
+          ),
+        );
       }
     });
   }
@@ -77,17 +85,21 @@ class CodexProcess {
 
     const dynamicTools = this.input.tools
       .filter((tool) => deploymentToolNames(this.input).has(tool.name))
-      .map((tool) => ({
-        type: "function",
-        name: tool.name,
-        description: tool.description,
-        inputSchema: tool.parameters,
-      }));
+      .map((tool) => {
+        const name = codexToolName(tool.name);
+        this.toolNames.set(name, tool.name);
+        return {
+          type: "function",
+          name,
+          description: tool.description,
+          inputSchema: tool.parameters,
+        };
+      });
     const started = (await this.request("thread/start", {
       ...(MODEL ? { model: MODEL } : {}),
       cwd: "/workspace",
       approvalPolicy: "never",
-      permissions: "openbot-agent",
+      permissions: permissionProfileFor(this.input),
       baseInstructions: instructionsFor(this.input),
       ephemeral: true,
       serviceName: "openbot_codex",
@@ -129,6 +141,7 @@ class CodexProcess {
     } catch {
       return;
     }
+    this.recordProtocol(message);
     if (typeof message.id === "number" && ("result" in message || "error" in message)) {
       const pending = this.pending.get(message.id);
       if (!pending) return;
@@ -163,9 +176,23 @@ class CodexProcess {
     }
   }
 
+  private recordProtocol(message: Notification): void {
+    let entry = typeof message.method === "string" ? message.method : `response:${message.id ?? "?"}`;
+    if (message.error !== undefined) entry = `${entry}:error=${safeDiagnostic(message.error)}`;
+    if (message.method === "error") entry = `${entry}:${safeDiagnostic(message.params)}`;
+    if (message.method === "turn/completed") {
+      const turn = message.params?.turn as { status?: unknown; error?: unknown } | undefined;
+      entry = `${entry}:status=${String(turn?.status ?? "unknown")}`;
+      if (turn?.error !== undefined) entry = `${entry}:error=${safeDiagnostic(turn.error)}`;
+    }
+    this.protocolTrace.push(entry.slice(0, 800));
+    if (this.protocolTrace.length > 24) this.protocolTrace.shift();
+  }
+
   private async handleToolCall(id: number, params: JsonObject): Promise<void> {
     const callId = typeof params.callId === "string" ? params.callId : `call_${id}`;
-    const name = typeof params.tool === "string" ? params.tool : "unknown";
+    const wireName = typeof params.tool === "string" ? params.tool : "unknown";
+    const name = this.toolNames.get(wireName) ?? wireName;
     const args = isObject(params.arguments) ? params.arguments : {};
     this.callbacks.onToolStart(callId, name, args);
     const result = await callDeploymentTool(this.input, name, args);
@@ -205,4 +232,12 @@ async function callDeploymentTool(
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function safeDiagnostic(value: unknown): string {
+  return JSON.stringify(value)?.slice(0, 600) ?? String(value).slice(0, 600);
+}
+
+export function codexToolName(name: string): string {
+  return name.startsWith("mcp__") ? `openbot__${name.slice("mcp__".length)}` : name;
 }
