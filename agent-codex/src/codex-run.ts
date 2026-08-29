@@ -192,10 +192,16 @@ class CodexProcess {
   private async handleToolCall(id: number, params: JsonObject): Promise<void> {
     const callId = typeof params.callId === "string" ? params.callId : `call_${id}`;
     const wireName = typeof params.tool === "string" ? params.tool : "unknown";
-    const name = this.toolNames.get(wireName) ?? wireName;
+    const { deploymentName, eventName } = toolCallNames(wireName, this.toolNames);
     const args = isObject(params.arguments) ? params.arguments : {};
-    this.callbacks.onToolStart(callId, name, args);
-    const result = await callDeploymentTool(this.input, name, args);
+    /*
+     * Report the same safe name Codex was offered. Turning it back into `mcp__...` in the AG-UI
+     * event made CopilotKit reject the event because that namespace is reserved, so opening a
+     * conversation replayed a run error instead of restoring it. The deployment call still needs
+     * the original governed name, which is kept separately above.
+     */
+    this.callbacks.onToolStart(callId, eventName, args);
+    const result = await callDeploymentTool(this.input, deploymentName, args);
     this.callbacks.onToolResult(callId, result);
     this.write({
       id,
@@ -240,4 +246,14 @@ function safeDiagnostic(value: unknown): string {
 
 export function codexToolName(name: string): string {
   return name.startsWith("mcp__") ? `openbot__${name.slice("mcp__".length)}` : name;
+}
+
+export function toolCallNames(
+  wireName: string,
+  deploymentNames: ReadonlyMap<string, string>,
+): { deploymentName: string; eventName: string } {
+  return {
+    deploymentName: deploymentNames.get(wireName) ?? wireName,
+    eventName: wireName,
+  };
 }
