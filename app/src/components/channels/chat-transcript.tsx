@@ -98,7 +98,7 @@ const RESTORING_ANSWER_LINES = [
 function RestoringTranscript() {
   return (
     // One announcement, with every bar hidden from it: nine empty shapes read aloud is worse.
-    <div aria-label="Loading this conversation" role="status">
+    <div aria-label="Загрузка диалога" role="status">
       <div aria-hidden="true" className="flex justify-end pb-7">
         <Skeleton className="h-10 w-64 rounded-xl bg-muted/40 motion-reduce:animate-none" />
       </div>
@@ -133,7 +133,7 @@ function Thinking() {
       // is doing. The text says it, so a screen reader is told the same thing the shimmer implies.
       role="status"
     >
-      Thinking
+      Думает…
     </p>
   );
 }
@@ -197,7 +197,7 @@ function Queued({
            * `status` rather than `alert`, matching the thinking line: a person who has just chosen
            * to queue something is not being interrupted by the news that it is queued.
            */}
-          <span role="status">Queued</span>
+          <span role="status">В очереди</span>
           {onRemove ? (
             <button
               /*
@@ -206,12 +206,12 @@ function Queued({
                * do and nothing about which one it would happen to. The visible word stays short
                * because the bubble it sits under is the answer for everybody who can see it.
                */
-              aria-label={`Remove queued message: ${text}`}
+              aria-label={`Удалить сообщение из очереди: ${text}`}
               className="ml-2 underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
               onClick={onRemove}
               type="button"
             >
-              Remove
+              Удалить
             </button>
           ) : null}
         </MessageFooter>

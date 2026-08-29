@@ -49,28 +49,28 @@ function lastRunLabel(lastRun: RoutineRecord["lastRun"]): {
   className: string;
 } {
   if (lastRun === null) {
-    return { text: "Never run yet", className: "text-muted-foreground" };
+    return { text: "Ещё не запускалось", className: "text-muted-foreground" };
   }
   if (lastRun.status === null) {
-    return { text: "Running…", className: "text-muted-foreground" };
+    return { text: "Выполняется…", className: "text-muted-foreground" };
   }
-  const when = lastRun.at ? relativeTime(lastRun.at) : "recently";
+  const when = lastRun.at ? relativeTime(lastRun.at) : "недавно";
   if (lastRun.status === "failed") {
-    return { text: `Failed ${when}`, className: "text-destructive" };
+    return { text: `Ошибка: ${when}`, className: "text-destructive" };
   }
   if (lastRun.status === "skipped") {
     return {
-      text: `Skipped ${when}`,
+      text: `Пропущено: ${when}`,
       className: "text-amber-600 dark:text-amber-500",
     };
   }
   if (lastRun.status === "succeeded") {
-    return { text: `Ran ${when}`, className: "text-muted-foreground" };
+    return { text: `Выполнено: ${when}`, className: "text-muted-foreground" };
   }
   // An outcome this DTO doesn't recognise degrades to a neutral label rather than an invented
   // success — the contract typing (`RoutineRunOutcome | null`) makes a fourth outcome a build-time
   // error, but this is the runtime fallback if that ever slips through.
-  return { text: `Finished ${when}`, className: "text-muted-foreground" };
+  return { text: `Завершено: ${when}`, className: "text-muted-foreground" };
 }
 
 /**
@@ -97,12 +97,12 @@ export function RoutinesList() {
       {/* Pending renders nothing: the empty-state sentence would otherwise flash for the fetch. */}
       {routines.isPending ? null : routines.error ? (
         <p className="mt-4 text-destructive text-sm" role="alert">
-          Your routines could not be loaded.
+          Не удалось загрузить расписание.
         </p>
       ) : rows.length === 0 ? (
         <PageEmpty>
-          Nothing scheduled. Ask a Bot — "every weekday at 9, …" — and it will
-          appear here.
+          Пока ничего не запланировано. Напишите сотруднику: «каждый будний день
+          в 9:00…» — и задача появится здесь.
         </PageEmpty>
       ) : (
         <PageRows>
@@ -133,8 +133,8 @@ export function RoutinesList() {
                           }
                         >
                           {routine.channel.gone
-                            ? "This channel is gone"
-                            : (routine.channel.name ?? "Unnamed channel")}
+                            ? "Диалог удалён"
+                            : (routine.channel.name ?? "Диалог без названия")}
                         </span>
                         <span className={lastRunClassName}>{lastRunText}</span>
                         {/*
@@ -144,7 +144,7 @@ export function RoutinesList() {
                          */}
                         {routine.enabled ? (
                           <span className="text-muted-foreground">
-                            Next {relativeTime(routine.nextRunAt)}
+                            Следующий запуск {relativeTime(routine.nextRunAt)}
                           </span>
                         ) : null}
                       </div>
@@ -158,7 +158,7 @@ export function RoutinesList() {
                      * page uses for its per-Bot grant switches.
                      */}
                     <Switch
-                      aria-label={`Enable the routine scheduled ${routine.schedule}`}
+                      aria-label={`Включить задачу по расписанию ${routine.schedule}`}
                       checked={routine.enabled}
                       disabled={
                         setEnabled.isPending &&
@@ -169,7 +169,7 @@ export function RoutinesList() {
                       }
                     />
                     <Button
-                      aria-label={`Delete the routine scheduled ${routine.schedule}`}
+                      aria-label={`Удалить задачу по расписанию ${routine.schedule}`}
                       onClick={() => {
                         deleteRoutine.reset();
                         setConfirmingId(routine.id);
@@ -203,10 +203,10 @@ export function RoutinesList() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete "{confirming?.schedule}"?</DialogTitle>
+            <DialogTitle>Удалить «{confirming?.schedule}»?</DialogTitle>
             <DialogDescription>
-              This standing instruction stops for good. Nothing further runs on
-              this schedule, and there is no undo.
+              Задача больше не будет запускаться по этому расписанию. Отменить
+              удаление после подтверждения нельзя.
             </DialogDescription>
           </DialogHeader>
           {deleteRoutine.error ? (
@@ -220,7 +220,7 @@ export function RoutinesList() {
               size="sm"
               variant="ghost"
             >
-              Cancel
+              Отмена
             </Button>
             <Button
               disabled={deleteRoutine.isPending}
@@ -233,7 +233,7 @@ export function RoutinesList() {
               size="sm"
               variant="destructive"
             >
-              {deleteRoutine.isPending ? "Deleting…" : "Delete"}
+              {deleteRoutine.isPending ? "Удаляем…" : "Удалить"}
             </Button>
           </DialogFooter>
         </DialogContent>

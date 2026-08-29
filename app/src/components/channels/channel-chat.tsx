@@ -6,6 +6,7 @@ import {
 } from "@copilotkit/react-core/v2";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { EmotionState } from "@/components/agents/emotion-avatar";
 import { toAgentOptions } from "@/components/channels/composer";
 import { ConversationView } from "@/components/channels/conversation-view";
 import {
@@ -46,9 +47,11 @@ const SEND_WITHOUT_RUNTIME_AFTER_MS = 1500;
  */
 export function ChannelChat({
   channel,
+  onPresenceChange,
   runtimeAgentId,
 }: {
   channel: AgentChannel;
+  onPresenceChange?: (state: EmotionState) => void;
   runtimeAgentId: string;
 }) {
   // The core attaches the frontend tool registry; direct agent runs do not.
@@ -235,6 +238,17 @@ export function ChannelChat({
    */
   const [turnsInFlight, setTurnsInFlight] = useState(0);
   const [runsInFlight, setRunsInFlight] = useState(0);
+
+  useEffect(() => {
+    const state: EmotionState = runError
+      ? "alerting"
+      : agent.isRunning
+        ? "writing"
+        : turnsInFlight > 0
+          ? "thinking"
+          : "idle";
+    onPresenceChange?.(state);
+  }, [agent.isRunning, onPresenceChange, runError, turnsInFlight]);
 
   /**
    * Tell the roster what was just said. Failures here must not block the conversation.
@@ -424,15 +438,15 @@ export function ChannelChat({
             {unreadable > 0 ? (
               <p className="pb-2 text-sm text-muted-foreground" role="status">
                 {unreadable === 1
-                  ? "One earlier message could not be read and is not shown."
-                  : `${unreadable} earlier messages could not be read and are not shown.`}{" "}
-                The rest of this conversation is complete.
+                  ? "Одно предыдущее сообщение не удалось прочитать."
+                  : `${unreadable} предыдущих сообщений не удалось прочитать.`}{" "}
+                Остальная часть диалога загружена полностью.
               </p>
             ) : null}
             {channel.active ? null : (
               <p className="pb-2 text-sm text-muted-foreground" role="status">
-                This coworker has been deleted. The conversation stays readable,
-                but it can no longer reply.
+                Этот сотрудник удалён. Диалог доступен для чтения, но ответить
+                сотрудник больше не сможет.
               </p>
             )}
           </>

@@ -40,13 +40,13 @@ export function HandoffPanel({ agentId }: { agentId: string }) {
   return (
     <section className="mt-6 grid gap-2">
       <h2 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
-        Bots it may ask
+        Кому можно передавать задачи
       </h2>
 
       <p className="text-muted-foreground text-sm">
         {enabled
-          ? "Work this Bot cannot do itself, it may hand to one of these. The Bot it asks answers in its own conversation, as itself."
-          : "Handing work between Bots is switched off for this deployment, so none of these takes effect until it is switched back on."}
+          ? "Если сотрудник не может выполнить работу сам, он передаст её одному из выбранных коллег."
+          : "Передача задач между сотрудниками отключена для этого проекта."}
       </p>
 
       {setGrant.error ? (
@@ -57,7 +57,7 @@ export function HandoffPanel({ agentId }: { agentId: string }) {
 
       {others.length === 0 ? (
         <p className="text-muted-foreground text-sm">
-          There is no other Bot here to hand work to.
+          Других сотрудников для передачи задач пока нет.
         </p>
       ) : (
         <ul className="grid gap-1 rounded-lg border border-border bg-card p-1">
@@ -84,7 +84,7 @@ export function HandoffPanel({ agentId }: { agentId: string }) {
                   </span>
                 </span>
                 <Switch
-                  aria-label={`Let this Bot ask ${candidate.name}`}
+                  aria-label={`Разрешить передавать задачи сотруднику ${candidate.name}`}
                   checked={held}
                   disabled={!canGrant || setGrant.isPending}
                   onCheckedChange={(next: boolean) =>
@@ -103,7 +103,7 @@ export function HandoffPanel({ agentId }: { agentId: string }) {
 
       {canGrant ? null : (
         <p className="text-muted-foreground text-xs">
-          An administrator decides which Bots may be asked.
+          Доступных коллег определяет администратор.
         </p>
       )}
     </section>

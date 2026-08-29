@@ -77,16 +77,15 @@ export function SkillTools({
 
   return (
     <Field>
-      <FieldLabel>Tools it needs</FieldLabel>
+      <FieldLabel>Необходимые инструменты</FieldLabel>
 
       {plugins.isPending ? null : plugins.error ? (
         <p className="text-destructive text-xs" role="alert">
-          Could not load the tools this deployment has.
+          Не удалось загрузить инструменты проекта.
         </p>
       ) : servers.length === 0 ? (
         <p className="text-muted-foreground text-xs">
-          No connected server offers a tool yet. A skill can still be written —
-          most are instructions rather than tool use.
+          Подключённых инструментов пока нет. Навык всё равно можно сохранить.
         </p>
       ) : (
         <div className="flex flex-col gap-3">
@@ -117,7 +116,7 @@ export function SkillTools({
                        */}
                       {tool.effect === "write" ? (
                         <span
-                          aria-label="changes something"
+                          aria-label="изменяет данные"
                           className="ml-1 opacity-60"
                           role="img"
                         >
@@ -135,7 +134,7 @@ export function SkillTools({
 
       {elsewhere.length > 0 ? (
         <div className="flex flex-col gap-1.5">
-          <p className="text-muted-foreground text-xs">Not connected here</p>
+          <p className="text-muted-foreground text-xs">Не подключено</p>
           <div className="flex flex-wrap gap-2">
             {elsewhere.map((ref) => (
               <Button
@@ -155,18 +154,15 @@ export function SkillTools({
             ))}
           </div>
           <p className="text-muted-foreground text-xs">
-            This skill names these, and no server connected here offers them —
-            because the connector has not been added, or was removed. They cost
-            nothing and load nothing until it exists. Click one to stop naming
-            it.
+            Навык ссылается на инструменты, которых сейчас нет в проекте.
+            Нажмите на инструмент, чтобы убрать его из навыка.
           </p>
         </div>
       ) : null}
 
       <p className="text-muted-foreground text-xs">
-        Picking this skill is what loads these tools for a turn. It does not
-        grant them — a Bot still only calls what it was granted, so naming a
-        tool here gives nobody access to it.
+        Инструменты загружаются только на время выполнения навыка. Выбор здесь
+        не выдаёт сотруднику новых прав доступа.
       </p>
     </Field>
   );

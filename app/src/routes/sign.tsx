@@ -66,7 +66,7 @@ function SignScreen() {
       setError(
         caughtError instanceof Error
           ? caughtError.message
-          : "No identity provider is registered for that address.",
+          : "Для этого адреса не настроен способ входа.",
       );
       setOpening(null);
     }
@@ -82,7 +82,7 @@ function SignScreen() {
       setError(
         caughtError instanceof Error
           ? caughtError.message
-          : `Could not start ${providerName(provider)} sign-in.`,
+          : `Не удалось начать вход через ${providerName(provider)}.`,
       );
       setOpening(null);
     }
@@ -121,7 +121,7 @@ function SignScreen() {
           transition={{ duration: ENTRANCE_SECONDS, ease: EASE_OUT }}
           variants={{ hidden, shown }}
         >
-          Sign in to {appConfig.brand.productName}
+          Вход в {appConfig.brand.productName}
         </motion.h1>
         <motion.div
           className="mt-8 w-full"
@@ -151,8 +151,8 @@ function SignScreen() {
                   {/* Centred against the button, not against the space left of the mark. */}
                   <span className="flex-1 text-center">
                     {opening === provider
-                      ? `Opening ${providerName(provider)}…`
-                      : `Continue with ${providerName(provider)}`}
+                      ? `Открываем ${providerName(provider)}…`
+                      : `Продолжить через ${providerName(provider)}`}
                   </span>
                   {/* Balances the mark so the label sits in the middle of the button. */}
                   <span aria-hidden="true" className="size-[18px]" />
@@ -161,7 +161,7 @@ function SignScreen() {
             </div>
           ) : options?.sso ? null : (
             <p className="text-center text-sm text-muted-foreground">
-              No sign-in provider is configured for this deployment.
+              Для этого проекта не настроен способ входа.
             </p>
           )}
           {/*
@@ -175,7 +175,7 @@ function SignScreen() {
               {providers.length > 0 ? (
                 <div className="mb-3 flex items-center gap-3">
                   <Separator className="flex-1" />
-                  <span className="text-muted-foreground text-xs">or</span>
+                  <span className="text-muted-foreground text-xs">или</span>
                   <Separator className="flex-1" />
                 </div>
               ) : null}
@@ -195,8 +195,8 @@ function SignScreen() {
                 variant="outline"
               >
                 {opening === "sso"
-                  ? "Opening…"
-                  : "Continue with your company account"}
+                  ? "Открываем…"
+                  : "Продолжить с корпоративной учётной записью"}
               </Button>
             </form>
           ) : null}

@@ -7,9 +7,13 @@ import {
 } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { motion, useReducedMotion } from "motion/react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { AgentProfile } from "@/components/agents/agent-profile";
+import {
+  EmotionAvatar,
+  type EmotionState,
+} from "@/components/agents/emotion-avatar";
 import { hasUnseenActivity } from "@/components/app-sidebar/app-sidebar";
 import { ChannelAvatar } from "@/components/channels/avatar";
 import { ChannelChat } from "@/components/channels/channel-chat";
@@ -67,7 +71,7 @@ function ComputerViewPanel({
         <ComputerView active computerId={agentId} name={name} />
 
         <div className="mt-10">
-          <h3 className="mb-2 font-medium text-sm">Activity</h3>
+          <h3 className="mb-2 font-medium text-sm">Действия</h3>
           <ActivityLog computerId={agentId} />
         </div>
       </div>
@@ -83,6 +87,7 @@ function RouteComponent() {
   const isSettingsOpen = settings === true;
   const prefersReducedMotion = useReducedMotion();
   const isWatching = watch === true;
+  const [presence, setPresence] = useState<EmotionState>("idle");
   /** Channel routing currently supports one coworker. */
   const agentId = channel.data?.agentIds[0];
   /** Only polled while the screen is closed; the screen panel polls control itself. */
@@ -187,10 +192,16 @@ function RouteComponent() {
                 ease: EASE_OUT,
               }}
             >
-              <ChannelAvatar
-                participantIds={channel.data?.agentIds ?? []}
-                size={22}
-              />
+              {agentId ? (
+                <EmotionAvatar
+                  name={channel.data?.name ?? "Сотрудник"}
+                  seed={agentId}
+                  size={28}
+                  state={presence}
+                />
+              ) : (
+                <ChannelAvatar participantIds={[]} size={22} />
+              )}
             </motion.div>
             <motion.span
               animate={
@@ -210,15 +221,15 @@ function RouteComponent() {
                 ease: EASE_OUT,
               }}
             >
-              {channel.data?.name ?? "Channel"}
+              {channel.data?.name ?? "Диалог"}
             </motion.span>
           </div>
           <div className="flex flex-row gap-1.5">
             <Button
               aria-label={
                 needsYou
-                  ? "This Bot is waiting for you. Open its screen"
-                  : "Watch this Bot's screen"
+                  ? "Сотрудник ждёт вашего действия. Открыть экран"
+                  : "Наблюдать за экраном сотрудника"
               }
               aria-pressed={isWatching}
               className={`relative ${isWatching ? "bg-foreground/5" : ""}`}
@@ -234,7 +245,7 @@ function RouteComponent() {
               ) : null}
             </Button>
             <Button
-              aria-label="Channel coworker"
+              aria-label="Профиль сотрудника"
               aria-pressed={isSettingsOpen}
               className={isSettingsOpen ? "bg-foreground/5" : undefined}
               disabled={agentId === undefined}
@@ -249,8 +260,9 @@ function RouteComponent() {
       </div>
       <ChannelBody
         channel={channel.data}
-        isPending={channel.isPending}
         hasError={Boolean(channel.error)}
+        isPending={channel.isPending}
+        onPresenceChange={setPresence}
       />
     </DetailPanel>
   );
@@ -264,17 +276,19 @@ function ChannelBody({
   channel,
   isPending,
   hasError,
+  onPresenceChange,
 }: {
   channel: AgentChannel | undefined;
   isPending: boolean;
   hasError: boolean;
+  onPresenceChange: (state: EmotionState) => void;
 }) {
   // Nothing while the channel loads: a placeholder inside a local round-trip is a flicker.
   if (isPending) return null;
   if (hasError || !channel) {
     return (
       <p className="p-8 text-sm text-destructive" role="alert">
-        Could not load this channel.
+        Не удалось загрузить диалог.
       </p>
     );
   }
@@ -284,7 +298,7 @@ function ChannelBody({
   if (!runtimeAgentId) {
     return (
       <p className="p-8 text-sm text-muted-foreground">
-        This channel has more than one coworker, which is not supported yet.
+        Диалоги с несколькими сотрудниками пока не поддерживаются.
       </p>
     );
   }
@@ -294,6 +308,7 @@ function ChannelBody({
     <ChannelChat
       channel={channel}
       key={channel.id}
+      onPresenceChange={onPresenceChange}
       runtimeAgentId={runtimeAgentId}
     />
   );

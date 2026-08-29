@@ -1,0 +1,53 @@
+{
+  "name": "Emotion Studio",
+  "version": "1.1.0",
+  "homepage": "https://grok-emotion.vercel.app",
+  "embedScript": "https://grok-emotion.vercel.app/embed.js",
+  "chatExample": "https://grok-emotion.vercel.app/examples/chat",
+  "defaults": {
+    "state": "idle",
+    "shape": "blob",
+    "color": "#08a96f",
+    "eyes": "#08110d",
+    "size": 280,
+    "autoCycle": false
+  },
+  "limits": {
+    "minSize": 40,
+    "maxSize": 800,
+    "colorFormat": "#RRGGBB"
+  },
+  "shapes": [
+    "blob", "pebble", "bean", "egg", "squircle", "tablet", "capsule", "cylinder",
+    "hex", "gem", "crystal", "wedge", "shield", "dome", "arch", "cloud", "teardrop", "leaf"
+  ],
+  "states": {
+    "lifecycle": ["sleeping", "waking", "idle", "listening", "thinking", "searching", "working"],
+    "reactions": ["excited", "surprised", "suspicious", "angry", "drowsy", "happy", "curious", "confused", "bored", "proud", "shy", "sad", "laughing", "scared", "playful", "celebrate"],
+    "effects": ["orbit", "radar", "progress"],
+    "actions": ["spawning", "humming", "loading", "dictating", "writing", "sending", "receiving", "uploading", "notifying", "alerting", "dragging", "bouncing", "powering-down"]
+  },
+  "colors": [
+    { "name": "Белый", "value": "#f4f4f4", "eyes": "#0a0a0a" },
+    { "name": "Коричневый", "value": "#946b43", "eyes": "#0a0a0a" },
+    { "name": "Красный", "value": "#dc2942", "eyes": "#0a0a0a" },
+    { "name": "Оранжевый", "value": "#ee6200", "eyes": "#0a0a0a" },
+    { "name": "Янтарный", "value": "#f39a08", "eyes": "#0a0a0a" },
+    { "name": "Зелёный", "value": "#08a96f", "eyes": "#08110d" },
+    { "name": "Бирюзовый", "value": "#11a99f", "eyes": "#07100f" },
+    { "name": "Синий", "value": "#2f80ed", "eyes": "#07101c" },
+    { "name": "Фиолетовый", "value": "#7042d6", "eyes": "#ffffff" },
+    { "name": "Розовый", "value": "#dc3188", "eyes": "#16040d" },
+    { "name": "Серый", "value": "#b7b7b7", "eyes": "#0a0a0a" }
+  ],
+  "recommendedAgentMapping": {
+    "waiting": "idle",
+    "userSpeaking": "listening",
+    "thinking": "thinking",
+    "searching": "searching",
+    "toolStart": "working",
+    "responseStreaming": "writing",
+    "done": "happy",
+    "error": "alerting"
+  }
+}

@@ -12,10 +12,9 @@ export function NewAgent() {
   return (
     <div className="mx-auto flex w-full max-w-xl flex-col gap-6 p-8">
       <header>
-        <h1 className="text-2xl font-semibold">New coworker</h1>
+        <h1 className="text-2xl font-semibold">Новый сотрудник</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          The role you write here applies in every channel this coworker works
-          in.
+          Эта роль будет действовать во всех диалогах сотрудника.
         </p>
       </header>
 
@@ -28,7 +27,7 @@ export function NewAgent() {
           const agent = await createAgent.mutateAsync(agentInputFrom(values));
           await navigate({ search: { agent: agent.id }, to: "/agents" });
         }}
-        submitLabel="Create coworker"
+        submitLabel="Создать сотрудника"
       />
     </div>
   );

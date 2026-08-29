@@ -76,14 +76,14 @@ export function AgentFields({
               field.state.meta.isTouched && !field.state.meta.isValid;
             return (
               <Field data-invalid={isInvalid}>
-                <FieldLabel htmlFor={field.name}>Name</FieldLabel>
+                <FieldLabel htmlFor={field.name}>Имя</FieldLabel>
                 <Input
                   aria-invalid={isInvalid}
                   id={field.name}
                   name={field.name}
                   onBlur={field.handleBlur}
                   onChange={(event) => field.handleChange(event.target.value)}
-                  placeholder="Expense Manager"
+                  placeholder="Контроль данных"
                   value={field.state.value}
                 />
                 {isInvalid ? (
@@ -99,14 +99,14 @@ export function AgentFields({
               field.state.meta.isTouched && !field.state.meta.isValid;
             return (
               <Field data-invalid={isInvalid}>
-                <FieldLabel htmlFor={field.name}>Title</FieldLabel>
+                <FieldLabel htmlFor={field.name}>Должность</FieldLabel>
                 <Input
                   aria-invalid={isInvalid}
                   id={field.name}
                   name={field.name}
                   onBlur={field.handleBlur}
                   onChange={(event) => field.handleChange(event.target.value)}
-                  placeholder="Finance Operations"
+                  placeholder="Специалист по данным"
                   value={field.state.value}
                 />
                 {isInvalid ? (
@@ -122,14 +122,14 @@ export function AgentFields({
               field.state.meta.isTouched && !field.state.meta.isValid;
             return (
               <Field data-invalid={isInvalid}>
-                <FieldLabel htmlFor={field.name}>Role</FieldLabel>
+                <FieldLabel htmlFor={field.name}>Роль</FieldLabel>
                 <Textarea
                   aria-invalid={isInvalid}
                   id={field.name}
                   name={field.name}
                   onBlur={field.handleBlur}
                   onChange={(event) => field.handleChange(event.target.value)}
-                  placeholder="Review receipts, categorize expenses, and prepare reimbursement reports."
+                  placeholder="Опишите задачи, ответственность и правила работы сотрудника."
                   rows={4}
                   value={field.state.value}
                 />
@@ -143,7 +143,7 @@ export function AgentFields({
         <form.Field name="visibility">
           {(field) => (
             <Field>
-              <FieldLabel htmlFor={field.name}>Visibility</FieldLabel>
+              <FieldLabel htmlFor={field.name}>Доступ</FieldLabel>
               <Select
                 onValueChange={(value) =>
                   field.handleChange(value as AgentFormValues["visibility"])
@@ -156,10 +156,10 @@ export function AgentFields({
                 <SelectContent>
                   <SelectGroup>
                     <SelectItem value="private">
-                      Private, only you can see it
+                      Личный — виден только вам
                     </SelectItem>
                     <SelectItem value="public">
-                      Public, everybody can see it
+                      Общий — виден всем пользователям
                     </SelectItem>
                   </SelectGroup>
                 </SelectContent>
@@ -174,7 +174,7 @@ export function AgentFields({
             return (
               <Field data-invalid={isInvalid}>
                 <FieldLabel htmlFor={field.name}>
-                  Agent endpoint (optional)
+                  Адрес агента (необязательно)
                 </FieldLabel>
                 <div className="flex gap-2">
                   <Input
@@ -200,7 +200,7 @@ export function AgentFields({
                     type="button"
                     variant="outline"
                   >
-                    {testing ? "Testing…" : "Test"}
+                    {testing ? "Проверяем…" : "Проверить"}
                   </Button>
                 </div>
                 {isInvalid ? (
@@ -212,14 +212,13 @@ export function AgentFields({
                     role="status"
                   >
                     {connection.ok
-                      ? `It answered: ${connection.events.join(", ")}`
+                      ? `Ответ получен: ${connection.events.join(", ")}`
                       : connection.reason}
                   </p>
                 ) : (
                   <p className="text-muted-foreground text-sm">
-                    Leave empty to use the built-in Bot. Anything that speaks
-                    AG-UI works. This server dials your agent, so an agent on
-                    your own machine has to be reachable from here.
+                    Оставьте пустым для встроенного сотрудника. Поддерживается
+                    любой агент с протоколом AG-UI, доступный с этого сервера.
                   </p>
                 )}
               </Field>
@@ -230,7 +229,7 @@ export function AgentFields({
           {(field) => (
             <Field>
               <FieldLabel htmlFor={field.name}>
-                Key for that agent (optional)
+                Ключ агента (необязательно)
               </FieldLabel>
               <Input
                 autoComplete="off"
@@ -240,7 +239,7 @@ export function AgentFields({
                 onChange={(event) => field.handleChange(event.target.value)}
                 placeholder={
                   hasAuth
-                    ? "A key is set. Type a new one to replace it."
+                    ? "Ключ уже задан. Введите новый для замены."
                     : "Bearer …"
                 }
                 // Never repopulated; `hasAuth` communicates that a key exists without exposing it.
@@ -248,9 +247,9 @@ export function AgentFields({
                 value={field.state.value}
               />
               <p className="text-muted-foreground text-sm">
-                Sent as an <code>Authorization</code> header on every run, and
-                kept in the credential vault. Leave empty to keep the current
-                key.
+                Передаётся в заголовке <code>Authorization</code> и хранится в
+                защищённом хранилище. Оставьте пустым, чтобы сохранить текущий
+                ключ.
               </p>
             </Field>
           )}
@@ -269,13 +268,13 @@ export function AgentFields({
         >
           {([canSubmit, isSubmitting]) => (
             <Button disabled={!canSubmit || isSubmitting} type="submit">
-              {isSubmitting ? "Saving…" : submitLabel}
+              {isSubmitting ? "Сохраняем…" : submitLabel}
             </Button>
           )}
         </form.Subscribe>
         {onCancel ? (
           <Button onClick={onCancel} type="button" variant="outline">
-            Cancel
+            Отмена
           </Button>
         ) : null}
       </div>

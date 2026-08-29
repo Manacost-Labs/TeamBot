@@ -278,7 +278,9 @@ export function Composer({
    * the two it is about to do. "Send" on a button that will not send for another minute is a small
    * lie told to exactly the people who cannot see the queue it lands in.
    */
-  const sendLabel = parking ? "Queue message" : "Send message";
+  const sendLabel = parking
+    ? "Поставить сообщение в очередь"
+    : "Отправить сообщение";
 
   if (compact) {
     return (
@@ -304,7 +306,7 @@ export function Composer({
           <DropdownMenuTrigger
             render={
               <Button
-                aria-label="More message options"
+                aria-label="Дополнительные действия"
                 disabled={disabled}
                 size="icon"
                 type="button"
@@ -317,30 +319,30 @@ export function Composer({
           <DropdownMenuContent align="start" side="top" sideOffset={8}>
             <DropdownMenuItem onClick={() => insertTrigger(AGENT_TRIGGER)}>
               <IconAt />
-              Mention a coworker
+              Упомянуть сотрудника
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => insertTrigger(COMMAND_TRIGGER)}>
               <IconBolt />
-              Use a skill
+              Использовать навык
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
         <PromptArea
-          aria-label="Message"
+          aria-label="Сообщение"
           className="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm shadow-none"
           disabled={disabled}
           maxHeight={COMPACT_MAX_HEIGHT_PX}
           minHeight={COMPACT_MIN_HEIGHT_PX}
           onChange={handleChange}
           onSubmit={submitDraft}
-          placeholder="Ask anything"
+          placeholder="Напишите сообщение"
           ref={promptAreaRef}
           triggers={triggers}
           value={value}
         />
         {canStop ? (
           <Button
-            aria-label="Stop the Bot"
+            aria-label="Остановить сотрудника"
             className="size-8 rounded-full p-0"
             data-testid="composer-stop"
             onClick={onStop}
@@ -375,14 +377,14 @@ export function Composer({
 
         <div className="grow px-3 pt-3 pb-2">
           <PromptArea
-            aria-label="Message"
+            aria-label="Сообщение"
             autoGrow
             className="w-full border-0 bg-transparent p-0 text-sm shadow-none"
             disabled={disabled}
             maxHeight={MAX_HEIGHT_PX}
             onChange={handleChange}
             onSubmit={submitDraft}
-            placeholder="Ask anything"
+            placeholder="Напишите сообщение"
             ref={promptAreaRef}
             triggers={triggers}
             value={value}
@@ -395,7 +397,7 @@ export function Composer({
           <div>
             {canStop ? (
               <Button
-                aria-label="Stop the Bot"
+                aria-label="Остановить сотрудника"
                 className="size-7 rounded-full bg-primary p-0"
                 data-testid="composer-stop"
                 onClick={onStop}

@@ -1,0 +1,6 @@
+Emotion Studio (grok-emotion)
+Source: https://github.com/Zulut30/grok-emotion
+Imported commit: 63f1743c15327c0167947711e26b91c4189226b0
+License: MIT (see LICENSE in this directory)
+
+embed.js was adjusted to load the bundled studio from /grok-emotion/index.html.

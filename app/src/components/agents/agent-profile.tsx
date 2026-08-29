@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
-import { AbstractAvatar } from "@/components/agents/abstract-avatar";
 import { AgentFields } from "@/components/agents/agent-fields";
 import { CallbackTokenPanel } from "@/components/agents/callback-token-panel";
+import { EmotionAvatar } from "@/components/agents/emotion-avatar";
 import { HandoffPanel } from "@/components/agents/handoff-panel";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -78,7 +78,7 @@ export function AgentProfile({ agentId }: { agentId: string }) {
   if (agent.error || !agent.data) {
     return (
       <p className="p-8 text-sm text-destructive" role="alert">
-        Could not load this coworker.
+        Не удалось загрузить сотрудника.
       </p>
     );
   }
@@ -90,7 +90,7 @@ export function AgentProfile({ agentId }: { agentId: string }) {
   return (
     <div className="flex w-full flex-col gap-6 p-8">
       <header className="flex flex-col items-center gap-3 text-center">
-        <AbstractAvatar
+        <EmotionAvatar
           name={profile.name}
           seed={profile.avatarSeed}
           size={80}
@@ -105,8 +105,8 @@ export function AgentProfile({ agentId }: { agentId: string }) {
         </div>
 
         <div className="flex flex-wrap justify-center gap-1.5">
-          <Tag>{profile.visibility === "private" ? "Private" : "Public"}</Tag>
-          {profile.systemOwned ? <Tag>System owned</Tag> : null}
+          <Tag>{profile.visibility === "private" ? "Личный" : "Общий"}</Tag>
+          {profile.systemOwned ? <Tag>Системный</Tag> : null}
         </div>
       </header>
 
@@ -131,12 +131,12 @@ export function AgentProfile({ agentId }: { agentId: string }) {
             });
             setEditingId(null);
           }}
-          submitLabel="Save changes"
+          submitLabel="Сохранить изменения"
         />
       ) : (
         <section className="grid gap-2">
           <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Role
+            Роль
           </h2>
           <p className="text-sm whitespace-pre-wrap text-pretty">
             {profile.roleDescription}
@@ -179,7 +179,7 @@ export function AgentProfile({ agentId }: { agentId: string }) {
               });
             }}
           >
-            Start channel
+            Начать диалог
           </Button>
 
           <Button
@@ -191,7 +191,7 @@ export function AgentProfile({ agentId }: { agentId: string }) {
             }}
             variant="outline"
           >
-            {duplicateAgent.isPending ? "Duplicating…" : "Duplicate"}
+            {duplicateAgent.isPending ? "Создаём копию…" : "Создать копию"}
           </Button>
 
           <Button
@@ -209,17 +209,16 @@ export function AgentProfile({ agentId }: { agentId: string }) {
           >
             {setHidden.isPending
               ? profile.hidden
-                ? "Unhiding…"
-                : "Hiding…"
+                ? "Показываем…"
+                : "Скрываем…"
               : profile.hidden
-                ? "Unhide"
-                : "Hide"}
+                ? "Показать"
+                : "Скрыть"}
           </Button>
 
           {profile.hidden ? (
             <p className="-mt-1 text-xs text-muted-foreground">
-              Hidden from your agents list. This changes nothing for anyone
-              else.
+              Сотрудник скрыт только из вашего списка.
             </p>
           ) : null}
 
@@ -229,7 +228,7 @@ export function AgentProfile({ agentId }: { agentId: string }) {
               onClick={() => setEditingId(agentId)}
               variant="outline"
             >
-              Edit
+              Изменить
             </Button>
           ) : null}
 
@@ -240,8 +239,8 @@ export function AgentProfile({ agentId }: { agentId: string }) {
               {isConfirmingDelete ? (
                 <div className="flex flex-col gap-2">
                   <p className="text-sm">
-                    Delete <span className="font-medium">{profile.name}</span>?
-                    This cannot be undone.
+                    Удалить <span className="font-medium">{profile.name}</span>?
+                    Это действие нельзя отменить.
                   </p>
                   {/* Cancel remains closest to the original Delete button position. */}
                   <Button
@@ -249,7 +248,7 @@ export function AgentProfile({ agentId }: { agentId: string }) {
                     onClick={() => setConfirmingDeleteId(null)}
                     variant="outline"
                   >
-                    Cancel
+                    Отмена
                   </Button>
                   <Button
                     className="w-full text-sm!"
@@ -260,7 +259,7 @@ export function AgentProfile({ agentId }: { agentId: string }) {
                     }}
                     variant="destructive"
                   >
-                    {deleteAgent.isPending ? "Deleting…" : "Delete"}
+                    {deleteAgent.isPending ? "Удаляем…" : "Удалить"}
                   </Button>
                 </div>
               ) : (
@@ -269,7 +268,7 @@ export function AgentProfile({ agentId }: { agentId: string }) {
                   onClick={() => setConfirmingDeleteId(agentId)}
                   variant="destructive"
                 >
-                  Delete
+                  Удалить
                 </Button>
               )}
             </>

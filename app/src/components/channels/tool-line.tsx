@@ -43,7 +43,7 @@ export function ToolLine({
       }`}
     >
       <span className="shrink-0">
-        {refused ? "Blocked" : failed ? `${label}, didn't work` : label}
+        {refused ? "Заблокировано" : failed ? `${label}: не выполнено` : label}
       </span>
       {detail ? <span className="truncate opacity-70">{detail}</span> : null}
     </span>

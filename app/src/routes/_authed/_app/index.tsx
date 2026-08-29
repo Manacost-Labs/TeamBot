@@ -28,7 +28,7 @@ function RouteComponent() {
           {appConfig.brand.productName}
         </h2>
         <h1 className="text-2xl font-bold tracking-tight mt-1.5 text-center">
-          Start a new channel
+          Новый диалог
         </h1>
       </div>
       <div className="mt-8 w-full flex flex-col items-center">
@@ -64,7 +64,7 @@ function RouteComponent() {
               setError(
                 caught instanceof Error
                   ? caught.message
-                  : "Could not start the conversation.",
+                  : "Не удалось начать диалог.",
               );
               throw caught;
             }
@@ -75,8 +75,8 @@ function RouteComponent() {
           // Said out loud: a message that silently reaches somebody you did not choose is the
           // kind of surprise that costs trust the first time it happens.
           <p className="mt-2 w-full max-w-2xl text-xs text-muted-foreground text-center">
-            Sent to the coworker it is for. Type <code>@</code> to choose one
-            yourself.
+            Сообщение получит подходящий сотрудник. Введите <code>@</code>,
+            чтобы выбрать сотрудника самостоятельно.
           </p>
         ) : null}
         {error ? (
@@ -89,7 +89,7 @@ function RouteComponent() {
         ) : null}
       </div>
       <div className="mt-10 w-full max-w-2xl">
-        <h2 className="font-bold text-lg">Explore agents</h2>
+        <h2 className="font-bold text-lg">Сотрудники</h2>
         <div className="flex flex-row gap-4 mt-4">
           {!!explore?.length &&
             explore.map((agent) => (
