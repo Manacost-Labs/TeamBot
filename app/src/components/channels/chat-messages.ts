@@ -15,6 +15,30 @@ export type VisibleChatItem =
       result?: string;
     };
 
+export type VisibleChatWindow = {
+  items: readonly VisibleChatItem[];
+  hidden: number;
+};
+
+/**
+ * Keep the live edge cheap without throwing conversation history away.
+ *
+ * The complete message list still belongs to the agent and is sent back on the next turn. This only
+ * limits how many expensive markdown/tool rows mount in the browser at once; a person can reveal
+ * the older rows from the transcript when they need them.
+ */
+export function newestVisibleChatItems(
+  items: readonly VisibleChatItem[],
+  limit: number,
+): VisibleChatWindow {
+  const safeLimit = Math.max(1, Math.floor(limit));
+  const hidden = Math.max(0, items.length - safeLimit);
+  return {
+    items: hidden === 0 ? items : items.slice(hidden),
+    hidden,
+  };
+}
+
 /** A tool result, as it arrives, its own message, pointing back at the call it answers. */
 type ToolResultMessage = { role: "tool"; toolCallId: string; content?: string };
 

@@ -29,7 +29,7 @@ import { markdownComponents } from "@/lib/markdown";
 import { EASE_OUT, ENTRANCE_SECONDS } from "@/lib/motion";
 import { readToolName } from "@/lib/plugins/tool-name";
 import { asText, forDisplay, REFUSAL_MARKER } from "@/lib/plugins/tool-result";
-import { toVisibleChatItems } from "./chat-messages";
+import { newestVisibleChatItems, toVisibleChatItems } from "./chat-messages";
 import type { QueuedMessage } from "./composer";
 import { ToolRenderBoundary } from "./tool-boundary";
 import { ToolLine } from "./tool-line";
@@ -60,6 +60,9 @@ type ChatTranscriptProps = {
 
 /** One shared empty array, so a screen without a queue does not hand down a new one per render. */
 const EMPTY_QUEUE: readonly QueuedMessage[] = [];
+
+/** Enough context for an opened channel without mounting years of markdown and tool output. */
+const HISTORY_PAGE_SIZE = 60;
 
 /**
  * Split a person's message into the skill they invoked and the rest of what they typed.
@@ -651,6 +654,8 @@ export function ChatTranscript({
    * which is where the 25x came from. This runs per render and is not worth guarding.
    */
   const items = toVisibleChatItems(messages);
+  const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE_SIZE);
+  const visible = newestVisibleChatItems(items, historyLimit);
 
   /*
    * ONLY WHILE THERE IS NOTHING ELSE TO LOOK AT. Once a reply starts streaming, or a tool line
@@ -704,12 +709,29 @@ export function ChatTranscript({
              */}
             {/* Instead of the rows, never alongside them: one real message and this is a lie. */}
             {items.length === 0 && restoring ? <RestoringTranscript /> : null}
-            {items.map((item, index) =>
+            {visible.hidden > 0 ? (
+              <div className="flex justify-center pb-6">
+                <button
+                  className="rounded-full border border-border bg-background px-4 py-2 text-muted-foreground text-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                  onClick={() =>
+                    setHistoryLimit((limit) => limit + HISTORY_PAGE_SIZE)
+                  }
+                  type="button"
+                >
+                  Показать предыдущие сообщения ({visible.hidden})
+                </button>
+              </div>
+            ) : null}
+            {visible.items.map((item, index) =>
               item.kind === "tool" ? (
                 <MessageScrollerItem key={item.id} messageId={item.id}>
                   <TranscriptToolCall
                     args={item.toolCall.function.arguments}
-                    delay={delays.delayFor(item.id, index, items.length)}
+                    delay={delays.delayFor(
+                      item.id,
+                      index,
+                      visible.items.length,
+                    )}
                     name={item.toolCall.function.name}
                     result={item.result}
                     toolCallId={item.toolCall.id}
@@ -718,8 +740,12 @@ export function ChatTranscript({
               ) : item.kind === "reasoning" ? (
                 <MessageScrollerItem key={item.id} messageId={item.id}>
                   <ReasoningProgress
-                    delay={delays.delayFor(item.id, index, items.length)}
-                    streaming={busy && index === items.length - 1}
+                    delay={delays.delayFor(
+                      item.id,
+                      index,
+                      visible.items.length,
+                    )}
+                    streaming={busy && index === visible.items.length - 1}
                     text={item.text}
                   />
                 </MessageScrollerItem>
@@ -727,12 +753,16 @@ export function ChatTranscript({
                 <MessageScrollerItem key={item.id} messageId={item.id}>
                   <TranscriptMessage
                     commandNames={commandNames}
-                    delay={delays.delayFor(item.id, index, items.length)}
+                    delay={delays.delayFor(
+                      item.id,
+                      index,
+                      visible.items.length,
+                    )}
                     role={item.role}
                     streaming={
                       busy &&
                       item.role === "assistant" &&
-                      index === items.length - 1
+                      index === visible.items.length - 1
                     }
                     text={item.text}
                   />

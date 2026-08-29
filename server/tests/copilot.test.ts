@@ -6,6 +6,7 @@ import {
   buildAgents,
   builtInAgentConfiguration,
   createRequestAgents,
+  disableInspectorMetadata,
   registeredAgentFromRow,
   resolveRuntimeAgents,
   standingRoleMessage,
@@ -27,6 +28,30 @@ const riskRow = {
   title: "Risk & Compliance",
   roleDescription: "Investigate policies and controls.",
 };
+
+describe("Copilot runtime info", () => {
+  test("does not advertise the unused Inspector metadata endpoint", async () => {
+    const response = await disableInspectorMetadata(
+      new Response(
+        JSON.stringify({ version: "1.0", inspectorMetadata: true }),
+        {
+          headers: {
+            "content-length": "999",
+            "content-type": "application/json",
+            "x-runtime": "copilot",
+          },
+        },
+      ),
+    );
+
+    expect(await response.json()).toEqual({
+      version: "1.0",
+      inspectorMetadata: false,
+    });
+    expect(response.headers.get("content-length")).toBeNull();
+    expect(response.headers.get("x-runtime")).toBe("copilot");
+  });
+});
 
 describe("registered Copilot agents", () => {
   test("normalizes built-in and remote rows", () => {

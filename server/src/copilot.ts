@@ -992,6 +992,34 @@ class IntelligenceKnowingANewThread extends CopilotKitIntelligence {
  */
 const THREAD_LOCK_TTL_SECONDS = 120;
 
+/**
+ * The private deployment has no CopilotKit Inspector surface, so advertising it makes every chat
+ * open schedule an optional metadata request that can take longer than the useful API calls.
+ */
+export async function disableInspectorMetadata(
+  response: Response,
+): Promise<Response> {
+  if (!response.ok) return response;
+
+  let info: unknown;
+  try {
+    info = await response.clone().json();
+  } catch {
+    return response;
+  }
+  if (!isPlainObject(info)) return response;
+
+  const headers = new Headers(response.headers);
+  // A rewritten body cannot keep an upstream byte count.
+  headers.delete("content-length");
+  headers.set("content-type", "application/json");
+  return new Response(JSON.stringify({ ...info, inspectorMetadata: false }), {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export function mountCopilotRuntime(
   config: DeploymentConfig,
   model: RuntimeModel,
@@ -1111,7 +1139,16 @@ export function mountCopilotRuntime(
   });
 
   return {
-    handler: createCopilotHonoHandler({ runtime, basePath }),
+    handler: createCopilotHonoHandler({
+      runtime,
+      basePath,
+      hooks: {
+        onResponse: ({ response, route }) =>
+          route.method === "info"
+            ? disableInspectorMetadata(response)
+            : undefined,
+      },
+    }),
     /**
      * How to reach the platform's runner, exactly as the runtime reaches it.
      *
