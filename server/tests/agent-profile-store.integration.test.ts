@@ -280,7 +280,7 @@ describe("agent profile store integration", () => {
     expect(preference?.hiddenAt).toBeNull();
   });
 
-  test("takes the endpoint and ignores every field a caller must not set", async () => {
+  test("updates editable presentation fields and ignores server-owned fields", async () => {
     const owner = await createUser();
     const deploymentPackage = await createPackage();
     const source = await createProfileFixture({
@@ -309,7 +309,7 @@ describe("agent profile store integration", () => {
       // reaches here already validated by the same check that guards creation.
       endpoint: "https://moved.example.test/ag-ui",
       ownerUserId: "forged-owner",
-      avatarSeed: "forged-avatar",
+      avatarSeed: "avatar:cloud:7",
       packageId: deploymentPackage.id,
       deletedAt: new Date(),
     } as unknown as CreateAgentInput);
@@ -321,7 +321,7 @@ describe("agent profile store integration", () => {
       roleDescription: "Updated role description.",
       visibility: "public",
       ownerUserId: owner.id,
-      avatarSeed: source.avatarSeed,
+      avatarSeed: "avatar:cloud:7",
       systemOwned: false,
       deletedAt: null,
     });
@@ -344,7 +344,7 @@ describe("agent profile store integration", () => {
       ownerUserId: owner.id,
       title: "Updated Title",
       roleDescription: "Updated role description.",
-      avatarSeed: source.avatarSeed,
+      avatarSeed: "avatar:cloud:7",
       visibility: "public",
       deletedAt: null,
     });

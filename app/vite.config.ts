@@ -5,7 +5,13 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  plugins: [tanstackRouter(), react(), tailwindcss()],
+  // Route components are loaded only when opened. The chat/computer stack is large and should not
+  // block the roster, sign-in screen or employee editor on first paint.
+  plugins: [
+    tanstackRouter({ autoCodeSplitting: true }),
+    react(),
+    tailwindcss(),
+  ],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

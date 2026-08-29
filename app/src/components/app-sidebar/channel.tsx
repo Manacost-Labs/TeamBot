@@ -36,6 +36,7 @@ import {
  * because the row it was invoked on is one of several identical-looking rows.
  */
 export const Channel = memo(function Channel({
+  avatarSeed,
   channelId,
   participantIds,
   name,
@@ -44,6 +45,7 @@ export const Channel = memo(function Channel({
   pinned,
   unread,
 }: {
+  avatarSeed?: string;
   channelId: string;
   participantIds: string[];
   name: string;
@@ -113,7 +115,7 @@ export const Channel = memo(function Channel({
               {participantIds.length === 1 ? (
                 <EmotionAvatar
                   name={name}
-                  seed={participantIds[0] ?? name}
+                  seed={avatarSeed ?? participantIds[0] ?? name}
                   size={32}
                 />
               ) : (

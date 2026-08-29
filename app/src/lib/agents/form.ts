@@ -5,6 +5,7 @@ import { z } from "zod";
  * shown next to fields before submit.
  */
 export const agentFormSchema = z.object({
+  avatarSeed: z.string().trim().min(1).max(120),
   name: z
     .string()
     .trim()
@@ -43,6 +44,7 @@ export const agentFormSchema = z.object({
 export type AgentFormValues = z.infer<typeof agentFormSchema>;
 
 export const emptyAgentForm: AgentFormValues = {
+  avatarSeed: "avatar:gem:4",
   name: "",
   title: "",
   roleDescription: "",
@@ -54,6 +56,7 @@ export const emptyAgentForm: AgentFormValues = {
 /** Convert form values to API input; omit an empty key so editing preserves the current credential. */
 export function agentInputFrom(values: AgentFormValues) {
   return {
+    avatarSeed: values.avatarSeed,
     name: values.name,
     title: values.title,
     roleDescription: values.roleDescription,

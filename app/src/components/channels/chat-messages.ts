@@ -6,6 +6,7 @@ import type { Message, ToolCall } from "@ag-ui/core";
 
 export type VisibleChatItem =
   | { kind: "text"; id: string; role: "user" | "assistant"; text: string }
+  | { kind: "reasoning"; id: string; text: string }
   | {
       kind: "tool";
       id: string;
@@ -33,6 +34,11 @@ export function toVisibleChatItems(
   }
 
   return messages.flatMap((message): VisibleChatItem[] => {
+    if (message.role === "reasoning") {
+      return message.content
+        ? [{ kind: "reasoning", id: message.id, text: message.content }]
+        : [];
+    }
     if (message.role === "assistant") {
       const items: VisibleChatItem[] = [];
       if (message.content) {

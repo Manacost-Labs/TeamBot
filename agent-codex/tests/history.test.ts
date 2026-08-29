@@ -35,6 +35,21 @@ describe("Codex prompt translation", () => {
     expect(transcriptFor(input)).toContain("[user] Hello");
   });
 
+  test("does not feed display-only reasoning summaries back into the next turn", () => {
+    const withReasoning = {
+      ...input,
+      messages: [
+        ...input.messages,
+        { id: "r", role: "reasoning", content: "I checked the current state." },
+        { id: "u2", role: "user", content: "Continue" },
+      ],
+    } as unknown as RunAgentInput;
+
+    const transcript = transcriptFor(withReasoning);
+    expect(transcript).not.toContain("I checked the current state.");
+    expect(transcript).toContain("[user] Continue");
+  });
+
   test("accepts only deployment-declared tool names", () => {
     expect([...deploymentToolNames(input)]).toEqual(["allowed"]);
   });

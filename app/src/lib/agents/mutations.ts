@@ -1,8 +1,10 @@
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
+import { channelKeys } from "@/lib/channels/queries";
 import { client } from "@/lib/client";
 import { type AgentProfile, type AgentVisibility, agentKeys } from "./queries";
 
 export type AgentInput = {
+  avatarSeed?: string;
   name: string;
   title: string;
   roleDescription: string;
@@ -18,7 +20,10 @@ const FALLBACK = "Coworker operation failed";
 
 /** Server-derived fields are invalidated instead of patched by hand. */
 function invalidateAgents(queryClient: QueryClient) {
-  return queryClient.invalidateQueries({ queryKey: agentKeys.all });
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: agentKeys.all }),
+    queryClient.invalidateQueries({ queryKey: channelKeys.all }),
+  ]);
 }
 
 export function createAgentMutationOptions(queryClient: QueryClient) {

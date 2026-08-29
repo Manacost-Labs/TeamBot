@@ -154,6 +154,12 @@ describe("agent input parser", () => {
       "r".repeat(1001),
       "Role description must be text between 1 and 1000 characters.",
     ],
+    ["avatarSeed", " ", "Avatar must be text between 1 and 120 characters."],
+    [
+      "avatarSeed",
+      "a".repeat(121),
+      "Avatar must be text between 1 and 120 characters.",
+    ],
     ["visibility", undefined, "Visibility must be public or private."],
     ["visibility", 1, "Visibility must be public or private."],
     ["visibility", "   ", "Visibility must be public or private."],
@@ -172,6 +178,7 @@ describe("agent input parser", () => {
     ["title", ` ${"t".repeat(120)} `, "t".repeat(120)],
     ["roleDescription", "r", "r"],
     ["roleDescription", ` ${"r".repeat(1000)} `, "r".repeat(1000)],
+    ["avatarSeed", " avatar:gem:4 ", "avatar:gem:4"],
     ["visibility", " public ", "public"],
     ["visibility", " private ", "private"],
   ])("accepts and trims boundary %s values", (field, value, trimmed) => {
@@ -183,7 +190,7 @@ describe("agent input parser", () => {
     });
   });
 
-  test("trims every accepted field and ignores forged fields", () => {
+  test("trims every accepted field and ignores forged server-owned fields", () => {
     expect(
       parseAgentInput({
         name: "  Expense Manager  ",
@@ -192,7 +199,7 @@ describe("agent input parser", () => {
         visibility: " private ",
         id: "forged-agent",
         ownerUserId: "attacker",
-        avatarSeed: "forged-avatar",
+        avatarSeed: " avatar:gem:4 ",
         deletedAt: "now",
         systemOwned: true,
         // `endpoint` is a real field for BYO-agent; validation protects it rather than refusing it
@@ -205,6 +212,7 @@ describe("agent input parser", () => {
         name: "Expense Manager",
         title: "Finance Operations",
         roleDescription: "Reviews receipts.",
+        avatarSeed: "avatar:gem:4",
         visibility: "private",
         endpoint: "https://agents.example.com/ag-ui",
       },
@@ -416,7 +424,7 @@ describe("agent lifecycle routes", () => {
       visibility: " private ",
       id: "forged-agent",
       ownerUserId: "attacker",
-      avatarSeed: "forged-avatar",
+      avatarSeed: "avatar:gem:4",
       deletedAt: "now",
       systemOwned: true,
       // A real field now, not a forged one; the rest of this list still is.
@@ -435,9 +443,10 @@ describe("agent lifecycle routes", () => {
       expect(response.status).toBe(method === "POST" ? 201 : 200);
     }
 
-    // The endpoint reaches the store because it is a real field; everything else forged does not.
+    // Customisable fields reach the store; server-owned identity fields do not.
     const expected = {
       ...validInput,
+      avatarSeed: "avatar:gem:4",
       endpoint: "https://agents.example.com/ag-ui",
     };
     expect(store.calls).toEqual([

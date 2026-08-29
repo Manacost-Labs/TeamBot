@@ -39,6 +39,49 @@ const JOIN_DEADLINE_MS = 1500;
  */
 const SEND_WITHOUT_RUNTIME_AFTER_MS = 1500;
 
+const SEARCH_TOOL_WORDS = [
+  "audit",
+  "check",
+  "diagnose",
+  "explore",
+  "list",
+  "read",
+  "search",
+  "status",
+] as const;
+
+/** Turn the latest real stream event into the face shown in the channel header. */
+export function emotionForMessages(
+  messages: readonly Readonly<Message>[],
+  running: boolean,
+): EmotionState {
+  if (!running) return "idle";
+
+  const answered = new Set(
+    messages.flatMap((message) =>
+      message.role === "tool" && "toolCallId" in message
+        ? [String(message.toolCallId)]
+        : [],
+    ),
+  );
+  for (const message of [...messages].reverse()) {
+    if (message.role === "assistant") {
+      const activeCall = [...(message.toolCalls ?? [])]
+        .reverse()
+        .find((call) => !answered.has(call.id));
+      if (activeCall) {
+        const name = activeCall.function.name.toLowerCase();
+        return SEARCH_TOOL_WORDS.some((word) => name.includes(word))
+          ? "searching"
+          : "working";
+      }
+      if (message.content) return "writing";
+    }
+    if (message.role === "reasoning" && message.content) return "thinking";
+  }
+  return "thinking";
+}
+
 /**
  * One channel's conversation with one coworker.
  *
@@ -238,17 +281,40 @@ export function ChannelChat({
    */
   const [turnsInFlight, setTurnsInFlight] = useState(0);
   const [runsInFlight, setRunsInFlight] = useState(0);
+  const [celebrating, setCelebrating] = useState(false);
+  const previousTurnsInFlight = useRef(0);
+
+  useEffect(() => {
+    const previous = previousTurnsInFlight.current;
+    previousTurnsInFlight.current = turnsInFlight;
+    if (previous === 0 || turnsInFlight !== 0 || runError) return;
+    setCelebrating(true);
+    const timer = window.setTimeout(() => setCelebrating(false), 1800);
+    return () => window.clearTimeout(timer);
+  }, [runError, turnsInFlight]);
+
+  const liveEmotion = emotionForMessages(
+    agent.messages,
+    agent.isRunning || turnsInFlight > 0,
+  );
 
   useEffect(() => {
     const state: EmotionState = runError
       ? "alerting"
-      : agent.isRunning
-        ? "writing"
-        : turnsInFlight > 0
-          ? "thinking"
+      : agent.isRunning || turnsInFlight > 0
+        ? liveEmotion
+        : celebrating
+          ? "happy"
           : "idle";
     onPresenceChange?.(state);
-  }, [agent.isRunning, onPresenceChange, runError, turnsInFlight]);
+  }, [
+    agent.isRunning,
+    celebrating,
+    liveEmotion,
+    onPresenceChange,
+    runError,
+    turnsInFlight,
+  ]);
 
   /**
    * Tell the roster what was just said. Failures here must not block the conversation.

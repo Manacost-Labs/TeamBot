@@ -1,8 +1,13 @@
 import type { Message } from "@ag-ui/core";
 import { useRenderToolCall } from "@copilotkit/react-core/v2";
-import { IconBox } from "@tabler/icons-react";
+import {
+  IconBox,
+  IconBrain,
+  IconCheck,
+  IconLoader2,
+} from "@tabler/icons-react";
 import { motion, useReducedMotion } from "motion/react";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Streamdown } from "streamdown";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import {
@@ -468,6 +473,59 @@ const TranscriptMessage = memo(function TranscriptMessage({
   );
 });
 
+/** Official reasoning summary streamed by the model, not private chain-of-thought. */
+const ReasoningProgress = memo(function ReasoningProgress({
+  delay,
+  streaming,
+  text,
+}: {
+  delay: number;
+  streaming: boolean;
+  text: string;
+}) {
+  // A live card opens itself and stays open after completion. Restored history starts collapsed.
+  const [open, setOpen] = useState(streaming);
+
+  return (
+    <Arriving delay={delay}>
+      <details
+        className="group my-2 rounded-lg border border-border/70 bg-muted/25 px-3 py-2"
+        onToggle={(event) => setOpen(event.currentTarget.open)}
+        open={open}
+      >
+        <summary className="flex cursor-pointer list-none items-center gap-2 text-sm text-muted-foreground">
+          {streaming ? (
+            <IconLoader2 className="size-4 shrink-0 animate-spin motion-reduce:animate-none" />
+          ) : (
+            <IconCheck className="size-4 shrink-0 text-success" />
+          )}
+          <IconBrain className="size-4 shrink-0" />
+          <span className="font-medium text-foreground">Ход работы</span>
+          <span className="ml-auto text-xs">
+            {streaming ? "выполняется" : "готово"}
+          </span>
+        </summary>
+        <div className="reasoning-progress mt-2 border-l border-border pl-3 text-sm text-muted-foreground">
+          <Streamdown
+            animated={{
+              animation: "fadeIn",
+              duration: 120,
+              maxBacklogMs: 140,
+              sep: "word",
+              stagger: 10,
+            }}
+            components={markdownComponents}
+            isAnimating={streaming}
+            mode={streaming ? "streaming" : "static"}
+          >
+            {text}
+          </Streamdown>
+        </div>
+      </details>
+    </Arriving>
+  );
+});
+
 /**
  * One drawn tool call, memoised on the same terms.
  *
@@ -655,6 +713,14 @@ export function ChatTranscript({
                     name={item.toolCall.function.name}
                     result={item.result}
                     toolCallId={item.toolCall.id}
+                  />
+                </MessageScrollerItem>
+              ) : item.kind === "reasoning" ? (
+                <MessageScrollerItem key={item.id} messageId={item.id}>
+                  <ReasoningProgress
+                    delay={delays.delayFor(item.id, index, items.length)}
+                    streaming={busy && index === items.length - 1}
+                    text={item.text}
                   />
                 </MessageScrollerItem>
               ) : (

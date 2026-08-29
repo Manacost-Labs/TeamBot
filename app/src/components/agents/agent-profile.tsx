@@ -125,6 +125,7 @@ export function AgentProfile({ agentId }: { agentId: string }) {
       {isEditing ? (
         <AgentFields
           defaultValues={{
+            avatarSeed: profile.avatarSeed,
             name: profile.name,
             roleDescription: profile.roleDescription,
             title: profile.title,

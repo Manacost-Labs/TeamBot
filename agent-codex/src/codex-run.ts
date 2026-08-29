@@ -10,17 +10,29 @@ import {
 } from "./history";
 
 type JsonObject = Record<string, unknown>;
-type Notification = { method?: string; params?: JsonObject; id?: number; result?: unknown; error?: unknown };
+type Notification = {
+  method?: string;
+  params?: JsonObject;
+  id?: number;
+  result?: unknown;
+  error?: unknown;
+};
 
 export type CodexCallbacks = {
   onText(delta: string, itemId: string): void;
+  /** Official concise reasoning summary, never the model's private reasoning tokens. */
+  onReasoning(delta: string, itemId: string, summaryIndex: number): void;
   onToolStart(callId: string, name: string, args: JsonObject): void;
   onToolResult(callId: string, result: string): void;
 };
 
-const TOOL_URL = process.env.OPENBOT_TOOL_URL ?? "http://openbot:3001/api/agent-tools/call";
+const TOOL_URL =
+  process.env.OPENBOT_TOOL_URL ?? "http://openbot:3001/api/agent-tools/call";
 const TOOL_TOKEN = process.env.AGENT_TOOL_TOKEN?.trim() ?? "";
 const MODEL = process.env.CODEX_MODEL?.trim();
+const REASONING_EFFORT = process.env.CODEX_REASONING_EFFORT?.trim() || "low";
+const REASONING_SUMMARY =
+  process.env.CODEX_REASONING_SUMMARY?.trim() || "concise";
 
 export async function runCodex(
   input: RunAgentInput,
@@ -36,7 +48,10 @@ export async function runCodex(
 
 class CodexProcess {
   private readonly process: ChildProcessWithoutNullStreams;
-  private readonly pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+  private readonly pending = new Map<
+    number,
+    { resolve(value: unknown): void; reject(error: Error): void }
+  >();
   private readonly finished: Promise<void>;
   private finish!: () => void;
   private fail!: (error: Error) => void;
@@ -59,14 +74,19 @@ class CodexProcess {
       env: process.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
-    readline.createInterface({ input: this.process.stdout }).on("line", (line) => this.onLine(line));
+    readline
+      .createInterface({ input: this.process.stdout })
+      .on("line", (line) => this.onLine(line));
     this.process.stderr.on("data", (chunk) => {
       this.stderr = `${this.stderr}${String(chunk)}`.slice(-4000);
     });
     this.process.once("error", (error) => this.fail(error));
     this.process.once("exit", (code) => {
       if (!this.turnCompleted) {
-        const trace = this.protocolTrace.length > 0 ? ` Protocol: ${this.protocolTrace.join(" -> ")}` : "";
+        const trace =
+          this.protocolTrace.length > 0
+            ? ` Protocol: ${this.protocolTrace.join(" -> ")}`
+            : "";
         this.fail(
           new Error(
             `Codex app-server stopped with code ${code ?? "unknown"}.${trace} ${this.stderr}`.trim(),
@@ -111,6 +131,8 @@ class CodexProcess {
     await this.request("turn/start", {
       threadId,
       input: [{ type: "text", text: transcriptFor(this.input) }],
+      effort: REASONING_EFFORT,
+      summary: REASONING_SUMMARY,
     });
     await this.finished;
   }
@@ -121,7 +143,9 @@ class CodexProcess {
 
   private request(method: string, params: JsonObject): Promise<unknown> {
     const id = this.nextId++;
-    const response = new Promise<unknown>((resolve, reject) => this.pending.set(id, { resolve, reject }));
+    const response = new Promise<unknown>((resolve, reject) =>
+      this.pending.set(id, { resolve, reject }),
+    );
     this.write({ method, id, params });
     return response;
   }
@@ -142,11 +166,15 @@ class CodexProcess {
       return;
     }
     this.recordProtocol(message);
-    if (typeof message.id === "number" && ("result" in message || "error" in message)) {
+    if (
+      typeof message.id === "number" &&
+      ("result" in message || "error" in message)
+    ) {
       const pending = this.pending.get(message.id);
       if (!pending) return;
       this.pending.delete(message.id);
-      if (message.error) pending.reject(new Error(JSON.stringify(message.error)));
+      if (message.error)
+        pending.reject(new Error(JSON.stringify(message.error)));
       else pending.resolve(message.result);
       return;
     }
@@ -163,10 +191,28 @@ class CodexProcess {
       }
       return;
     }
+    if (message.method === "item/reasoning/summaryTextDelta") {
+      const delta = message.params?.delta;
+      const itemId = message.params?.itemId;
+      const summaryIndex = message.params?.summaryIndex;
+      if (
+        typeof delta === "string" &&
+        typeof itemId === "string" &&
+        typeof summaryIndex === "number"
+      ) {
+        this.callbacks.onReasoning(delta, itemId, summaryIndex);
+      }
+      return;
+    }
     if (message.method === "turn/completed") {
-      const turn = message.params?.turn as { status?: string; error?: unknown } | undefined;
+      const turn = message.params?.turn as
+        | { status?: string; error?: unknown }
+        | undefined;
       this.turnCompleted = true;
-      if (turn?.status === "failed") this.fail(new Error(JSON.stringify(turn.error ?? "Codex turn failed.")));
+      if (turn?.status === "failed")
+        this.fail(
+          new Error(JSON.stringify(turn.error ?? "Codex turn failed.")),
+        );
       else this.finish();
       return;
     }
@@ -177,22 +223,34 @@ class CodexProcess {
   }
 
   private recordProtocol(message: Notification): void {
-    let entry = typeof message.method === "string" ? message.method : `response:${message.id ?? "?"}`;
-    if (message.error !== undefined) entry = `${entry}:error=${safeDiagnostic(message.error)}`;
-    if (message.method === "error") entry = `${entry}:${safeDiagnostic(message.params)}`;
+    let entry =
+      typeof message.method === "string"
+        ? message.method
+        : `response:${message.id ?? "?"}`;
+    if (message.error !== undefined)
+      entry = `${entry}:error=${safeDiagnostic(message.error)}`;
+    if (message.method === "error")
+      entry = `${entry}:${safeDiagnostic(message.params)}`;
     if (message.method === "turn/completed") {
-      const turn = message.params?.turn as { status?: unknown; error?: unknown } | undefined;
+      const turn = message.params?.turn as
+        | { status?: unknown; error?: unknown }
+        | undefined;
       entry = `${entry}:status=${String(turn?.status ?? "unknown")}`;
-      if (turn?.error !== undefined) entry = `${entry}:error=${safeDiagnostic(turn.error)}`;
+      if (turn?.error !== undefined)
+        entry = `${entry}:error=${safeDiagnostic(turn.error)}`;
     }
     this.protocolTrace.push(entry.slice(0, 800));
     if (this.protocolTrace.length > 24) this.protocolTrace.shift();
   }
 
   private async handleToolCall(id: number, params: JsonObject): Promise<void> {
-    const callId = typeof params.callId === "string" ? params.callId : `call_${id}`;
+    const callId =
+      typeof params.callId === "string" ? params.callId : `call_${id}`;
     const wireName = typeof params.tool === "string" ? params.tool : "unknown";
-    const { deploymentName, eventName } = toolCallNames(wireName, this.toolNames);
+    const { deploymentName, eventName } = toolCallNames(
+      wireName,
+      this.toolNames,
+    );
     const args = isObject(params.arguments) ? params.arguments : {};
     /*
      * Report the same safe name Codex was offered. Turning it back into `mcp__...` in the AG-UI
@@ -218,19 +276,26 @@ async function callDeploymentTool(
   name: string,
   args: JsonObject,
 ): Promise<string> {
-  if (!deploymentToolNames(input).has(name)) return "Refused. This tool is not governed by this OpenBot deployment.";
-  if (!TOOL_TOKEN) return "Refused. The Codex adapter has no deployment tool credential.";
+  if (!deploymentToolNames(input).has(name))
+    return "Refused. This tool is not governed by this OpenBot deployment.";
+  if (!TOOL_TOKEN)
+    return "Refused. The Codex adapter has no deployment tool credential.";
   const run = runAssertion(input);
   if (!run) return "Refused. This run has no signed OpenBot assertion.";
 
   try {
     const response = await fetch(TOOL_URL, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-openbot-agent-token": TOOL_TOKEN },
+      headers: {
+        "content-type": "application/json",
+        "x-openbot-agent-token": TOOL_TOKEN,
+      },
       body: JSON.stringify({ name, args, run }),
     });
     const body = (await response.json()) as { text?: string };
-    return body.text ?? `The tool returned HTTP ${response.status} without a result.`;
+    return (
+      body.text ?? `The tool returned HTTP ${response.status} without a result.`
+    );
   } catch (error) {
     return `The tool could not be called: ${error instanceof Error ? error.message : "unknown error"}`;
   }
@@ -245,7 +310,9 @@ function safeDiagnostic(value: unknown): string {
 }
 
 export function codexToolName(name: string): string {
-  return name.startsWith("mcp__") ? `openbot__${name.slice("mcp__".length)}` : name;
+  return name.startsWith("mcp__")
+    ? `openbot__${name.slice("mcp__".length)}`
+    : name;
 }
 
 export function toolCallNames(

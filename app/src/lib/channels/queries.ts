@@ -12,6 +12,8 @@ export type AgentChannel = {
   id: string;
   name: string;
   agentIds: string[];
+  /** Avatar presets in agentIds order. Older deployments may omit this. */
+  avatarSeeds?: string[];
   threadId: string;
   active: boolean;
 };
