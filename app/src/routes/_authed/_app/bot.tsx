@@ -2,18 +2,28 @@ import { CopilotChat } from "@copilotkit/react-core/v2";
 import { IconPlus } from "@tabler/icons-react";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
+import { PageLoading } from "@/components/layout/page-loading";
 import { Button } from "@/components/ui/button";
 import { agentListQueryOptions } from "@/lib/agents/queries";
 import { useActiveBot } from "@/lib/copilot/active-bot";
 import { useBotThread } from "@/lib/copilot/bot-thread";
+import { CopilotProvider } from "@/lib/copilot/provider";
 import { useStoppedTurn } from "@/lib/copilot/stopped-turn";
 
 export const Route = createFileRoute("/_authed/_app/bot")({
-  component: RouteComponent,
+  component: BotRoute,
   validateSearch: (search: Record<string, unknown>): { agent?: string } => ({
     ...(typeof search.agent === "string" ? { agent: search.agent } : {}),
   }),
 });
+
+function BotRoute() {
+  return (
+    <CopilotProvider>
+      <RouteComponent />
+    </CopilotProvider>
+  );
+}
 
 /**
  * Which Bot this screen is for.
@@ -34,10 +44,10 @@ function RouteComponent() {
   const bot = agents?.find((candidate) => candidate.id === agentId);
   const known = bot !== undefined;
 
-  if (isPending) return null;
+  if (isPending) return <PageLoading label="Загрузка сотрудника…" />;
   if (!agentId || !known) {
     return (
-      <div className="flex h-screen items-center justify-center p-6">
+      <div className="flex min-h-0 flex-1 items-center justify-center p-6">
         <p className="text-muted-foreground text-sm">
           {agent
             ? `This deployment has no Bot called "${agent}".`
@@ -75,7 +85,7 @@ function BotChat({ agentId, name }: { agentId: string; name: string }) {
   const stopped = useStoppedTurn(agentId);
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <header className="border-b px-6 py-3">
         <div className="flex items-baseline justify-between">
           {/*

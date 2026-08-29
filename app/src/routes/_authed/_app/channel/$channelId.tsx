@@ -17,6 +17,7 @@ import { ActivityLog } from "@/components/computer/activity-log";
 import { ComputerView } from "@/components/computer/computer-view";
 import { useNeedsYou } from "@/components/computer/needs-you";
 import { DetailPanel } from "@/components/layout/detail-panel";
+import { PageLoading } from "@/components/layout/page-loading";
 import { Button } from "@/components/ui/button";
 import { markChannelReadMutationOptions } from "@/lib/channels/mutations";
 import {
@@ -25,6 +26,7 @@ import {
   channelQueryOptions,
 } from "@/lib/channels/queries";
 import { onComputerActivity } from "@/lib/copilot/computer-activity";
+import { CopilotProvider } from "@/lib/copilot/provider";
 
 const chatSearchSchema = z.object({
   settings: z.boolean().optional(),
@@ -42,8 +44,16 @@ const SCREEN_PANEL_WIDTH = 400;
 
 export const Route = createFileRoute("/_authed/_app/channel/$channelId")({
   validateSearch: chatSearchSchema,
-  component: RouteComponent,
+  component: ChannelRoute,
 });
+
+function ChannelRoute() {
+  return (
+    <CopilotProvider>
+      <RouteComponent />
+    </CopilotProvider>
+  );
+}
 
 /**
  * What the Bot is looking at, and what it is doing.
@@ -269,8 +279,7 @@ function ChannelBody({
   isPending: boolean;
   hasError: boolean;
 }) {
-  // Nothing while the channel loads: a placeholder inside a local round-trip is a flicker.
-  if (isPending) return null;
+  if (isPending) return <PageLoading label="Загрузка диалога…" />;
   if (hasError || !channel) {
     return (
       <p className="p-8 text-sm text-destructive" role="alert">

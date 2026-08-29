@@ -13,6 +13,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 import { ComponentPreview } from "@/components/component-preview";
+import { PageLoading } from "@/components/layout/page-loading";
 import {
   PageRows,
   PageSection,
@@ -96,12 +97,9 @@ function RouteComponent() {
    */
   const component = components.data?.find((entry) => entry.name === name);
 
-  /*
-   * Pending first and drawing nothing: there is no loading placeholder in this app, and the
-   * alternative here is worse than a blank — "no such component" while the list is still in flight
-   * says something false about a component that is about to appear.
-   */
-  if (components.isPending) return null;
+  if (components.isPending) {
+    return <PageLoading label="Загрузка компонента…" />;
+  }
 
   if (components.error) {
     return (

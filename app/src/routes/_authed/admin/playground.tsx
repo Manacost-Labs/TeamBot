@@ -14,6 +14,7 @@ import {
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { CopilotProvider } from "@/lib/copilot/provider";
 import {
   deleteSandboxedMutationOptions,
   publishSandboxedMutationOptions,
@@ -30,8 +31,16 @@ import {
  * and used by conversations only after publishing.
  */
 export const Route = createFileRoute("/_authed/admin/playground")({
-  component: PlaygroundPage,
+  component: PlaygroundRoute,
 });
+
+function PlaygroundRoute() {
+  return (
+    <CopilotProvider>
+      <PlaygroundPage />
+    </CopilotProvider>
+  );
+}
 
 const STARTER = {
   slug: "",

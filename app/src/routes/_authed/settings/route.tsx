@@ -1,4 +1,5 @@
 import { createFileRoute, Outlet } from "@tanstack/react-router";
+import { MobileSidebarHeader } from "@/components/layout/mobile-sidebar-header";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { SidebarProvider } from "@/components/ui/sidebar";
 
@@ -21,7 +22,8 @@ function RouteComponent() {
       }
     >
       <SettingsSidebar />
-      <main className="flex-1">
+      <main className="flex min-h-svh flex-1 flex-col">
+        <MobileSidebarHeader title="Настройки" />
         <Outlet />
       </main>
     </SidebarProvider>

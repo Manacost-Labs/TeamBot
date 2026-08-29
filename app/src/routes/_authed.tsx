@@ -1,6 +1,5 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 import { currentUserQueryOptions } from "../lib/auth/queries";
-import { CopilotProvider } from "../lib/copilot/provider";
 
 export const Route = createFileRoute("/_authed")({
   beforeLoad: async ({ context }) => {
@@ -11,11 +10,8 @@ export const Route = createFileRoute("/_authed")({
       throw redirect({ to: "/sign" });
     }
   },
-  // Mounted INSIDE the authed boundary, not at the root: the runtime endpoint requires a session, so
-  // a provider above the sign-in gate would open a run for a visitor who has not signed in yet.
-  component: () => (
-    <CopilotProvider>
-      <Outlet />
-    </CopilotProvider>
-  ),
+  // Chat mounts its runtime provider only on the three routes that use it. Keeping it out of this
+  // shared boundary prevents every settings and administration page from downloading the chat,
+  // generative UI and diagram renderers before it can paint.
+  component: Outlet,
 });

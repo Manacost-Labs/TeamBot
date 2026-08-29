@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { ComponentPreview } from "@/components/component-preview";
+import { PageLoading } from "@/components/layout/page-loading";
 import {
   PageRows,
   PageSection,
@@ -72,7 +73,9 @@ function RouteComponent() {
   const { name } = Route.useParams();
   const components = useQuery(componentListQueryOptions());
 
-  if (components.isPending) return null;
+  if (components.isPending) {
+    return <PageLoading label="Загрузка компонента…" />;
+  }
 
   if (components.error) {
     return (

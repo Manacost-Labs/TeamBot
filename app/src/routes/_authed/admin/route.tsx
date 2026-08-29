@@ -1,5 +1,6 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 import { AdminSidebar } from "@/components/admin/admin-sidebar";
+import { MobileSidebarHeader } from "@/components/layout/mobile-sidebar-header";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { currentUserQueryOptions } from "../../../lib/auth/queries";
 
@@ -30,7 +31,8 @@ function RouteComponent() {
       }
     >
       <AdminSidebar />
-      <main className="flex-1">
+      <main className="flex min-h-svh flex-1 flex-col">
+        <MobileSidebarHeader title="Администрирование" />
         <Outlet />
       </main>
     </SidebarProvider>
