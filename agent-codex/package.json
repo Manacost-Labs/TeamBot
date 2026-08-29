@@ -1,0 +1,17 @@
+{
+  "name": "@openbot/agent-codex",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun src/index.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@ag-ui/core": "0.0.57",
+    "@ag-ui/encoder": "0.0.57"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14"
+  }
+}

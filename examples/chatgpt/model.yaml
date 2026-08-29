@@ -1,0 +1,4 @@
+model:
+  provider: openai
+  credential_secret_ref: unused-for-remote-codex-agent
+  default_model: account-default

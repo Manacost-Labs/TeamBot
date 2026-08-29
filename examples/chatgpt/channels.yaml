@@ -1,0 +1,6 @@
+channels:
+  - id: work
+    name: Work
+    description: A private workspace powered by the owner's ChatGPT model.
+    permitted_agents: [chatgpt-assistant]
+    allowed_groups: [all]

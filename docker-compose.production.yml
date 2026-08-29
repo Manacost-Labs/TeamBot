@@ -1,0 +1,73 @@
+services:
+  openbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      EMBEDDED_POSTGRES: "on"
+      DATABASE_URL: postgres://openbot@127.0.0.1:5432/openbot
+      TENANT_PACKAGE_DIR: /app/examples/chatgpt
+      OPENBOT_SINGLE_USER: "true"
+      OPENBOT_PUBLIC_URL: https://work-origin.kolodahearthstone.com
+      OPENBOT_APP_URL: https://work-origin.kolodahearthstone.com
+      TRUSTED_ORIGINS: https://work-origin.kolodahearthstone.com
+      MANAGED_AGENT_AG_UI_URL: http://agent-codex:4202/ag-ui
+      AGENT_ENDPOINT_ALLOWED_HOSTS: agent-codex:4202
+      AGENT_COMPUTER_URL: http://127.0.0.1:4100
+    ports:
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - openbot-postgres:/var/lib/postgresql
+      - openbot-workspace:/workspace
+      - openbot-profiles:/profiles
+    depends_on:
+      agent-codex:
+        condition: service_healthy
+    networks:
+      - app
+
+  agent-codex:
+    build:
+      context: .
+      dockerfile: agent-codex/Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: "4202"
+      MANAGED_AGENT_TOKEN: ${MANAGED_AGENT_TOKEN}
+      AGENT_TOOL_TOKEN: ${AGENT_TOOL_TOKEN}
+      CODEX_MODEL: ${CODEX_MODEL:-}
+      OPENBOT_TOOL_URL: http://openbot:3001/api/agent-tools/call
+    volumes:
+      - /home/debian/.codex/auth.json:/home/bun/.codex/auth.json
+    security_opt:
+      # Codex creates its own unprivileged bwrap namespace. Docker's default seccomp profile blocks
+      # that syscall; opening it here preserves the inner read-only profile and credential deny rule.
+      - seccomp=unconfined
+      - apparmor=unconfined
+      - no-new-privileges:true
+    networks:
+      - app
+
+  edge-auth:
+    build:
+      context: .
+      dockerfile: edge-auth/Dockerfile
+    restart: unless-stopped
+    environment:
+      OPENBOT_SESSION_SECRET: ${OPENBOT_SESSION_SECRET}
+      CHATGPT_GATEWAY_URL: https://work.kolodahearthstone.com
+    ports:
+      - "127.0.0.1:3030:3030"
+    networks:
+      - app
+
+volumes:
+  openbot-postgres:
+  openbot-workspace:
+  openbot-profiles:
+
+networks:
+  app:
