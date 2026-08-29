@@ -17,7 +17,11 @@ export function canManageAgent(
   actor: AgentActor,
   agent: AgentProfile,
 ): boolean {
-  if (agent.systemOwned || agent.deletedAt !== null) return false;
+  if (agent.deletedAt !== null) return false;
+
+  // Deployment coworkers are editable by the administrator of this private installation. They
+  // remain protected from deletion in the store, so customization cannot remove a routed Bot.
+  if (agent.systemOwned) return actor.role === "admin";
 
   return agent.ownerUserId === actor.id || actor.role === "admin";
 }

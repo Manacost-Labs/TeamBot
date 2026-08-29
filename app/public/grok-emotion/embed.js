@@ -46,7 +46,7 @@
       shape: shapes.indexOf(config.shape) !== -1 ? config.shape : "blob",
       color: /^#[0-9a-f]{6}$/i.test(config.color || "") ? config.color : "#08a96f",
       eyes: /^#[0-9a-f]{6}$/i.test(config.eyes || "") ? config.eyes : "#08110d",
-      size: Math.max(40, Math.min(800, Number(config.size) || 280)),
+      size: Math.max(16, Math.min(800, Number(config.size) || 280)),
       autoCycle: config.autoCycle === true
     };
   }

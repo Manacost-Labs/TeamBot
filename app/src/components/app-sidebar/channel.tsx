@@ -7,6 +7,7 @@ import {
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { memo, useState } from "react";
+import { EmotionAvatar } from "@/components/agents/emotion-avatar";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -26,7 +27,6 @@ import {
   deleteChannelMutationOptions,
   setChannelPinnedMutationOptions,
 } from "@/lib/channels/mutations";
-import { ChannelAvatar } from "../channels/avatar";
 
 /**
  * Memoized roster row. `use-channel-events` preserves unchanged row identity, and
@@ -110,7 +110,17 @@ export const Channel = memo(function Channel({
             }}
           >
             <div className="">
-              <ChannelAvatar participantIds={participantIds} size={32} />
+              {participantIds.length === 1 ? (
+                <EmotionAvatar
+                  name={name}
+                  seed={participantIds[0] ?? name}
+                  size={32}
+                />
+              ) : (
+                <span className="grid size-8 place-items-center rounded-full bg-muted text-xs font-semibold">
+                  {name.slice(0, 1).toLocaleUpperCase("ru-RU")}
+                </span>
+              )}
             </div>
             <div className="flex-col min-w-0 flex-1">
               <div className="flex flex-row items-center justify-between gap-2">

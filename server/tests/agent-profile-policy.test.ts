@@ -57,18 +57,19 @@ describe("agent profile permissions", () => {
     }
   });
 
-  test("allows all actors to access and run a system public profile but nobody to manage it", () => {
+  test("allows all actors to access and run a system public profile and only admins to manage it", () => {
     const agent = profile({
       visibility: "public",
       ownerUserId: null,
       systemOwned: true,
     });
 
-    for (const actor of [creator, otherUser, admin]) {
+    for (const actor of [creator, otherUser]) {
       expect(canAccessAgent(actor, agent)).toBe(true);
       expect(canRunAgent(actor, agent)).toBe(true);
       expect(canManageAgent(actor, agent)).toBe(false);
     }
+    expect(canManageAgent(admin, agent)).toBe(true);
   });
 
   test("denies every permission for deleted profiles", () => {

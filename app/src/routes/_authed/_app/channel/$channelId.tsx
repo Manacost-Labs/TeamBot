@@ -196,7 +196,7 @@ function RouteComponent() {
                 <EmotionAvatar
                   name={channel.data?.name ?? "Сотрудник"}
                   seed={agentId}
-                  size={28}
+                  size={32}
                   state={presence}
                 />
               ) : (

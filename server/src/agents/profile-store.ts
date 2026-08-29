@@ -225,7 +225,6 @@ async function lockProfileReadRow(executor: DatabaseExecutor, id: string) {
 }
 
 function requireManageable(actor: AgentActor, profile: AgentProfile) {
-  if (profile.systemOwned) throw new ProtectedAgentError(profile.id);
   if (!canManageAgent(actor, profile)) {
     throw new AgentNotManageableError(profile.id);
   }
@@ -491,6 +490,7 @@ export function createAgentProfileStore(
           await lockProfileMutationRows(transaction, id);
           const profile = await findAccessibleProfile(transaction, actor, id);
           if (!profile) throw new AgentNotFoundError(id);
+          if (profile.systemOwned) throw new ProtectedAgentError(profile.id);
           requireManageable(actor, profile);
 
           const deletedAt = new Date();

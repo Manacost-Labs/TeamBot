@@ -1,3 +1,4 @@
+import { IconPencil } from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
@@ -108,6 +109,17 @@ export function AgentProfile({ agentId }: { agentId: string }) {
           <Tag>{profile.visibility === "private" ? "Личный" : "Общий"}</Tag>
           {profile.systemOwned ? <Tag>Системный</Tag> : null}
         </div>
+        {profile.canManage && !isEditing ? (
+          <Button
+            className="mt-1"
+            onClick={() => setEditingId(agentId)}
+            size="sm"
+            variant="outline"
+          >
+            <IconPencil className="size-4" />
+            Редактировать сотрудника
+          </Button>
+        ) : null}
       </header>
 
       {isEditing ? (
@@ -148,7 +160,10 @@ export function AgentProfile({ agentId }: { agentId: string }) {
        * Only for a coworker that runs somewhere else, and only for somebody who may change it.
        * The Bot in the box has no endpoint and nothing to authenticate as.
        */}
-      {!isEditing && profile.endpoint && profile.canManage ? (
+      {!isEditing &&
+      profile.endpoint &&
+      profile.canManage &&
+      !profile.systemOwned ? (
         <CallbackTokenPanel
           agentId={agentId}
           hasToken={profile.hasCallbackToken}
@@ -222,7 +237,7 @@ export function AgentProfile({ agentId }: { agentId: string }) {
             </p>
           ) : null}
 
-          {profile.canManage ? (
+          {profile.canManage && !profile.systemOwned ? (
             <Button
               className="w-full text-sm!"
               onClick={() => setEditingId(agentId)}
@@ -232,7 +247,7 @@ export function AgentProfile({ agentId }: { agentId: string }) {
             </Button>
           ) : null}
 
-          {profile.canManage ? (
+          {profile.canManage && !profile.systemOwned ? (
             <>
               <Separator className="my-1" />
 
