@@ -1,11 +1,16 @@
 import { serve } from "bun";
+import { loginRequiredPage } from "./login-required";
 import { createSessionToken, verifyToken } from "./session";
 
 const PORT = Number.parseInt(process.env.PORT ?? "3030", 10);
 const SECRET = process.env.OPENBOT_SESSION_SECRET?.trim();
-if (!SECRET || SECRET.length < 32) throw new Error("OPENBOT_SESSION_SECRET must contain at least 32 characters.");
+if (!SECRET || SECRET.length < 32)
+  throw new Error(
+    "OPENBOT_SESSION_SECRET must contain at least 32 characters.",
+  );
 const GATEWAY_URL = process.env.CHATGPT_GATEWAY_URL?.replace(/\/$/, "");
-if (!GATEWAY_URL?.startsWith("https://")) throw new Error("CHATGPT_GATEWAY_URL must be an HTTPS URL.");
+if (!GATEWAY_URL?.startsWith("https://"))
+  throw new Error("CHATGPT_GATEWAY_URL must be an HTTPS URL.");
 
 const COOKIE = "openbot_edge_session";
 
@@ -15,9 +20,25 @@ serve({
     const url = new URL(request.url);
     if (url.pathname === "/health") return Response.json({ status: "ok" });
 
+    if (url.pathname === "/edge-login-required") {
+      return new Response(loginRequiredPage(GATEWAY_URL), {
+        headers: {
+          "cache-control": "no-store",
+          "content-type": "text/html; charset=utf-8",
+        },
+      });
+    }
+
     if (url.pathname === "/edge-login") {
-      const bootstrap = await verifyToken(url.searchParams.get("token") ?? "", SECRET, "bootstrap");
-      if (!bootstrap) return new Response("Недействительная или истёкшая ссылка входа.", { status: 401 });
+      const bootstrap = await verifyToken(
+        url.searchParams.get("token") ?? "",
+        SECRET,
+        "bootstrap",
+      );
+      if (!bootstrap)
+        return new Response("Недействительная или истёкшая ссылка входа.", {
+          status: 401,
+        });
       const session = await createSessionToken(bootstrap.sub, SECRET);
       return new Response(null, {
         status: 302,
@@ -43,7 +64,9 @@ serve({
 
     if (url.pathname === "/auth") {
       const token = readCookie(request.headers.get("cookie") ?? "", COOKIE);
-      const session = token ? await verifyToken(token, SECRET, "session") : null;
+      const session = token
+        ? await verifyToken(token, SECRET, "session")
+        : null;
       return new Response(null, {
         status: session ? 204 : 401,
         headers: { "cache-control": "no-store" },
