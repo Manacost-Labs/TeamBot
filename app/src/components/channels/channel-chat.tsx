@@ -116,6 +116,14 @@ export function ChannelChat({
    */
   const [restoring, setRestoring] = useState(seed === null);
   /**
+   * History shown while the runtime join is still settling.
+   *
+   * It is deliberately not written into the agent until the join is over: a late connect replaces
+   * `agent.messages`. Drawing this read-only preview removes that wait from first paint without
+   * reopening the race that used to erase a message sent during a join.
+   */
+  const [historyPreview, setHistoryPreview] = useState<Message[]>([]);
+  /**
    * How many stored turns this app could not read.
    *
    * Held rather than derived, because the transcript is the running agent's once history is handed
@@ -133,6 +141,19 @@ export function ChannelChat({
     let current = true;
 
     void (async () => {
+      // Independent of the socket join, so do both network waits together. The preview can be drawn
+      // as soon as this lands even though handing the same history to the agent must wait for join.
+      const storedPromise = readThreadMessages(
+        channel.threadId,
+        runtimeAgentId,
+      );
+      void storedPromise.then((stored) => {
+        if (!current) return;
+        setHistoryPreview(stored.messages);
+        setUnreadable(stored.unreadable);
+        setRestoring(false);
+      });
+
       try {
         // Bounded, and finished when it returns; `join-thread.ts` has why that matters.
         await joinWithin({
@@ -149,10 +170,7 @@ export function ChannelChat({
       }
 
       try {
-        const stored = await readThreadMessages(
-          channel.threadId,
-          runtimeAgentId,
-        );
+        const stored = await storedPromise;
         // Never overwrite local messages that arrived while history was loading.
         if (
           current &&
@@ -393,7 +411,10 @@ export function ChannelChat({
         commands={skillCommands}
         // Readiness is handled by `say`; deletion is the only disabled-chat state.
         disabled={!channel.active}
-        messages={transcriptMessages(agent.messages, seed)}
+        messages={transcriptMessages(
+          agent.messages.length > 0 ? agent.messages : historyPreview,
+          seed,
+        )}
         notice={
           /*
            * Two things can be worth saying at once — a deleted coworker and a history with holes in

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { chip, type Segment, text } from "prompt-area/helpers";
 import {
+  appendTrigger,
   applyCommandChips,
   type CommandOption,
   enforceSingleAgent,
@@ -44,6 +45,22 @@ describe("toDraft", () => {
   test("treats whitespace-only content as empty", () => {
     expect(toDraft([text("   ")]).isEmpty).toBe(true);
     expect(toDraft([]).isEmpty).toBe(true);
+  });
+});
+
+describe("appendTrigger", () => {
+  test("starts an options-menu trigger in an empty composer", () => {
+    expect(toDraft(appendTrigger([], "@")).text).toBe("@");
+  });
+
+  test("separates a trigger from text already being typed", () => {
+    expect(toDraft(appendTrigger([text("please")], "/")).text).toBe("please /");
+  });
+
+  test("does not add a second separator after whitespace", () => {
+    expect(toDraft(appendTrigger([text("please ")], "@")).text).toBe(
+      "please @",
+    );
   });
 });
 

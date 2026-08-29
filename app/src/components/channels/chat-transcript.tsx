@@ -266,10 +266,11 @@ function ScrollNewestQueuedIntoView({ newest }: { newest: string | null }) {
  * actually on screen. Staggering from the top of a long history would spend the whole budget on
  * messages nobody can see and leave the visible ones arriving last.
  *
- * Twelve at 40ms is 440ms of cascade before the last one starts. Past roughly half a second this
- * stops reading as settling and starts reading as waiting.
+ * Restored history is already gated by a remote history read. Adding a cascade after that response
+ * made the conversation look as though it were still loading, so restored rows now enter together;
+ * live turns still get their ordinary single-message transition below.
  */
-const FIRST_PAINT_STAGGER_COUNT = 12;
+const FIRST_PAINT_STAGGER_COUNT = 0;
 const FIRST_PAINT_STAGGER_SECONDS = 0.04;
 
 /**

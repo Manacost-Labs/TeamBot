@@ -1,5 +1,7 @@
 import {
   IconArrowUp,
+  IconAt,
+  IconBolt,
   IconPlayerStopFilled,
   IconPlus,
 } from "@tabler/icons-react";
@@ -16,7 +18,16 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "../../ui/button";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../../ui/dropdown-menu";
+import {
+  AGENT_TRIGGER,
+  appendTrigger,
   applyCommandChips,
+  COMMAND_TRIGGER,
   type CommandOption,
   type ComposerDraft,
   enforceSingleAgent,
@@ -229,6 +240,15 @@ export function Composer({
     void submitDraft(value);
   };
 
+  /** Open the existing @ or / picker from the plus menu, then put the caret beside it. */
+  const insertTrigger = useCallback(
+    (trigger: typeof AGENT_TRIGGER | typeof COMMAND_TRIGGER) => {
+      setValue((current) => appendTrigger(current, trigger));
+      requestAnimationFrame(() => promptAreaRef.current?.focus());
+    },
+    [],
+  );
+
   /**
    * There is a turn in flight and somewhere to park what is being typed.
    *
@@ -280,16 +300,31 @@ export function Composer({
         )}
         onSubmit={handleFormSubmit}
       >
-        <Button
-          aria-label="More message options unavailable"
-          className="disabled:opacity-100"
-          disabled
-          size="icon"
-          type="button"
-          variant="ghost"
-        >
-          <IconPlus className="size-5" />
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                aria-label="More message options"
+                disabled={disabled}
+                size="icon"
+                type="button"
+                variant="ghost"
+              />
+            }
+          >
+            <IconPlus className="size-5" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" side="top" sideOffset={8}>
+            <DropdownMenuItem onClick={() => insertTrigger(AGENT_TRIGGER)}>
+              <IconAt />
+              Mention a coworker
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => insertTrigger(COMMAND_TRIGGER)}>
+              <IconBolt />
+              Use a skill
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <PromptArea
           aria-label="Message"
           className="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm shadow-none"

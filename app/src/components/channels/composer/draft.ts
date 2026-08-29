@@ -14,6 +14,25 @@ import {
 export const AGENT_TRIGGER = "@";
 export const COMMAND_TRIGGER = "/";
 
+/**
+ * Add an options-menu trigger without gluing it to the word already being typed.
+ *
+ * PromptArea opens its ordinary @ or / picker from the controlled value, so the plus menu can use
+ * the same suggestion path as the keyboard instead of growing a second implementation of either
+ * picker.
+ */
+export function appendTrigger(
+  segments: Segment[],
+  trigger: typeof AGENT_TRIGGER | typeof COMMAND_TRIGGER,
+): Segment[] {
+  const plain = segmentsToPlainText(segments);
+  const separator = plain.length > 0 && !/\s$/u.test(plain) ? " " : "";
+  return mergeAdjacentTextSegments([
+    ...segments,
+    text(`${separator}${trigger}`),
+  ]);
+}
+
 export type ComposerDraft = {
   /** Plain text, with chips flattened back to `@Agent` / `/command`. */
   text: string;
