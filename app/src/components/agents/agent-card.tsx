@@ -1,5 +1,5 @@
 import type { AgentProfile } from "@/lib/agents/queries";
-import { EmotionAvatar } from "./emotion-avatar";
+import { AbstractAvatar } from "./abstract-avatar";
 
 export function AgentCard({ agent }: { agent: AgentProfile }) {
   return (
@@ -8,7 +8,7 @@ export function AgentCard({ agent }: { agent: AgentProfile }) {
         className="flex flex-1 items-center justify-center"
         aria-hidden="true"
       >
-        <EmotionAvatar name={agent.name} seed={agent.avatarSeed} size={112} />
+        <AbstractAvatar name={agent.name} seed={agent.avatarSeed} size={112} />
       </div>
       <div className="flex flex-col gap-1.5">
         <span className="line-clamp-1 text-sm font-medium">{agent.name}</span>

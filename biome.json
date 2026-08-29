@@ -5,7 +5,6 @@
       "**",
       "!**/dist",
       "!.",
-      "!app/public/grok-emotion",
       "!app/src/components/ui",
       "!app/src/lib/generated/application-config.ts",
       "!app/src/routeTree.gen.ts",

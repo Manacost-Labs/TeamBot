@@ -7,7 +7,7 @@ import {
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { memo, useState } from "react";
-import { EmotionAvatar } from "@/components/agents/emotion-avatar";
+import { ChannelAvatar } from "@/components/channels/avatar";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -109,19 +109,7 @@ export const Channel = memo(function Channel({
               className: "bg-foreground/5",
             }}
           >
-            <div className="">
-              {participantIds.length === 1 ? (
-                <EmotionAvatar
-                  name={name}
-                  seed={participantIds[0] ?? name}
-                  size={32}
-                />
-              ) : (
-                <span className="grid size-8 place-items-center rounded-full bg-muted text-xs font-semibold">
-                  {name.slice(0, 1).toLocaleUpperCase("ru-RU")}
-                </span>
-              )}
-            </div>
+            <ChannelAvatar participantIds={participantIds} size={32} />
             <div className="flex-col min-w-0 flex-1">
               <div className="flex flex-row items-center justify-between gap-2">
                 <span

@@ -7,13 +7,9 @@ import {
 } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { motion, useReducedMotion } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { z } from "zod";
 import { AgentProfile } from "@/components/agents/agent-profile";
-import {
-  EmotionAvatar,
-  type EmotionState,
-} from "@/components/agents/emotion-avatar";
 import { hasUnseenActivity } from "@/components/app-sidebar/app-sidebar";
 import { ChannelAvatar } from "@/components/channels/avatar";
 import { ChannelChat } from "@/components/channels/channel-chat";
@@ -87,7 +83,6 @@ function RouteComponent() {
   const isSettingsOpen = settings === true;
   const prefersReducedMotion = useReducedMotion();
   const isWatching = watch === true;
-  const [presence, setPresence] = useState<EmotionState>("idle");
   /** Channel routing currently supports one coworker. */
   const agentId = channel.data?.agentIds[0];
   /** Only polled while the screen is closed; the screen panel polls control itself. */
@@ -192,16 +187,10 @@ function RouteComponent() {
                 ease: EASE_OUT,
               }}
             >
-              {agentId ? (
-                <EmotionAvatar
-                  name={channel.data?.name ?? "Сотрудник"}
-                  seed={agentId}
-                  size={32}
-                  state={presence}
-                />
-              ) : (
-                <ChannelAvatar participantIds={[]} size={22} />
-              )}
+              <ChannelAvatar
+                participantIds={channel.data?.agentIds ?? []}
+                size={22}
+              />
             </motion.div>
             <motion.span
               animate={
@@ -262,7 +251,6 @@ function RouteComponent() {
         channel={channel.data}
         hasError={Boolean(channel.error)}
         isPending={channel.isPending}
-        onPresenceChange={setPresence}
       />
     </DetailPanel>
   );
@@ -276,12 +264,10 @@ function ChannelBody({
   channel,
   isPending,
   hasError,
-  onPresenceChange,
 }: {
   channel: AgentChannel | undefined;
   isPending: boolean;
   hasError: boolean;
-  onPresenceChange: (state: EmotionState) => void;
 }) {
   // Nothing while the channel loads: a placeholder inside a local round-trip is a flicker.
   if (isPending) return null;
@@ -308,7 +294,6 @@ function ChannelBody({
     <ChannelChat
       channel={channel}
       key={channel.id}
-      onPresenceChange={onPresenceChange}
       runtimeAgentId={runtimeAgentId}
     />
   );

@@ -2,9 +2,9 @@ import { IconPencil } from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
+import { AbstractAvatar } from "@/components/agents/abstract-avatar";
 import { AgentFields } from "@/components/agents/agent-fields";
 import { CallbackTokenPanel } from "@/components/agents/callback-token-panel";
-import { EmotionAvatar } from "@/components/agents/emotion-avatar";
 import { HandoffPanel } from "@/components/agents/handoff-panel";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -91,7 +91,7 @@ export function AgentProfile({ agentId }: { agentId: string }) {
   return (
     <div className="flex w-full flex-col gap-6 p-8">
       <header className="flex flex-col items-center gap-3 text-center">
-        <EmotionAvatar
+        <AbstractAvatar
           name={profile.name}
           seed={profile.avatarSeed}
           size={80}

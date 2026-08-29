@@ -6,7 +6,6 @@ import {
 } from "@copilotkit/react-core/v2";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { EmotionState } from "@/components/agents/emotion-avatar";
 import { toAgentOptions } from "@/components/channels/composer";
 import { ConversationView } from "@/components/channels/conversation-view";
 import {
@@ -47,11 +46,9 @@ const SEND_WITHOUT_RUNTIME_AFTER_MS = 1500;
  */
 export function ChannelChat({
   channel,
-  onPresenceChange,
   runtimeAgentId,
 }: {
   channel: AgentChannel;
-  onPresenceChange?: (state: EmotionState) => void;
   runtimeAgentId: string;
 }) {
   // The core attaches the frontend tool registry; direct agent runs do not.
@@ -238,17 +235,6 @@ export function ChannelChat({
    */
   const [turnsInFlight, setTurnsInFlight] = useState(0);
   const [runsInFlight, setRunsInFlight] = useState(0);
-
-  useEffect(() => {
-    const state: EmotionState = runError
-      ? "alerting"
-      : agent.isRunning
-        ? "writing"
-        : turnsInFlight > 0
-          ? "thinking"
-          : "idle";
-    onPresenceChange?.(state);
-  }, [agent.isRunning, onPresenceChange, runError, turnsInFlight]);
 
   /**
    * Tell the roster what was just said. Failures here must not block the conversation.
