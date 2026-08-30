@@ -55,6 +55,24 @@ describe("runtime capabilities", () => {
   });
 });
 
+describe("workspace telemetry mount", () => {
+  test("does not accept browser timings without an authenticated user", async () => {
+    const response = await app.request(
+      "http://openbot.local/api/telemetry/workspace",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ samples: [] }),
+      },
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "No identity provider is configured.",
+    });
+  });
+});
+
 describe("authentication availability", () => {
   test("fails loudly when no identity provider has been configured", async () => {
     const response = await app.request(

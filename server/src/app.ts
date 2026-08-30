@@ -48,6 +48,11 @@ import type { RoutineRunner } from "./routines/runner";
 import type { IntentRouter } from "./routing/classify";
 import { createRoutingRoutes } from "./routing/routes";
 import type { PackageStatusReader } from "./tenant-package";
+import {
+  createWorkspaceTelemetryRoutes,
+  createWorkspaceTimingStore,
+  type WorkspaceTimingStore,
+} from "./workspace-telemetry";
 
 /**
  * One row for something an administrator did to somebody's access.
@@ -193,6 +198,8 @@ export function createApp(
    * has no door for this at all, not a locked one.
    */
   routineStore?: RoutineStore,
+  /** Bounded content-free browser timings; appended to keep positional call sites stable. */
+  workspaceTimingStore: WorkspaceTimingStore = createWorkspaceTimingStore(),
 ) {
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -286,6 +293,10 @@ export function createApp(
     const denied = requireAdmin(context);
     return denied ?? context.json({ status: "ok" });
   });
+  app.route(
+    "/api/telemetry",
+    createWorkspaceTelemetryRoutes(requireUser, workspaceTimingStore),
+  );
   app.get("/api/admin/audit-events", requireUser, async (context) => {
     const denied = requireAdmin(context);
     if (denied) {

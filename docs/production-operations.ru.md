@@ -294,6 +294,19 @@ counts и A→B→A защищают архитектуру, а wall-clock за�
 сборки. Если цель не достигнута, релизный отчёт должен назвать фактический p95 и bottleneck, а не
 скрывать его увеличением timeout.
 
+Браузер отправляет эти DOM-границы автоматически небольшими batches на
+`POST /api/telemetry/workspace`. Тело содержит только operation, allowlisted phase, случайный UUID
+trace и монотонный `elapsedMs`; channel/user/message IDs и содержимое переписки не отправляются.
+Администратор получает текущие rolling p50/p95/p99 через
+`GET /api/telemetry/workspace/summary`. Сводка хранит последние 512 значений каждой пары
+operation/phase в памяти процесса и обнуляется при restart; это оперативная диагностика, а не
+долговременное хранилище метрик.
+
+Для переключения канала доступны `channel_click`, `cached_history_painted`,
+`fresh_history_loaded`, `runtime_ready`, `runtime_joined`, `composer_ready`; для ответа —
+`first_text_painted`. Paint-фазы проходят реальную browser paint boundary. Прямое открытие URL не
+имеет `channel_click` и потому не подменяется искусственным нулевым измерением.
+
 ## Известные ограничения
 
 - Это structured logs, а не OpenTelemetry trace или histogram. Percentiles/alerts строятся внешним
