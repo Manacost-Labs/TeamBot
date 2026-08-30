@@ -31,6 +31,10 @@ import { channelQueryOptions } from "@/lib/channels/queries";
 import { useAgentRunActivity } from "@/lib/copilot/run-activity-store";
 import { agentRunStatusLabel, isAgentRunActive } from "@/lib/copilot/run-state";
 import { prefetchThreadMessages } from "@/lib/copilot/thread-messages";
+import {
+  beginChannelTiming,
+  shouldBeginChannelTiming,
+} from "@/lib/performance/workspace-timing";
 
 /**
  * Memoized roster row. `use-channel-events` preserves unchanged row identity, and
@@ -132,6 +136,10 @@ export const Channel = memo(function Channel({
             }}
             onFocus={prefetchChannel}
             onMouseEnter={prefetchChannel}
+            onClick={(event) => {
+              if (!shouldBeginChannelTiming(isOpen, event)) return;
+              beginChannelTiming(channelId);
+            }}
           >
             <ChannelAvatar participantIds={participantIds} size={32} />
             <div className="flex-col min-w-0 flex-1">

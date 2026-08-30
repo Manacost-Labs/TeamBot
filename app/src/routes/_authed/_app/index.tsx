@@ -7,6 +7,11 @@ import { agentListQueryOptions } from "@/lib/agents/queries";
 import { routeMessage } from "@/lib/channels/route";
 import { useStartChannel } from "@/lib/channels/start";
 import { appConfig } from "@/lib/generated/application-config";
+import { newId } from "@/lib/new-id";
+import {
+  abandonAgentRunTiming,
+  beginAgentRunTiming,
+} from "@/lib/performance/workspace-timing";
 
 export const Route = createFileRoute("/_authed/_app/")({
   component: RouteComponent,
@@ -42,6 +47,8 @@ function RouteComponent() {
             // With no `@`, the message is routed to the coworker it is for; if that routing cannot
             // run, it falls back to the same default the composer used to always use.
             setError(null);
+            const messageId = newId();
+            beginAgentRunTiming(messageId);
             try {
               let agentId: string | undefined = draft.agentId ?? undefined;
               if (agentId) {
@@ -58,9 +65,13 @@ function RouteComponent() {
                   agentId = fallback?.id;
                 }
               }
-              if (!agentId) return;
-              await start(agentId, draft.text);
+              if (!agentId) {
+                abandonAgentRunTiming(messageId);
+                return;
+              }
+              await start(agentId, draft.text, messageId);
             } catch (caught) {
+              abandonAgentRunTiming(messageId);
               setError(
                 caught instanceof Error
                   ? caught.message

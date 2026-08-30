@@ -37,6 +37,13 @@ import {
   refreshThreadMessages,
 } from "@/lib/copilot/thread-messages";
 import { useAgentRun } from "@/lib/copilot/use-agent-run";
+import {
+  abandonAgentRunTiming,
+  ensureAgentRunTiming,
+  markAgentFirstTextPainted,
+  markChannelTiming,
+  scheduleAfterPaint,
+} from "@/lib/performance/workspace-timing";
 import { useSkillCommands } from "@/lib/plugins/skill-commands";
 import { newId } from "../../lib/new-id";
 
@@ -107,7 +114,7 @@ export function ChannelChat({
    */
   const [seed] = useState<Message | null>(() => {
     const pending = takeFirstMessage(channel.id);
-    return pending ? seedMessage(pending, newId()) : null;
+    return pending ? seedMessage(pending.text, pending.id) : null;
   });
 
   /** Cleared by the send-on-mount effect without restarting it. */
@@ -213,9 +220,30 @@ export function ChannelChat({
   const [unreadable, setUnreadable] = useState(
     initialHistoryRef.current?.unreadable ?? 0,
   );
+  const pendingFirstTextPaint = useRef<string | null>(null);
+  useEffect(
+    () =>
+      scheduleAfterPaint(() => {
+        if (initialHistoryRef.current !== null) {
+          markChannelTiming(channel.id, "cached_history_painted");
+        }
+        markChannelTiming(channel.id, "composer_ready");
+      }),
+    [channel.id],
+  );
+  useEffect(
+    () => () => {
+      const pending = pendingFirstTextPaint.current;
+      if (pending) abandonAgentRunTiming(pending);
+    },
+    [],
+  );
   useEffect(() => {
-    if (isReady) openReadyGate.current();
-  }, [isReady]);
+    if (isReady) {
+      openReadyGate.current();
+      markChannelTiming(channel.id, "runtime_ready");
+    }
+  }, [channel.id, isReady]);
 
   const historyAttempt = useRef(0);
   const joinAttempt = useRef(0);
@@ -241,6 +269,7 @@ export function ChannelChat({
           { signal: controller.signal },
         );
         if (!current) return;
+        markChannelTiming(channel.id, "fresh_history_loaded");
         setHistoryPreview((preview) =>
           mergeThreadMessagesById(preview, stored.messages, {
             retainMissing: false,
@@ -267,7 +296,7 @@ export function ChannelChat({
       current = false;
       controller.abort();
     };
-  }, [channel.threadId, historyScope, runtimeAgentId]);
+  }, [channel.id, channel.threadId, historyScope, runtimeAgentId]);
 
   // Join independently. History already paints while CopilotKit is still preparing the agent.
   useEffect(() => {
@@ -277,14 +306,19 @@ export function ChannelChat({
     let current = true;
     void (async () => {
       try {
-        await joinWithin({
+        const outcome = await joinWithin({
           connect: copilotkit.connectAgent({ agent }),
           deadline: afterMs(JOIN_DEADLINE_MS),
           detach: () => agent.detachActiveRun(),
         });
+        if (outcome === "connected" && current) {
+          markChannelTiming(channel.id, "runtime_joined");
+        }
       } finally {
         if (attempt === joinAttempt.current) {
-          if (current) setJoined(true);
+          if (current) {
+            setJoined(true);
+          }
           openJoinGate.current();
         }
       }
@@ -292,7 +326,7 @@ export function ChannelChat({
     return () => {
       current = false;
     };
-  }, [agent, copilotkit, isReady]);
+  }, [agent, channel.id, copilotkit, isReady]);
 
   // Hand each cache/server revision to the joined runtime without dropping local streamed turns.
   useEffect(() => {
@@ -585,6 +619,12 @@ export function ChannelChat({
     lastRequest.current = { text: trimmed, skillInstructions };
     setRunError(null);
     const userMessageId = suppliedMessageId ?? newId();
+    // Component actions may overlap an active turn. Sample the first one rather than attributing
+    // its answer to a later user row whose timing would otherwise overwrite this correlation.
+    if (pendingFirstTextPaint.current === null) {
+      ensureAgentRunTiming(userMessageId);
+      pendingFirstTextPaint.current = userMessageId;
+    }
     const token = runActivity.begin(userMessageId);
     setOptimisticMessages((messages) => [
       ...messages.filter((message) => message.id !== userMessageId),
@@ -594,6 +634,13 @@ export function ChannelChat({
     try {
       await deliver(trimmed, skillInstructions, userMessageId, token);
     } finally {
+      if (
+        pendingFirstTextPaint.current === userMessageId &&
+        !hasAssistantOutputAfter(agentRef.current.messages, userMessageId)
+      ) {
+        abandonAgentRunTiming(userMessageId);
+        pendingFirstTextPaint.current = null;
+      }
       if (mounted.current) setTurnsInFlight((count) => count - 1);
     }
   };
@@ -671,6 +718,30 @@ export function ChannelChat({
     // Keep `seed` in state; transcriptMessages gives it up once the agent holds a user turn.
   }, []);
 
+  const currentMessages =
+    agent.messages.length > 0 ? agent.messages : historyPreview;
+  const messageIds = new Set(currentMessages.map((message) => message.id));
+  const pendingMessages = optimisticMessages.filter(
+    (message) => !messageIds.has(message.id),
+  );
+  const visibleMessages = transcriptMessages(
+    [...currentMessages, ...pendingMessages],
+    seed,
+  );
+  const pendingPaintMessageId = pendingFirstTextPaint.current;
+  const firstTextPaintReady = pendingPaintMessageId
+    ? hasAssistantOutputAfter(visibleMessages, pendingPaintMessageId)
+    : false;
+  useEffect(() => {
+    if (!pendingPaintMessageId || !firstTextPaintReady) return;
+    return scheduleAfterPaint(() => {
+      markAgentFirstTextPainted(pendingPaintMessageId);
+      if (pendingFirstTextPaint.current === pendingPaintMessageId) {
+        pendingFirstTextPaint.current = null;
+      }
+    });
+  }, [firstTextPaintReady, pendingPaintMessageId]);
+
   return (
     <ConversationProvider ask={askFromComponent}>
       <ConversationView
@@ -691,15 +762,7 @@ export function ChannelChat({
         conversationKey={channel.id}
         // Readiness is handled by `say`; deletion is the only disabled-chat state.
         disabled={!channel.active}
-        messages={(() => {
-          const currentMessages =
-            agent.messages.length > 0 ? agent.messages : historyPreview;
-          const ids = new Set(currentMessages.map((message) => message.id));
-          const pending = optimisticMessages.filter(
-            (message) => !ids.has(message.id),
-          );
-          return transcriptMessages([...currentMessages, ...pending], seed);
-        })()}
+        messages={visibleMessages}
         notice={
           /*
            * Two things can be worth saying at once — a deleted coworker and a history with holes in

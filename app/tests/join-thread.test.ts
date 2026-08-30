@@ -31,7 +31,7 @@ describe("joinWithin", () => {
     });
 
     connect.resolve();
-    await joined;
+    expect(await joined).toBe("connected");
 
     expect(detached).toBe(0);
   });
@@ -51,7 +51,7 @@ describe("joinWithin", () => {
     });
 
     deadline.resolve();
-    await joined;
+    expect(await joined).toBe("deadline");
 
     expect(detached).toBe(1);
   });
@@ -93,7 +93,7 @@ describe("joinWithin", () => {
 
     connect.reject(new Error("socket refused"));
 
-    expect(await joined.then(() => "resolved")).toBe("resolved");
+    expect(await joined).toBe("failed");
     expect(detached).toBe(0);
   });
 

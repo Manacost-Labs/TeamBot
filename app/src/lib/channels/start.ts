@@ -1,6 +1,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { stashFirstMessage } from "@/components/channels/transcript-messages";
+import {
+  abandonAgentRunTiming,
+  ensureAgentRunTiming,
+} from "@/lib/performance/workspace-timing";
 import { createChannelMutationOptions } from "./mutations";
 import { channelKeys } from "./queries";
 
@@ -17,15 +21,21 @@ export function useStartChannel() {
 
   return {
     pending: createChannel.isPending,
-    start: async (agentId: string, text: string) => {
-      const channel = await createChannel.mutateAsync([agentId]);
-      queryClient.setQueryData(channelKeys.detail(channel.id), channel);
-      stashFirstMessage(channel.id, text);
-      await navigate({
-        params: { channelId: channel.id },
-        replace: true,
-        to: "/channel/$channelId",
-      });
+    start: async (agentId: string, text: string, messageId: string) => {
+      ensureAgentRunTiming(messageId);
+      try {
+        const channel = await createChannel.mutateAsync([agentId]);
+        queryClient.setQueryData(channelKeys.detail(channel.id), channel);
+        stashFirstMessage(channel.id, text, messageId);
+        await navigate({
+          params: { channelId: channel.id },
+          replace: true,
+          to: "/channel/$channelId",
+        });
+      } catch (error) {
+        abandonAgentRunTiming(messageId);
+        throw error;
+      }
     },
   };
 }

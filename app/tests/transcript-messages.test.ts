@@ -56,13 +56,16 @@ describe("seedMessage", () => {
 
 describe("the first-message stash", () => {
   test("hands the message to the channel that was just created", () => {
-    stashFirstMessage("channel_a", "hello");
-    expect(takeFirstMessage("channel_a")).toBe("hello");
+    stashFirstMessage("channel_a", "hello", "message-a");
+    expect(takeFirstMessage("channel_a")).toEqual({
+      id: "message-a",
+      text: "hello",
+    });
   });
 
   test("gives it up only once", () => {
     // Take-once prevents remounts from resending the first message.
-    stashFirstMessage("channel_b", "hello");
+    stashFirstMessage("channel_b", "hello", "message-b");
     takeFirstMessage("channel_b");
     expect(takeFirstMessage("channel_b")).toBeNull();
   });
@@ -72,9 +75,15 @@ describe("the first-message stash", () => {
   });
 
   test("keeps two channels' messages apart", () => {
-    stashFirstMessage("channel_c", "for c");
-    stashFirstMessage("channel_d", "for d");
-    expect(takeFirstMessage("channel_d")).toBe("for d");
-    expect(takeFirstMessage("channel_c")).toBe("for c");
+    stashFirstMessage("channel_c", "for c", "message-c");
+    stashFirstMessage("channel_d", "for d", "message-d");
+    expect(takeFirstMessage("channel_d")).toEqual({
+      id: "message-d",
+      text: "for d",
+    });
+    expect(takeFirstMessage("channel_c")).toEqual({
+      id: "message-c",
+      text: "for c",
+    });
   });
 });

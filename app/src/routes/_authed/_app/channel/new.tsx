@@ -20,6 +20,10 @@ import {
   agentQueryOptions,
 } from "@/lib/agents/queries";
 import { useStartChannel } from "@/lib/channels/start";
+import {
+  abandonAgentRunTiming,
+  beginAgentRunTiming,
+} from "@/lib/performance/workspace-timing";
 import { useSkillCommands } from "@/lib/plugins/skill-commands";
 import { newId } from "../../../../lib/new-id";
 
@@ -126,11 +130,14 @@ function RouteComponent() {
           if (!recipient || !canSend(recipients, draft.text)) return;
 
           setError(null);
-          setSent(seedMessage(draft.text, newId()));
+          const messageId = newId();
+          beginAgentRunTiming(messageId);
+          setSent(seedMessage(draft.text, messageId));
 
           try {
-            await start(recipient.id, draft.text);
+            await start(recipient.id, draft.text, messageId);
           } catch (caught) {
+            abandonAgentRunTiming(messageId);
             // Preserve the unsent draft when channel creation fails.
             setSent(null);
             setError(
