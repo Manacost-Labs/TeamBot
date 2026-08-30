@@ -182,6 +182,40 @@ describe("activitySnapshotFor", () => {
 });
 
 describe("toVisibleChatItems", () => {
+  test("keeps attachment-only user messages and exposes only opaque binary references", () => {
+    const messages = [
+      {
+        id: "with-file",
+        role: "user" as const,
+        content: [
+          {
+            type: "binary" as const,
+            id: "attachment-1",
+            mimeType: "application/pdf",
+            filename: "report.pdf",
+          },
+        ],
+      },
+    ];
+
+    expect(toVisibleChatItems(messages)).toEqual([
+      {
+        kind: "text",
+        id: "with-file",
+        role: "user",
+        text: "",
+        attachments: [
+          {
+            type: "binary",
+            id: "attachment-1",
+            mimeType: "application/pdf",
+            filename: "report.pdf",
+          },
+        ],
+      },
+    ]);
+  });
+
   test("keeps official reasoning summaries as visible progress", () => {
     const messages = [
       { id: "user", role: "user", content: "Проверь источники" },

@@ -3,6 +3,7 @@ import {
   FrontendTimingRecorder,
   scheduleAfterPaint,
   shouldBeginChannelTiming,
+  traceAttachmentUpload,
   type WorkspaceTimingSample,
 } from "../src/lib/performance/workspace-timing";
 
@@ -118,5 +119,69 @@ describe("frontend workspace timing", () => {
     expect(shouldBeginChannelTiming(false, { ...primary, button: 1 })).toBe(
       false,
     );
+  });
+
+  test("records a content-free attachment trace around a successful upload", async () => {
+    let now = 10;
+    const samples: WorkspaceTimingSample[] = [];
+    const timing = new FrontendTimingRecorder({
+      now: () => now,
+      id: () => "trace-upload",
+      sink: (sample) => samples.push(sample),
+    });
+
+    const result = await traceAttachmentUpload(
+      async () => {
+        now = 35;
+        return "uploaded";
+      },
+      timing,
+      () => "scope-only",
+    );
+
+    expect(result).toBe("uploaded");
+    expect(samples).toEqual([
+      {
+        operation: "attachment_upload",
+        phase: "attachment_upload_started",
+        traceId: "trace-upload",
+        elapsedMs: 0,
+      },
+      {
+        operation: "attachment_upload",
+        phase: "attachment_upload_completed",
+        traceId: "trace-upload",
+        elapsedMs: 25,
+      },
+    ]);
+    expect(Object.keys(samples[0] ?? {}).sort()).toEqual([
+      "elapsedMs",
+      "operation",
+      "phase",
+      "traceId",
+    ]);
+  });
+
+  test("records attachment completion in finally when upload fails", async () => {
+    const samples: WorkspaceTimingSample[] = [];
+    const timing = new FrontendTimingRecorder({
+      id: () => "trace-failed-upload",
+      sink: (sample) => samples.push(sample),
+    });
+
+    await expect(
+      traceAttachmentUpload(
+        async () => {
+          throw new Error("offline");
+        },
+        timing,
+        () => "scope-only",
+      ),
+    ).rejects.toThrow("offline");
+
+    expect(samples.map((sample) => sample.phase)).toEqual([
+      "attachment_upload_started",
+      "attachment_upload_completed",
+    ]);
   });
 });

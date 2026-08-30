@@ -1,3 +1,4 @@
+export type { AttachmentSubmission } from "./attachment-draft";
 export { Composer, type ComposerProps } from "./composer";
 export {
   AGENT_TRIGGER,

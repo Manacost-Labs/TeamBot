@@ -1,6 +1,6 @@
 import type { Message } from "@ag-ui/core";
 import { useRenderToolCall } from "@copilotkit/react-core/v2";
-import { IconBox } from "@tabler/icons-react";
+import { IconBox, IconDownload, IconFile } from "@tabler/icons-react";
 import {
   memo,
   useEffect,
@@ -26,6 +26,8 @@ import {
   useMessageScroller,
 } from "@/components/ui/message-scroller";
 import { Skeleton } from "@/components/ui/skeleton";
+import { attachmentDownloadUrl } from "@/lib/attachments/api";
+import type { AttachmentMessageReference } from "@/lib/attachments/message-content";
 import {
   anchoredScrollTop,
   conversationStateCache,
@@ -290,6 +292,8 @@ function MessageLayout({ children }: { children: React.ReactNode }) {
  * It is also what keeps the entrance honest — no remount means no replay of the fade.
  */
 const TranscriptMessage = memo(function TranscriptMessage({
+  attachmentsJson = "[]",
+  channelId,
   commandNames = "",
   id,
   onRender,
@@ -297,6 +301,8 @@ const TranscriptMessage = memo(function TranscriptMessage({
   streaming = false,
   text,
 }: {
+  attachmentsJson?: string;
+  channelId?: string;
   commandNames?: string;
   id: string;
   onRender?: (id: string) => void;
@@ -308,70 +314,157 @@ const TranscriptMessage = memo(function TranscriptMessage({
   const isUser = role === "user";
   const align = isUser ? "end" : "start";
   const invoked = isUser ? splitSkillChip(text, commandNames) : null;
+  const attachments = JSON.parse(
+    attachmentsJson,
+  ) as AttachmentMessageReference[];
 
   return (
     <MessageRow align={align}>
       <MessageContent>
         <MessageLayout>
+          {isUser && attachments.length > 0 ? (
+            <AttachmentCards attachments={attachments} channelId={channelId} />
+          ) : null}
           {/*
             A Bot's message takes the whole column, not the width of its words: block content
             inside it — a fenced code block, a table — should span the transcript rather than
             shrink to its own text. A person's bubble keeps fitting what they said.
           */}
-          <Bubble
-            align={align}
-            variant={isUser ? "muted" : "ghost"}
-            className={isUser ? undefined : "w-full"}
-          >
-            <BubbleContent className={isUser ? undefined : "w-full"}>
-              {isUser ? (
-                // A person's own message is shown exactly as they typed it. Rendering it as markdown
-                // would silently reformat what they said, and an asterisk in a sentence is not
-                // emphasis. The chip is the one exception, and it is not reformatting: it is drawing
-                // the thing that was already a chip in the composer as a chip here too, so the
-                // transcript shows a skill was used rather than a slash that was typed.
-                <span className="whitespace-pre-wrap">
-                  {invoked ? (
-                    <>
-                      {/*
-                       * The same icon the sidebar uses for Skills, so the badge says WHAT KIND of
-                       * thing was invoked before it says which one. `inline-flex` with
-                       * `align-middle` rather than a block: this sits mid-sentence, and a badge that
-                       * breaks the line it is in reads as a separate message.
-                       */}
-                      <span className="mr-1 inline-flex items-center gap-1 rounded bg-foreground/10 px-1.5 py-0.5 align-middle font-mono text-foreground/80 text-xs">
-                        <IconBox className="size-3 shrink-0" />/{invoked.chip}
-                      </span>
-                      {invoked.rest}
-                    </>
-                  ) : (
-                    text
-                  )}
-                </span>
-              ) : (
-                /*
-                 * A Bot's prose is markdown, and it arrives in pieces.
-                 *
-                 * Rendered with a streaming-aware renderer rather than an ordinary one: half a fenced
-                 * code block or an unclosed bold marker is the NORMAL state for most of a run, and a
-                 * plain markdown parser draws that as literal asterisks and backticks until the
-                 * closing token arrives, so the answer visibly rewrites itself as it lands. This
-                 * closes them for the duration.
-                 */
-                <Streamdown
-                  components={markdownComponents}
-                  mode={streaming ? "streaming" : "static"}
-                >
-                  {text}
-                </Streamdown>
-              )}
-            </BubbleContent>
-          </Bubble>
+          {text ? (
+            <Bubble
+              align={align}
+              variant={isUser ? "muted" : "ghost"}
+              className={isUser ? undefined : "w-full"}
+            >
+              <BubbleContent className={isUser ? undefined : "w-full"}>
+                {isUser ? (
+                  // A person's own message is shown exactly as they typed it. Rendering it as markdown
+                  // would silently reformat what they said, and an asterisk in a sentence is not
+                  // emphasis. The chip is the one exception, and it is not reformatting: it is drawing
+                  // the thing that was already a chip in the composer as a chip here too, so the
+                  // transcript shows a skill was used rather than a slash that was typed.
+                  <span className="whitespace-pre-wrap">
+                    {invoked ? (
+                      <>
+                        {/*
+                         * The same icon the sidebar uses for Skills, so the badge says WHAT KIND of
+                         * thing was invoked before it says which one. `inline-flex` with
+                         * `align-middle` rather than a block: this sits mid-sentence, and a badge that
+                         * breaks the line it is in reads as a separate message.
+                         */}
+                        <span className="mr-1 inline-flex items-center gap-1 rounded bg-foreground/10 px-1.5 py-0.5 align-middle font-mono text-foreground/80 text-xs">
+                          <IconBox className="size-3 shrink-0" />/{invoked.chip}
+                        </span>
+                        {invoked.rest}
+                      </>
+                    ) : (
+                      text
+                    )}
+                  </span>
+                ) : (
+                  /*
+                   * A Bot's prose is markdown, and it arrives in pieces.
+                   *
+                   * Rendered with a streaming-aware renderer rather than an ordinary one: half a fenced
+                   * code block or an unclosed bold marker is the NORMAL state for most of a run, and a
+                   * plain markdown parser draws that as literal asterisks and backticks until the
+                   * closing token arrives, so the answer visibly rewrites itself as it lands. This
+                   * closes them for the duration.
+                   */
+                  <Streamdown
+                    components={markdownComponents}
+                    mode={streaming ? "streaming" : "static"}
+                  >
+                    {text}
+                  </Streamdown>
+                )}
+              </BubbleContent>
+            </Bubble>
+          ) : null}
         </MessageLayout>
       </MessageContent>
     </MessageRow>
   );
 });
+
+const RASTER_IMAGE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+]);
+
+function AttachmentCards({
+  attachments,
+  channelId,
+}: {
+  attachments: readonly AttachmentMessageReference[];
+  channelId?: string;
+}) {
+  return (
+    <div className="mb-2 flex flex-wrap justify-end gap-2">
+      {attachments.map((attachment) => {
+        const url = channelId
+          ? attachmentDownloadUrl(channelId, attachment.id)
+          : null;
+        const preview =
+          url && RASTER_IMAGE_MIME_TYPES.has(attachment.mimeType) ? url : null;
+        const body = (
+          <>
+            {preview ? (
+              <img
+                alt={attachment.filename}
+                className="h-24 w-full rounded-t-lg object-cover"
+                loading="lazy"
+                src={preview}
+              />
+            ) : (
+              <span
+                aria-hidden="true"
+                className="flex size-10 shrink-0 items-center justify-center rounded bg-background"
+              >
+                <IconFile className="size-5 text-muted-foreground" />
+              </span>
+            )}
+            <span className="min-w-0 flex-1 px-1">
+              <span
+                className="block truncate text-xs"
+                title={attachment.filename}
+              >
+                {attachment.filename}
+              </span>
+              <span className="block truncate text-muted-foreground text-xs">
+                {attachment.mimeType}
+              </span>
+            </span>
+            {url ? (
+              <IconDownload aria-hidden="true" className="size-4 shrink-0" />
+            ) : null}
+          </>
+        );
+
+        return url ? (
+          <a
+            aria-label={`Скачать ${attachment.filename}`}
+            className="flex min-w-44 max-w-60 items-center gap-2 rounded-lg border border-border bg-muted/30 p-2 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            download={attachment.filename}
+            href={url}
+            key={attachment.id}
+          >
+            {body}
+          </a>
+        ) : (
+          <div
+            className="flex min-w-44 max-w-60 items-center gap-2 rounded-lg border border-border bg-muted/30 p-2"
+            key={attachment.id}
+          >
+            {body}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 /**
  * One drawn tool call, memoised on the same terms.
@@ -687,6 +780,10 @@ export function ChatTranscript({
                     messageId={item.id}
                   >
                     <TranscriptMessage
+                      attachmentsJson={JSON.stringify(item.attachments ?? [])}
+                      {...(conversationKey
+                        ? { channelId: conversationKey }
+                        : {})}
                       commandNames={commandNames}
                       id={item.id}
                       onRender={onRowRender}

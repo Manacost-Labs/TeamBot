@@ -1,9 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { AgentCard } from "@/components/agents/agent-card";
 import { Composer, toAgentOptions } from "@/components/channels/composer";
 import { agentListQueryOptions } from "@/lib/agents/queries";
+import { buildAttachmentMessageContent } from "@/lib/attachments/message-content";
+import { finishWithCommittedAttachments } from "@/lib/channels/prepared-channel";
 import { routeMessage } from "@/lib/channels/route";
 import { useStartChannel } from "@/lib/channels/start";
 import { appConfig } from "@/lib/generated/application-config";
@@ -20,7 +22,8 @@ export const Route = createFileRoute("/_authed/_app/")({
 function RouteComponent() {
   const { data: agents } = useQuery(agentListQueryOptions());
   const explore = agents?.filter((a) => !a.mine && a.visibility === "public");
-  const { start, pending } = useStartChannel();
+  const { finish, pending, prepare } = useStartChannel();
+  const preparedRecipient = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   /** Default recipient when the composer draft has no mention. */
@@ -41,7 +44,7 @@ function RouteComponent() {
           agents={toAgentOptions(agents)}
           className="w-full max-w-2xl"
           disabled={!fallback}
-          onSubmit={async (draft) => {
+          onSubmit={async (draft, attachments) => {
             // A channel is pinned to one coworker for the life of its thread, so the coworker is
             // chosen now, before it is created. An `@` is an explicit choice and is honoured as-is.
             // With no `@`, the message is routed to the coworker it is for; if that routing cannot
@@ -50,26 +53,39 @@ function RouteComponent() {
             const messageId = newId();
             beginAgentRunTiming(messageId);
             try {
-              let agentId: string | undefined = draft.agentId ?? undefined;
-              if (agentId) {
+              let agentId: string | undefined =
+                preparedRecipient.current ?? draft.agentId ?? undefined;
+              if (!preparedRecipient.current && agentId) {
                 /*
                  * Told to the server so the choice is recorded, and its answer thrown away: the
                  * person already decided and nothing here may change that. Failing to write the
                  * audit row must not stop the conversation, so a rejection is swallowed whole.
                  */
                 await routeMessage(draft.text, agentId).catch(() => undefined);
-              } else {
+              } else if (!preparedRecipient.current && draft.text) {
                 try {
                   agentId = (await routeMessage(draft.text)).agentId;
                 } catch {
                   agentId = fallback?.id;
                 }
               }
+              agentId ??= fallback?.id;
               if (!agentId) {
                 abandonAgentRunTiming(messageId);
                 return;
               }
-              await start(agentId, draft.text, messageId);
+              preparedRecipient.current = agentId;
+              const channel = await prepare(agentId);
+              const uploaded = await attachments.upload(channel.id);
+              const content = buildAttachmentMessageContent(
+                draft.text,
+                uploaded,
+              );
+              await finishWithCommittedAttachments(
+                () => finish(channel, content, messageId),
+                attachments.commit,
+              );
+              preparedRecipient.current = null;
             } catch (caught) {
               abandonAgentRunTiming(messageId);
               setError(

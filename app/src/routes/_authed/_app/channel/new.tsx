@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { ChannelAvatar } from "@/components/channels/avatar";
-import { canSend, type Recipient } from "@/components/channels/compose-state";
+import type { Recipient } from "@/components/channels/compose-state";
 import { ConversationView } from "@/components/channels/conversation-view";
 import { seedMessage } from "@/components/channels/transcript-messages";
 import {
@@ -19,6 +19,8 @@ import {
   agentListQueryOptions,
   agentQueryOptions,
 } from "@/lib/agents/queries";
+import { buildAttachmentMessageContent } from "@/lib/attachments/message-content";
+import { finishWithCommittedAttachments } from "@/lib/channels/prepared-channel";
 import { useStartChannel } from "@/lib/channels/start";
 import {
   abandonAgentRunTiming,
@@ -41,7 +43,7 @@ export const Route = createFileRoute("/_authed/_app/channel/new")({
 function RouteComponent() {
   const { agent } = Route.useSearch();
   const navigate = Route.useNavigate();
-  const { start, pending } = useStartChannel();
+  const { finish, pending, prepare } = useStartChannel();
   const { data: profiles } = useQuery(agentListQueryOptions());
 
   const [error, setError] = useState<string | null>(null);
@@ -125,17 +127,25 @@ function RouteComponent() {
             </p>
           ) : null
         }
-        onSubmit={async (draft) => {
+        onSubmit={async (draft, attachments) => {
           const recipient = recipients[0];
-          if (!recipient || !canSend(recipients, draft.text)) return;
+          if (!recipient || draft.isEmpty) return;
 
           setError(null);
           const messageId = newId();
           beginAgentRunTiming(messageId);
-          setSent(seedMessage(draft.text, messageId));
 
           try {
-            await start(recipient.id, draft.text, messageId);
+            // Prepare once before bytes leave the browser. A failed upload retries against this same
+            // channel, so one click never creates a trail of empty conversations.
+            const channel = await prepare(recipient.id);
+            const uploaded = await attachments.upload(channel.id);
+            const content = buildAttachmentMessageContent(draft.text, uploaded);
+            setSent(seedMessage(content, messageId));
+            await finishWithCommittedAttachments(
+              () => finish(channel, content, messageId),
+              attachments.commit,
+            );
           } catch (caught) {
             abandonAgentRunTiming(messageId);
             // Preserve the unsent draft when channel creation fails.

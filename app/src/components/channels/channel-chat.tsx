@@ -14,6 +14,12 @@ import {
   transcriptMessages,
 } from "@/components/channels/transcript-messages";
 import { agentListQueryOptions } from "@/lib/agents/queries";
+import {
+  type AttachmentDescriptor,
+  attachmentRefsFromContent,
+  buildAttachmentMessageContent,
+  textFromMessageContent,
+} from "@/lib/attachments/message-content";
 import { recordChannelActivityMutationOptions } from "@/lib/channels/mutations";
 import type { AgentChannel } from "@/lib/channels/queries";
 import { useActiveBot } from "@/lib/copilot/active-bot";
@@ -117,7 +123,7 @@ export function ChannelChat({
    */
   const [seed] = useState<Message | null>(() => {
     const pending = takeFirstMessage(channel.id);
-    return pending ? seedMessage(pending.text, pending.id) : null;
+    return pending ? seedMessage(pending.content, pending.id) : null;
   });
 
   /** Cleared by the send-on-mount effect without restarting it. */
@@ -402,6 +408,7 @@ export function ChannelChat({
   const lastRequest = useRef<{
     text: string;
     skillInstructions: string[];
+    attachments: readonly AttachmentDescriptor[];
   } | null>(null);
 
   /*
@@ -533,6 +540,7 @@ export function ChannelChat({
     skillInstructions: string[],
     userMessageId: string,
     token: AgentRunToken,
+    attachments: readonly AttachmentDescriptor[],
   ) => {
     // Wait briefly for the runtime agent instance before adding the message.
     if (!isReadyRef.current) {
@@ -638,7 +646,7 @@ export function ChannelChat({
     }
 
     target.addMessage({
-      content: trimmed,
+      content: buildAttachmentMessageContent(trimmed, attachments),
       id: userMessageId,
       role: "user",
     });
@@ -714,11 +722,12 @@ export function ChannelChat({
     text: string,
     skillInstructions: string[] = [],
     suppliedMessageId?: string,
+    attachments: readonly AttachmentDescriptor[] = [],
   ) => {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed && attachments.length === 0) return;
 
-    lastRequest.current = { text: trimmed, skillInstructions };
+    lastRequest.current = { text: trimmed, skillInstructions, attachments };
     setRunError(null);
     const userMessageId = suppliedMessageId ?? newId();
     // Component actions may overlap an active turn. Sample the first one rather than attributing
@@ -730,11 +739,21 @@ export function ChannelChat({
     const token = runActivity.begin(userMessageId);
     setOptimisticMessages((messages) => [
       ...messages.filter((message) => message.id !== userMessageId),
-      { content: trimmed, id: userMessageId, role: "user" },
+      {
+        content: buildAttachmentMessageContent(trimmed, attachments),
+        id: userMessageId,
+        role: "user",
+      },
     ]);
     setTurnsInFlight((count) => count + 1);
     try {
-      await deliver(trimmed, skillInstructions, userMessageId, token);
+      await deliver(
+        trimmed,
+        skillInstructions,
+        userMessageId,
+        token,
+        attachments,
+      );
     } finally {
       if (
         pendingFirstTextPaint.current === userMessageId &&
@@ -792,7 +811,12 @@ export function ChannelChat({
   const retryLast = useCallback(() => {
     const request = lastRequest.current;
     if (!request || awaitingReplies.current.size > 0) return;
-    void sayRef.current(request.text, request.skillInstructions);
+    void sayRef.current(
+      request.text,
+      request.skillInstructions,
+      undefined,
+      request.attachments,
+    );
   }, []);
 
   /**
@@ -812,9 +836,10 @@ export function ChannelChat({
     seedRef.current = null;
 
     void sayRef.current(
-      typeof pending.content === "string" ? pending.content : "",
+      textFromMessageContent(pending.content),
       [],
       pending.id,
+      attachmentRefsFromContent(pending.content),
     );
 
     // Keep `seed` in state; transcriptMessages gives it up once the agent holds a user turn.
@@ -892,7 +917,7 @@ export function ChannelChat({
             )}
           </>
         }
-        onSubmit={async (draft) => {
+        onSubmit={async (draft, attachments) => {
           // `draft.agentId` carries the @mentioned coworker, but nothing routes on it yet: this
           // channel is pinned to one `runtimeAgentId` for the life of its thread, so honouring a
           // per-message mention is a change to that binding, not to the composer.
@@ -910,7 +935,13 @@ export function ChannelChat({
               Boolean(instruction),
             );
 
-          await say(draft.text, skillInstructions);
+          const uploaded = await attachments.upload(channel.id);
+          const run = say(draft.text, skillInstructions, undefined, uploaded);
+          // `say` installs the optimistic user row synchronously. From this point the message owns
+          // the uploaded files, so the composer can release previews and accept queued text while
+          // the Bot's run continues.
+          attachments.commit();
+          await run;
         }}
         run={runActivity.state}
         /**

@@ -1,11 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { stashFirstMessage } from "@/components/channels/transcript-messages";
+import { useRef } from "react";
 import {
-  abandonAgentRunTiming,
-  ensureAgentRunTiming,
-} from "@/lib/performance/workspace-timing";
+  stashFirstMessage,
+  type UserMessageContent,
+} from "@/components/channels/transcript-messages";
 import { createChannelMutationOptions } from "./mutations";
+import { createPreparedChannelController } from "./prepared-channel";
 import { channelKeys } from "./queries";
 
 /**
@@ -18,24 +19,34 @@ export function useStartChannel() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const createChannel = useMutation(createChannelMutationOptions(queryClient));
+  const createRef = useRef((agentId: string) =>
+    createChannel.mutateAsync([agentId]),
+  );
+  createRef.current = (agentId) => createChannel.mutateAsync([agentId]);
+  const preparedRef = useRef(
+    createPreparedChannelController(async (agentId: string) => {
+      const channel = await createRef.current(agentId);
+      queryClient.setQueryData(channelKeys.detail(channel.id), channel);
+      return channel;
+    }),
+  );
+
+  const finish = async (
+    channel: { id: string },
+    content: UserMessageContent,
+    messageId: string,
+  ) => {
+    stashFirstMessage(channel.id, content, messageId);
+    await navigate({
+      params: { channelId: channel.id },
+      replace: true,
+      to: "/channel/$channelId",
+    });
+  };
 
   return {
     pending: createChannel.isPending,
-    start: async (agentId: string, text: string, messageId: string) => {
-      ensureAgentRunTiming(messageId);
-      try {
-        const channel = await createChannel.mutateAsync([agentId]);
-        queryClient.setQueryData(channelKeys.detail(channel.id), channel);
-        stashFirstMessage(channel.id, text, messageId);
-        await navigate({
-          params: { channelId: channel.id },
-          replace: true,
-          to: "/channel/$channelId",
-        });
-      } catch (error) {
-        abandonAgentRunTiming(messageId);
-        throw error;
-      }
-    },
+    prepare: (agentId: string) => preparedRef.current.prepare(agentId),
+    finish,
   };
 }

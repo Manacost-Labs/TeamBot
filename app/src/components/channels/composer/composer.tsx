@@ -2,20 +2,29 @@ import {
   IconArrowUp,
   IconAt,
   IconBolt,
+  IconPaperclip,
   IconPlayerStopFilled,
   IconPlus,
 } from "@tabler/icons-react";
 import { PromptArea, type PromptAreaHandle } from "prompt-area";
 import type { Segment } from "prompt-area/helpers";
 import {
+  type ChangeEvent,
+  type ClipboardEvent,
+  type DragEvent,
   type FormEvent,
   type SetStateAction,
   useCallback,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
 } from "react";
+import {
+  deleteAttachment,
+  type UploadedAttachment,
+} from "@/lib/attachments/api";
 import { conversationStateCache } from "@/lib/channels/conversation-state";
 import { cn } from "@/lib/utils";
 import { Button } from "../../ui/button";
@@ -25,6 +34,16 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../../ui/dropdown-menu";
+import {
+  ATTACHMENT_ACCEPT,
+  type AttachmentDraftItem,
+  type AttachmentSubmission,
+  addAttachmentFiles,
+  attachmentDraftReducer,
+  releaseAttachmentPreviews,
+  uploadAttachmentDraft,
+} from "./attachment-draft";
+import { AttachmentTray } from "./attachment-tray";
 import {
   AGENT_TRIGGER,
   appendTrigger,
@@ -44,6 +63,7 @@ const MAX_HEIGHT_PX = 220;
  */
 const COMPACT_MIN_HEIGHT_PX = 19;
 const COMPACT_MAX_HEIGHT_PX = 96;
+const DRAFT_CLEANUP_DEADLINE_MS = 2_000;
 
 export type ComposerProps = {
   className?: string;
@@ -57,7 +77,16 @@ export type ComposerProps = {
    * Receives the whole draft rather than a string, so a mention or a command reaches the caller as
    * structured data instead of something it would have to re-parse out of the text.
    */
-  onSubmit?: (draft: ComposerDraft) => void | Promise<void>;
+  onSubmit?: (
+    draft: ComposerDraft,
+    attachments: AttachmentSubmission,
+  ) => void | Promise<void>;
+  /** Test seam for the multipart boundary; production uses the attachment API client. */
+  attachmentUploader?: (
+    channelId: string,
+    file: File,
+    signal?: AbortSignal,
+  ) => Promise<UploadedAttachment>;
   /**
    * Park this message until the turn in flight is over, instead of refusing the keystroke.
    *
@@ -118,6 +147,7 @@ export function Composer({
   agents = [],
   commands = PLACEHOLDER_COMMANDS,
   onSubmit,
+  attachmentUploader,
   onQueue,
   onStop,
   disabled = false,
@@ -141,6 +171,18 @@ export function Composer({
     [conversationKey],
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [attachmentItems, dispatchAttachments] = useReducer(
+    attachmentDraftReducer,
+    [],
+  );
+  const attachmentItemsRef = useRef<readonly AttachmentDraftItem[]>([]);
+  attachmentItemsRef.current = attachmentItems;
+  const previewUrlsRef = useRef(new Set<string>());
+  const submitControllersRef = useRef(new Set<AbortController>());
+  const committedAttachmentIdsRef = useRef(new Set<string>());
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [draggingFiles, setDraggingFiles] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const submitInFlight = useRef(false);
   const promptAreaRef = useRef<PromptAreaHandle>(null);
   /** A send has completed and the caret is owed back, as soon as the editor will take it. */
@@ -154,6 +196,103 @@ export function Composer({
     [agents, commands],
   );
   const draft = useMemo(() => toDraft(value), [value]);
+  const hasAttachments = attachmentItems.length > 0;
+  const attachmentBlocked = attachmentItems.some(
+    (item) => item.status === "failed" || item.status === "uploading",
+  );
+
+  useEffect(() => {
+    const liveIds = new Set(attachmentItems.map((item) => item.localId));
+    for (const localId of committedAttachmentIdsRef.current) {
+      if (!liveIds.has(localId))
+        committedAttachmentIdsRef.current.delete(localId);
+    }
+  }, [attachmentItems]);
+
+  useEffect(
+    () => () => {
+      for (const controller of submitControllersRef.current) {
+        controller.abort();
+      }
+      submitControllersRef.current.clear();
+      for (const item of attachmentItemsRef.current) {
+        if (
+          committedAttachmentIdsRef.current.has(item.localId) ||
+          !item.attachment ||
+          !item.uploadedChannelId
+        ) {
+          continue;
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(
+          () => controller.abort(),
+          DRAFT_CLEANUP_DEADLINE_MS,
+        );
+        void deleteAttachment(
+          item.uploadedChannelId,
+          item.attachment.id,
+          controller.signal,
+        )
+          .catch(() => undefined)
+          .finally(() => clearTimeout(timeout));
+      }
+      for (const url of previewUrlsRef.current) URL.revokeObjectURL(url);
+      previewUrlsRef.current.clear();
+    },
+    [],
+  );
+
+  const releasePreviews = useCallback(
+    (items: readonly AttachmentDraftItem[]) => {
+      releaseAttachmentPreviews(items, (url) => {
+        if (!previewUrlsRef.current.delete(url)) return;
+        URL.revokeObjectURL(url);
+      });
+    },
+    [],
+  );
+
+  const addFiles = useCallback(
+    (files: FileList | readonly File[]) => {
+      if (disabled || isBusy || submitInFlight.current || files.length === 0)
+        return;
+      const result = addAttachmentFiles(attachmentItemsRef.current, [...files]);
+      for (const item of result.items) {
+        if (item.previewUrl) previewUrlsRef.current.add(item.previewUrl);
+      }
+      dispatchAttachments({ type: "replace", items: result.items });
+      setAttachmentError(
+        result.rejected.length > 0
+          ? `Не удалось добавить: ${result.rejected.join(", ")}. Проверьте формат или лимит в 10 файлов.`
+          : null,
+      );
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    },
+    [disabled, isBusy],
+  );
+
+  const removeAttachment = useCallback(
+    (localId: string) => {
+      if (submitInFlight.current) return;
+      const item = attachmentItemsRef.current.find(
+        (candidate) => candidate.localId === localId,
+      );
+      if (item) releasePreviews([item]);
+      if (item?.attachment && item.uploadedChannelId) {
+        void deleteAttachment(item.uploadedChannelId, item.attachment.id).catch(
+          () => setAttachmentError("Не удалось удалить загруженный файл."),
+        );
+      }
+      dispatchAttachments({ type: "remove", localId });
+      setAttachmentError(null);
+    },
+    [releasePreviews],
+  );
+
+  const retryAttachment = useCallback((localId: string) => {
+    if (submitInFlight.current) return;
+    dispatchAttachments({ type: "retry", localId });
+  }, []);
 
   const handleChange = useCallback(
     (next: Segment[]) => {
@@ -179,8 +318,12 @@ export function Composer({
    */
   const submitDraft = useCallback(
     async (segments: Segment[]) => {
-      const submitted = toDraft(segments);
-      if (submitted.isEmpty || disabled) {
+      const textDraft = toDraft(segments);
+      const submitted = {
+        ...textDraft,
+        isEmpty: textDraft.isEmpty && !hasAttachments,
+      };
+      if (submitted.isEmpty || disabled || attachmentBlocked) {
         return;
       }
 
@@ -197,6 +340,8 @@ export function Composer({
        * typed while it worked — the exact thing this exists to allow.
        */
       if (isBusy) {
+        // File drafts stay local. Queueing them would retain browser File objects after this turn.
+        if (hasAttachments) return;
         if (!onQueue) {
           return;
         }
@@ -211,14 +356,42 @@ export function Composer({
 
       submitInFlight.current = true;
       setIsSubmitting(true);
+      const submitController = new AbortController();
+      submitControllersRef.current.add(submitController);
       // Clear optimistically; restore if the send fails before becoming a message.
       setValue([]);
       try {
-        await onSubmit(submitted);
+        const filesForThisSubmit = attachmentItemsRef.current;
+        let committed = false;
+        const commit = () => {
+          if (committed) return;
+          committed = true;
+          for (const item of filesForThisSubmit) {
+            committedAttachmentIdsRef.current.add(item.localId);
+          }
+          releasePreviews(filesForThisSubmit);
+          dispatchAttachments({ type: "reset" });
+          setAttachmentError(null);
+        };
+        const attachmentSubmission: AttachmentSubmission = {
+          count: filesForThisSubmit.length,
+          commit,
+          upload: (channelId) =>
+            uploadAttachmentDraft({
+              channelId,
+              items: filesForThisSubmit,
+              dispatch: dispatchAttachments,
+              signal: submitController.signal,
+              ...(attachmentUploader ? { upload: attachmentUploader } : {}),
+            }),
+        };
+        await onSubmit(submitted, attachmentSubmission);
+        commit();
       } catch (error) {
         setValue(segments);
         throw error;
       } finally {
+        submitControllersRef.current.delete(submitController);
         submitInFlight.current = false;
         setIsSubmitting(false);
         // Asked for here, performed in the effect below, which runs after the commit that clears
@@ -226,7 +399,17 @@ export function Composer({
         wantsFocus.current = true;
       }
     },
-    [disabled, isBusy, onQueue, onSubmit, setValue],
+    [
+      attachmentBlocked,
+      attachmentUploader,
+      disabled,
+      hasAttachments,
+      isBusy,
+      onQueue,
+      onSubmit,
+      releasePreviews,
+      setValue,
+    ],
   );
 
   /**
@@ -256,7 +439,23 @@ export function Composer({
 
   const handleFormSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    void submitDraft(value);
+    void submitDraft(value).catch(() => undefined);
+  };
+
+  const handleFileInput = (event: ChangeEvent<HTMLInputElement>) => {
+    if (event.currentTarget.files) addFiles(event.currentTarget.files);
+  };
+
+  const handleDrop = (event: DragEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setDraggingFiles(false);
+    addFiles(event.dataTransfer.files);
+  };
+
+  const handlePaste = (event: ClipboardEvent<HTMLFormElement>) => {
+    if (event.clipboardData.files.length === 0) return;
+    event.preventDefault();
+    addFiles(event.clipboardData.files);
   };
 
   /** Open the existing @ or / picker from the plus menu, then put the caret beside it. */
@@ -274,10 +473,14 @@ export function Composer({
    * Not the same question as "is anything typed" — an empty composer mid-turn can queue nothing,
    * and the button it wants is Stop.
    */
-  const canQueue = Boolean(onQueue) && isBusy && !disabled;
+  const canQueue = Boolean(onQueue) && isBusy && !disabled && !hasAttachments;
   /** Something is typed, mid-turn, with a queue to put it in. */
   const parking = canQueue && !draft.isEmpty;
-  const canSend = !disabled && !draft.isEmpty && (!isBusy || canQueue);
+  const canSend =
+    !disabled &&
+    !attachmentBlocked &&
+    (!draft.isEmpty || hasAttachments) &&
+    (!isBusy || canQueue);
   /**
    * Stop is available only once there is a run for it to reach, and it gives way to Send the moment
    * there is something typed to park.
@@ -303,85 +506,131 @@ export function Composer({
 
   if (compact) {
     return (
-      <form
-        aria-busy={isBusy}
-        className={cn(
-          /*
-           * `py-3` IS LOAD-BEARING ONCE THE TEXT WRAPS. On one line `min-h-14` and `items-center`
-           * fake the vertical padding, so it read as correct for as long as nobody typed a
-           * paragraph. Past that the row grows to fit its content exactly and the glyphs sit
-           * against the border.
-           *
-           * It goes on the form rather than on the editor because the editor scrolls internally at
-           * COMPACT_MAX_HEIGHT_PX: padding inside that box would scroll away with the text, so the
-           * first visible line would still touch the top edge on a long message.
-           */
-          "flex min-h-14 items-center gap-3 rounded-2xl border border-border bg-card px-3 py-3 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
-          className,
-        )}
-        onSubmit={handleFormSubmit}
-      >
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
+      <div className={className}>
+        <form
+          aria-busy={isBusy}
+          className="relative overflow-hidden rounded-2xl border border-border bg-card focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50"
+          data-testid="composer-form"
+          onDragEnter={(event) => {
+            event.preventDefault();
+            if (!disabled && !isBusy) setDraggingFiles(true);
+          }}
+          onDragLeave={(event) => {
+            if (
+              !event.currentTarget.contains(event.relatedTarget as Node | null)
+            ) {
+              setDraggingFiles(false);
+            }
+          }}
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={handleDrop}
+          onPaste={handlePaste}
+          onSubmit={handleFormSubmit}
+        >
+          <input
+            accept={ATTACHMENT_ACCEPT}
+            aria-label="Добавить файлы"
+            className="sr-only"
+            disabled={disabled || isBusy}
+            multiple
+            onChange={handleFileInput}
+            ref={fileInputRef}
+            type="file"
+          />
+          <AttachmentTray
+            disabled={isSubmitting}
+            items={attachmentItems}
+            onRemove={removeAttachment}
+            onRetry={retryAttachment}
+          />
+          <div className="flex min-h-14 items-center gap-3 px-3 py-3">
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    aria-label="Дополнительные действия"
+                    disabled={disabled}
+                    size="icon"
+                    type="button"
+                    variant="ghost"
+                  />
+                }
+              >
+                <IconPlus className="size-5" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" side="top" sideOffset={8}>
+                <DropdownMenuItem
+                  disabled={isBusy}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <IconPaperclip />
+                  Загрузить файл
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => insertTrigger(AGENT_TRIGGER)}>
+                  <IconAt />
+                  Упомянуть сотрудника
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => insertTrigger(COMMAND_TRIGGER)}
+                >
+                  <IconBolt />
+                  Использовать навык
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <PromptArea
+              aria-label="Сообщение"
+              className="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm shadow-none"
+              disabled={disabled}
+              maxHeight={COMPACT_MAX_HEIGHT_PX}
+              minHeight={COMPACT_MIN_HEIGHT_PX}
+              onChange={handleChange}
+              onSubmit={(segments) => {
+                void submitDraft(segments).catch(() => undefined);
+              }}
+              placeholder="Напишите сообщение"
+              ref={promptAreaRef}
+              triggers={triggers}
+              value={value}
+            />
+            {canStop ? (
               <Button
-                aria-label="Дополнительные действия"
-                disabled={disabled}
+                aria-label="Остановить сотрудника"
+                className="size-8 rounded-full p-0"
+                data-testid="composer-stop"
+                onClick={onStop}
                 size="icon"
                 type="button"
-                variant="ghost"
-              />
-            }
-          >
-            <IconPlus className="size-5" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" side="top" sideOffset={8}>
-            <DropdownMenuItem onClick={() => insertTrigger(AGENT_TRIGGER)}>
-              <IconAt />
-              Упомянуть сотрудника
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => insertTrigger(COMMAND_TRIGGER)}>
-              <IconBolt />
-              Использовать навык
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <PromptArea
-          aria-label="Сообщение"
-          className="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm shadow-none"
-          disabled={disabled}
-          maxHeight={COMPACT_MAX_HEIGHT_PX}
-          minHeight={COMPACT_MIN_HEIGHT_PX}
-          onChange={handleChange}
-          onSubmit={submitDraft}
-          placeholder="Напишите сообщение"
-          ref={promptAreaRef}
-          triggers={triggers}
-          value={value}
-        />
-        {canStop ? (
-          <Button
-            aria-label="Остановить сотрудника"
-            className="size-8 rounded-full p-0"
-            data-testid="composer-stop"
-            onClick={onStop}
-            size="icon"
-            type="button"
-          >
-            <IconPlayerStopFilled className="size-3" />
-          </Button>
-        ) : (
-          <Button
-            aria-label={sendLabel}
-            className="size-8 rounded-full p-0"
-            disabled={!canSend}
-            size="icon"
-            type="submit"
-          >
-            <IconArrowUp className="size-3.5" />
-          </Button>
-        )}
-      </form>
+              >
+                <IconPlayerStopFilled className="size-3" />
+              </Button>
+            ) : (
+              <Button
+                aria-label={sendLabel}
+                className="size-8 rounded-full p-0"
+                disabled={!canSend}
+                size="icon"
+                type="submit"
+              >
+                <IconArrowUp className="size-3.5" />
+              </Button>
+            )}
+          </div>
+          {draggingFiles ? (
+            <div
+              className="absolute inset-0 flex items-center justify-center bg-card/95 text-sm"
+              role="status"
+            >
+              Отпустите файлы здесь
+            </div>
+          ) : null}
+        </form>
+        {attachmentError ? (
+          <p className="pt-2 text-destructive text-xs" role="alert">
+            {attachmentError}
+          </p>
+        ) : null}
+      </div>
     );
   }
 
@@ -389,10 +638,40 @@ export function Composer({
     <div className={cn("w-xl", className)}>
       <form
         aria-busy={isBusy}
-        className="overflow-hidden rounded-2xl border border-border bg-card"
+        className="relative overflow-hidden rounded-2xl border border-border bg-card"
+        data-testid="composer-form"
+        onDragEnter={(event) => {
+          event.preventDefault();
+          if (!disabled && !isBusy) setDraggingFiles(true);
+        }}
+        onDragLeave={(event) => {
+          if (
+            !event.currentTarget.contains(event.relatedTarget as Node | null)
+          ) {
+            setDraggingFiles(false);
+          }
+        }}
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={handleDrop}
+        onPaste={handlePaste}
         onSubmit={handleFormSubmit}
       >
-        <input className="sr-only" multiple onChange={() => {}} type="file" />
+        <input
+          accept={ATTACHMENT_ACCEPT}
+          aria-label="Добавить файлы"
+          className="sr-only"
+          disabled={disabled || isBusy}
+          multiple
+          onChange={handleFileInput}
+          ref={fileInputRef}
+          type="file"
+        />
+        <AttachmentTray
+          disabled={isSubmitting}
+          items={attachmentItems}
+          onRemove={removeAttachment}
+          onRetry={retryAttachment}
+        />
 
         <div className="grow px-3 pt-3 pb-2">
           <PromptArea
@@ -402,7 +681,9 @@ export function Composer({
             disabled={disabled}
             maxHeight={MAX_HEIGHT_PX}
             onChange={handleChange}
-            onSubmit={submitDraft}
+            onSubmit={(segments) => {
+              void submitDraft(segments).catch(() => undefined);
+            }}
             placeholder="Напишите сообщение"
             ref={promptAreaRef}
             triggers={triggers}
@@ -411,7 +692,16 @@ export function Composer({
         </div>
 
         <div className="mb-2 flex items-center justify-between px-2">
-          <div />
+          <Button
+            aria-label="Добавить файлы"
+            disabled={disabled || isBusy}
+            onClick={() => fileInputRef.current?.click()}
+            size="icon"
+            type="button"
+            variant="ghost"
+          >
+            <IconPaperclip className="size-4" />
+          </Button>
 
           <div>
             {canStop ? (
@@ -436,7 +726,20 @@ export function Composer({
             )}
           </div>
         </div>
+        {draggingFiles ? (
+          <div
+            className="absolute inset-0 flex items-center justify-center bg-card/95 text-sm"
+            role="status"
+          >
+            Отпустите файлы здесь
+          </div>
+        ) : null}
       </form>
+      {attachmentError ? (
+        <p className="pt-2 text-destructive text-xs" role="alert">
+          {attachmentError}
+        </p>
+      ) : null}
     </div>
   );
 }

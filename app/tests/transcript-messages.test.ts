@@ -52,6 +52,29 @@ describe("seedMessage", () => {
     const message = seedMessage("hello", "id-1");
     expect(message).toEqual({ id: "id-1", role: "user", content: "hello" });
   });
+
+  test("preserves opaque attachment content for the new channel handoff", () => {
+    const content = [
+      { type: "text" as const, text: "Посмотри" },
+      {
+        type: "binary" as const,
+        id: "attachment-1",
+        mimeType: "image/png",
+        filename: "screen.png",
+      },
+    ];
+
+    expect(seedMessage(content, "id-files")).toEqual({
+      id: "id-files",
+      role: "user",
+      content,
+    });
+    stashFirstMessage("channel-files", content, "id-files");
+    expect(takeFirstMessage("channel-files")).toEqual({
+      id: "id-files",
+      content,
+    });
+  });
 });
 
 describe("the first-message stash", () => {
@@ -59,7 +82,7 @@ describe("the first-message stash", () => {
     stashFirstMessage("channel_a", "hello", "message-a");
     expect(takeFirstMessage("channel_a")).toEqual({
       id: "message-a",
-      text: "hello",
+      content: "hello",
     });
   });
 
@@ -79,11 +102,11 @@ describe("the first-message stash", () => {
     stashFirstMessage("channel_d", "for d", "message-d");
     expect(takeFirstMessage("channel_d")).toEqual({
       id: "message-d",
-      text: "for d",
+      content: "for d",
     });
     expect(takeFirstMessage("channel_c")).toEqual({
       id: "message-c",
-      text: "for c",
+      content: "for c",
     });
   });
 });

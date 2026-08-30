@@ -40,6 +40,50 @@ function messages(count: number): Message[] {
 }
 
 describe("transcript windowing", () => {
+  test("renders authenticated file cards and previews raster images only", () => {
+    const view = render(
+      <ChatTranscript
+        conversationKey="channel / one"
+        messages={[
+          {
+            id: "files",
+            role: "user",
+            content: [
+              {
+                type: "binary",
+                id: "image-1",
+                mimeType: "image/png",
+                filename: "screen.png",
+              },
+              {
+                type: "binary",
+                id: "svg-1",
+                mimeType: "image/svg+xml",
+                filename: "vector.svg",
+              },
+              {
+                type: "binary",
+                id: "pdf-1",
+                mimeType: "application/pdf",
+                filename: "report.pdf",
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    expect(view.getByAltText("screen.png").getAttribute("src")).toBe(
+      "/api/channels/channel%20%2F%20one/attachments/image-1/download",
+    );
+    expect(view.queryByAltText("vector.svg")).toBeNull();
+    expect(
+      view
+        .getByRole("link", { name: "Скачать report.pdf" })
+        .getAttribute("href"),
+    ).toBe("/api/channels/channel%20%2F%20one/attachments/pdf-1/download");
+  });
+
   for (const [historySize, mountedRows] of [
     [50, 50],
     [200, 60],

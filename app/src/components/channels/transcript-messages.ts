@@ -1,4 +1,6 @@
-import type { Message } from "@ag-ui/core";
+import type { InputContent, Message } from "@ag-ui/core";
+
+export type UserMessageContent = string | InputContent[];
 
 /**
  * What a transcript shows while a brand-new channel is still joining.
@@ -21,8 +23,8 @@ export function transcriptMessages(
 }
 
 /** The person's message, in the shape the transcript and the agent both take. */
-export function seedMessage(text: string, id: string): Message {
-  return { id, role: "user", content: text };
+export function seedMessage(content: UserMessageContent, id: string): Message {
+  return { id, role: "user", content };
 }
 
 /**
@@ -36,16 +38,16 @@ export function seedMessage(text: string, id: string): Message {
  * Deliberately not persisted. A reload finds nothing here, which is correct, by then the message
  * is in the thread and arrives through the normal replay.
  */
-export type FirstMessage = { id: string; text: string };
+export type FirstMessage = { id: string; content: UserMessageContent };
 
 const firstMessages = new Map<string, FirstMessage>();
 
 export function stashFirstMessage(
   channelId: string,
-  text: string,
+  content: UserMessageContent,
   messageId: string,
 ): void {
-  firstMessages.set(channelId, { id: messageId, text });
+  firstMessages.set(channelId, { id: messageId, content });
 }
 
 /** Read the pending first message and forget it. Null for a channel opened any other way. */

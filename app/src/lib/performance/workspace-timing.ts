@@ -136,6 +136,22 @@ function enqueue(sample: WorkspaceTimingSample): void {
 
 const recorder = new FrontendTimingRecorder({ sink: enqueue });
 
+/** Measure one upload attempt without accepting filenames, channel IDs, bytes, or message data. */
+export async function traceAttachmentUpload<T>(
+  upload: () => Promise<T>,
+  timing: FrontendTimingRecorder = recorder,
+  scopeId: () => string = newId,
+): Promise<T> {
+  const key = `attachment-upload:${scopeId()}`;
+  timing.start(key, "attachment_upload", "attachment_upload_started");
+  try {
+    return await upload();
+  } finally {
+    timing.record(key, "attachment_upload_completed");
+    timing.finish(key);
+  }
+}
+
 export function beginChannelTiming(channelId: string): void {
   recorder.start(channelKey(channelId), "channel_switch", "channel_click");
 }

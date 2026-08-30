@@ -9,6 +9,7 @@ import {
 import { ChatTranscript } from "@/components/channels/chat-transcript";
 import {
   type AgentOption,
+  type AttachmentSubmission,
   type CommandOption,
   Composer,
   type ComposerDraft,
@@ -88,7 +89,10 @@ export function ConversationView({
   restoring?: boolean;
   /** Explicit lifecycle state shared with the activity panel. */
   run?: AgentRunState;
-  onSubmit: (draft: ComposerDraft) => void | Promise<void>;
+  onSubmit: (
+    draft: ComposerDraft,
+    attachments: AttachmentSubmission,
+  ) => void | Promise<void>;
   /** Stop the Bot mid-answer; forwarded to turn the send button into a stop button. */
   onStop?: () => void;
   /** Mark a correction as queued before it is placed behind the active turn. */
@@ -146,10 +150,18 @@ export function ConversationView({
     return next.run;
   }, []);
 
-  const start = async (draft: ComposerDraft) => {
+  const noAttachments: AttachmentSubmission = {
+    count: 0,
+    commit: () => {},
+    upload: async () => [],
+  };
+  const start = async (
+    draft: ComposerDraft,
+    attachments: AttachmentSubmission = noAttachments,
+  ) => {
     setRunning(true);
     try {
-      await onSubmit(draft);
+      await onSubmit(draft, attachments);
     } finally {
       setRunning(false);
     }
@@ -163,14 +175,18 @@ export function ConversationView({
    * whether a turn is in flight, and `reduceQueue` holds what follows from the answer.
    */
   const submit = useCallback(
-    (draft: ComposerDraft, whileBusy: boolean) => {
+    (
+      draft: ComposerDraft,
+      whileBusy: boolean,
+      attachments?: AttachmentSubmission,
+    ) => {
       const run = apply({
         busy: whileBusy,
         draft,
         id: newId(),
         type: "submit",
       });
-      return run ? startRef.current(run) : undefined;
+      return run ? startRef.current(run, attachments) : undefined;
     },
     [apply],
   );
@@ -258,7 +274,7 @@ export function ConversationView({
               : undefined
           }
           onStop={onStop}
-          onSubmit={(draft) => submit(draft, false)}
+          onSubmit={(draft, attachments) => submit(draft, false, attachments)}
           /*
            * `inFlight` rather than the `pending` this was given. A drained turn is started from the
            * effect above rather than from the composer, so the composer's own send tracking knows

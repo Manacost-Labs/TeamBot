@@ -1,5 +1,10 @@
 import type { Message, ToolCall } from "@ag-ui/core";
 import {
+  type AttachmentMessageReference,
+  attachmentRefsFromContent,
+  textFromMessageContent,
+} from "@/lib/attachments/message-content";
+import {
   type AgentRunState,
   agentRunStatusLabel,
   isAgentRunActive,
@@ -10,7 +15,13 @@ import {
  */
 
 export type VisibleChatItem =
-  | { kind: "text"; id: string; role: "user" | "assistant"; text: string }
+  | {
+      kind: "text";
+      id: string;
+      role: "user" | "assistant";
+      text: string;
+      attachments?: readonly AttachmentMessageReference[];
+    }
   | { kind: "reasoning"; id: string; text: string }
   | {
       kind: "tool";
@@ -394,8 +405,15 @@ export function projectTranscriptWindow(
 
     if (message.role !== "user") continue;
     const text = userMessageText(message);
-    if (text) {
-      visit({ kind: "text", id: message.id, role: "user", text });
+    const attachments = attachmentRefsFromContent(message.content);
+    if (text || attachments.length > 0) {
+      visit({
+        kind: "text",
+        id: message.id,
+        role: "user",
+        text,
+        ...(attachments.length > 0 ? { attachments } : {}),
+      });
     }
   }
 
@@ -471,17 +489,23 @@ export function toVisibleChatItems(
     if (message.role !== "user") return [];
 
     const text = userMessageText(message);
+    const attachments = attachmentRefsFromContent(message.content);
 
-    return text ? [{ kind: "text", id: message.id, role: "user", text }] : [];
+    return text || attachments.length > 0
+      ? [
+          {
+            kind: "text",
+            id: message.id,
+            role: "user",
+            text,
+            ...(attachments.length > 0 ? { attachments } : {}),
+          },
+        ]
+      : [];
   });
 }
 
 function userMessageText(message: Readonly<Message>): string {
   if (message.role !== "user") return "";
-  return typeof message.content === "string"
-    ? message.content
-    : message.content
-        .filter((part) => part.type === "text")
-        .map((part) => part.text)
-        .join("\n");
+  return textFromMessageContent(message.content);
 }
