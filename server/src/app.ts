@@ -6,6 +6,10 @@ import type { BotAccessCheck } from "./agents/profile-policy";
 import type { AgentProfileStore } from "./agents/profile-store";
 import { createAgentRoutes } from "./agents/routes";
 import {
+  type AttachmentRouteDependencies,
+  createAttachmentRoutes,
+} from "./attachments/routes";
+import {
   type AuditReader,
   type AuditStore,
   auditQueryFromUrl,
@@ -200,6 +204,8 @@ export function createApp(
   routineStore?: RoutineStore,
   /** Bounded content-free browser timings; appended to keep positional call sites stable. */
   workspaceTimingStore: WorkspaceTimingStore = createWorkspaceTimingStore(),
+  /** Private attachment routes; appended to preserve every existing positional call site. */
+  attachmentRoutes?: AttachmentRouteDependencies,
 ) {
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -834,6 +840,13 @@ export function createApp(
     app.route(
       "/api/channels",
       createChannelRoutes(channelStore, requireUser, channelEvents, auditStore),
+    );
+  }
+
+  if (attachmentRoutes) {
+    app.route(
+      "/api/channels",
+      createAttachmentRoutes(attachmentRoutes, requireUser),
     );
   }
 

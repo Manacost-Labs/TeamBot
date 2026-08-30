@@ -16,6 +16,17 @@ import { createAgentProfileStore } from "./agents/profile-store";
 import type { AgentActor } from "./agents/profile-types";
 import { createRuntimeAgentLoader } from "./agents/runtime-agents";
 import { createApp } from "./app";
+import {
+  AttachmentBlobStore,
+  createAttachmentBlobMaintenance,
+} from "./attachments/blob-store";
+import {
+  createAttachmentLifecycleStore,
+  createAttachmentUploadService,
+  processAttachmentBlobLifecycle,
+} from "./attachments/lifecycle";
+import { createAttachmentStore } from "./attachments/store";
+import { validateStoredAttachment } from "./attachments/validation";
 import { createAuditReader, createAuditStore, recordAuditEvent } from "./audit";
 import { startRetentionSweeps } from "./audit-retention";
 import { createAuth } from "./auth";
@@ -163,6 +174,21 @@ const channelStore = createChannelStore(
   agentProfileStore,
   threadIdentity,
 );
+// One blob namespace and one fenced upload service for every attachment path in this process.
+// Keeping these instances together is what makes upload, download and crash recovery agree on the
+// same private storage root; routes never receive the maintenance capability.
+const attachmentStore = createAttachmentStore(database);
+const attachmentBlobs = new AttachmentBlobStore({
+  root: config.attachments.storageDirectory,
+  maxBytes: config.attachments.maxBytes,
+});
+const attachmentUploads = createAttachmentUploadService({
+  metadata: attachmentStore,
+  blobs: attachmentBlobs,
+  validator: validateStoredAttachment,
+});
+const attachmentLifecycle = createAttachmentLifecycleStore(database);
+const attachmentMaintenance = createAttachmentBlobMaintenance(attachmentBlobs);
 const channelEvents = createChannelEventHub();
 /**
  * Which components each Bot may answer with.
@@ -991,6 +1017,30 @@ repeatAfterEach(
   60 * 60 * 1_000,
 );
 
+/*
+ * Recover attachment transitions left between the durable database row and the atomic rename.
+ *
+ * The processor claims a bounded batch with skip-locked leases, so every replica may run this loop
+ * without processing the same object. The production chart still uses one replica because the
+ * filesystem is a single-writer RWO volume; the database fence is the second line of defence, not
+ * an excuse to mount that volume from several writers.
+ */
+const attachmentLifecycleSweeps = repeatAfterEach(async () => {
+  try {
+    const report = await processAttachmentBlobLifecycle({
+      lifecycle: attachmentLifecycle,
+      maintenance: attachmentMaintenance,
+    });
+    if (report.completed > 0 || report.retried > 0 || report.lost > 0) {
+      // Counts only. Filenames, owners, channels and storage keys never enter telemetry.
+      console.info(JSON.stringify({ type: "attachment-lifecycle", ...report }));
+    }
+  } catch {
+    // A database outage must not stop future recovery attempts or disclose connection details.
+    console.warn("[attachments] lifecycle sweep could not run");
+  }
+}, 30_000);
+
 const app = createApp(
   config,
   auth,
@@ -1036,6 +1086,14 @@ const app = createApp(
   routineRunner,
   // A person's own standing instructions: the list, and a switch to stop one.
   routineStore,
+  // Keep the timing store's default while appending attachment routes after it.
+  undefined,
+  {
+    store: attachmentStore,
+    uploads: attachmentUploads,
+    blobs: attachmentBlobs,
+    maxUploadBytes: config.attachments.maxBytes,
+  },
 );
 
 /**
@@ -1201,6 +1259,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
       channelActivityListener.stop(),
       policyListener.stop(),
       Promise.resolve(retentionSweeps.stop()),
+      Promise.resolve(attachmentLifecycleSweeps.stop()),
     ]).finally(() => process.exit(0));
   });
 }
