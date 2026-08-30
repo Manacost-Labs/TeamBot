@@ -5,7 +5,7 @@ import {
   useCopilotKit,
 } from "@copilotkit/react-core/v2";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toAgentOptions } from "@/components/channels/composer";
 import { ConversationView } from "@/components/channels/conversation-view";
 import {
@@ -18,6 +18,7 @@ import { recordChannelActivityMutationOptions } from "@/lib/channels/mutations";
 import type { AgentChannel } from "@/lib/channels/queries";
 import { useActiveBot } from "@/lib/copilot/active-bot";
 import { ConversationProvider } from "@/lib/copilot/conversation";
+import { createStableHistoryHydration } from "@/lib/copilot/history-hydration";
 import { afterMs, joinWithin } from "@/lib/copilot/join-thread";
 import { repairUnansweredToolCalls } from "@/lib/copilot/repair-history";
 import {
@@ -33,8 +34,10 @@ import { stoppedReason } from "@/lib/copilot/stopped-turn";
 import {
   cachedThreadMessages,
   invalidateThreadMessagesCache,
+  mergeAuthoritativeThreadMessages,
   mergeThreadMessagesById,
   refreshThreadMessages,
+  type StoredThread,
 } from "@/lib/copilot/thread-messages";
 import { useAgentRun } from "@/lib/copilot/use-agent-run";
 import {
@@ -220,6 +223,35 @@ export function ChannelChat({
   const [unreadable, setUnreadable] = useState(
     initialHistoryRef.current?.unreadable ?? 0,
   );
+  const historyIdentity = `${historyScope}\u0000${channel.threadId}\u0000${runtimeAgentId}`;
+  const historyHydrationState = useMemo(
+    () => ({
+      identity: historyIdentity,
+      hydration: createStableHistoryHydration<StoredThread, typeof agent>(),
+      localWriteStarted: false,
+    }),
+    // A channel identity gets one gate; an obsolete request remains isolated on the old instance.
+    [historyIdentity],
+  );
+  const historyHydration = historyHydrationState.hydration;
+  const [authoritativeHistoryIdentity, setAuthoritativeHistoryIdentity] =
+    useState<string | null>(null);
+  const historyIsAuthoritative =
+    authoritativeHistoryIdentity === historyHydrationState.identity;
+  const presentAuthoritativeHistory = useCallback(
+    (stored: StoredThread) => {
+      markChannelTiming(channel.id, "fresh_history_loaded");
+      setHistoryPreview((preview) =>
+        mergeThreadMessagesById(preview, stored.messages, {
+          retainMissing: false,
+        }),
+      );
+      setUnreadable(stored.unreadable);
+      setHistoryError(null);
+      setAuthoritativeHistoryIdentity(historyHydrationState.identity);
+    },
+    [channel.id, historyHydrationState.identity, historyHydrationState],
+  );
   const pendingFirstTextPaint = useRef<string | null>(null);
   useEffect(
     () =>
@@ -248,55 +280,51 @@ export function ChannelChat({
   const historyAttempt = useRef(0);
   const joinAttempt = useRef(0);
 
-  // Paint cached history immediately, then revalidate before the runtime connection is required.
+  // Paint cached history immediately. The same bounded authoritative read gates the first send.
   useEffect(() => {
     const attempt = historyAttempt.current + 1;
     historyAttempt.current = attempt;
     let current = true;
-    const controller = new AbortController();
-    const deadline = window.setTimeout(
-      () => controller.abort(),
-      HISTORY_REFRESH_DEADLINE_MS,
-    );
     setHistoryError(null);
 
     void (async () => {
-      try {
-        const stored = await refreshThreadMessages(
-          historyScope,
-          channel.threadId,
-          runtimeAgentId,
-          { signal: controller.signal },
+      const outcome = await historyHydration.ensureCurrentTarget(
+        () => agentRef.current,
+        () =>
+          refreshThreadMessages(
+            historyScope,
+            channel.threadId,
+            runtimeAgentId,
+            {
+              signal: AbortSignal.timeout(HISTORY_REFRESH_DEADLINE_MS),
+            },
+          ),
+      );
+      if (!current) return;
+      if (outcome.status === "ready") {
+        presentAuthoritativeHistory(outcome.value);
+      } else {
+        setHistoryError(
+          outcome.error instanceof Error
+            ? outcome.error.message
+            : "Не удалось обновить историю диалога.",
         );
-        if (!current) return;
-        markChannelTiming(channel.id, "fresh_history_loaded");
-        setHistoryPreview((preview) =>
-          mergeThreadMessagesById(preview, stored.messages, {
-            retainMissing: false,
-          }),
-        );
-        setUnreadable(stored.unreadable);
-      } catch (error) {
-        if (current) {
-          setHistoryError(
-            error instanceof Error
-              ? error.message
-              : "Не удалось обновить историю диалога.",
-          );
-        }
-      } finally {
-        window.clearTimeout(deadline);
-        if (attempt === historyAttempt.current) {
-          if (current) setRestoring(false);
-        }
+      }
+      if (attempt === historyAttempt.current) {
+        setRestoring(false);
       }
     })();
 
     return () => {
       current = false;
-      controller.abort();
     };
-  }, [channel.id, channel.threadId, historyScope, runtimeAgentId]);
+  }, [
+    channel.threadId,
+    historyHydration,
+    historyScope,
+    presentAuthoritativeHistory,
+    runtimeAgentId,
+  ]);
 
   // Join independently. History already paints while CopilotKit is still preparing the agent.
   useEffect(() => {
@@ -328,17 +356,33 @@ export function ChannelChat({
     };
   }, [agent, channel.id, copilotkit, isReady]);
 
-  // Hand each cache/server revision to the joined runtime without dropping local streamed turns.
+  // A cached tail paints additively. A server revision replaces it, retaining only this tab's writes.
   useEffect(() => {
-    if (!joined || historyPreview.length === 0) return;
-    const merged = mergeThreadMessagesById(agent.messages, historyPreview);
+    historyHydration.observeTarget(agent);
+    if (!joined || (!historyIsAuthoritative && historyPreview.length === 0)) {
+      return;
+    }
+    const merged = historyIsAuthoritative
+      ? mergeAuthoritativeThreadMessages(
+          agent.messages,
+          historyPreview,
+          historyHydrationState.localWriteStarted,
+        )
+      : mergeThreadMessagesById(agent.messages, historyPreview);
     if (
       merged.length !== agent.messages.length ||
       merged.some((message, index) => message !== agent.messages[index])
     ) {
       agent.setMessages(merged as typeof agent.messages);
     }
-  }, [agent, historyPreview, joined]);
+  }, [
+    agent,
+    historyHydration,
+    historyHydrationState,
+    historyIsAuthoritative,
+    historyPreview,
+    joined,
+  ]);
 
   // Tool calls from this conversation act on this coworker's own computer.
   useActiveBot(runtimeAgentId);
@@ -508,9 +552,65 @@ export function ChannelChat({
       await joinGatePromise;
     }
 
-    // Every wait is behind us, so this is the agent the screen is actually rendering. Read once and
-    // used throughout, so the message, the repair and the run cannot land on two different agents.
-    const target = agentRef.current;
+    const hydrateCurrentTarget = () =>
+      historyHydration.ensureCurrentTarget(
+        () => agentRef.current,
+        () =>
+          refreshThreadMessages(
+            historyScope,
+            channel.threadId,
+            runtimeAgentId,
+            {
+              signal: AbortSignal.timeout(HISTORY_REFRESH_DEADLINE_MS),
+            },
+          ),
+      );
+    let hydrated = await hydrateCurrentTarget();
+    // The coordinator checks after its own await. Check once more in this continuation so even a
+    // replacement queued between its resolution and ours forces a new refresh before the final
+    // synchronous target capture below.
+    while (agentRef.current !== hydrated.target) {
+      hydrated = await hydrateCurrentTarget();
+    }
+    if (hydrated.status === "failed") {
+      const detail =
+        hydrated.error instanceof Error
+          ? hydrated.error.message
+          : "Не удалось обновить историю диалога.";
+      const reason =
+        "Сообщение не отправлено: полную историю диалога получить не удалось. " +
+        "Это защищает ответ сотрудника от потери предыдущего контекста.";
+      if (isCurrentRun(token)) {
+        setHistoryError(detail);
+        setRunError(reason);
+      }
+      setOptimisticMessages((messages) =>
+        messages.filter((message) => message.id !== userMessageId),
+      );
+      runActivity.fail(reason, token);
+      return;
+    }
+    // The coordinator re-checks agentRef after its final await. Everything from this capture through
+    // addMessage is synchronous, so a replacement cannot move this turn back onto an obsolete agent.
+    const target = hydrated.target;
+    presentAuthoritativeHistory(hydrated.value);
+
+    // Cached history may be only a bounded tail. The server revision replaces it, while IDs this
+    // tab already wrote survive until persistence echoes them. Concurrent sends therefore share the
+    // refresh without the later continuation erasing the earlier one's new row.
+    const hydratedMessages = mergeAuthoritativeThreadMessages(
+      target.messages,
+      hydrated.value.messages,
+      historyHydrationState.localWriteStarted,
+    );
+    if (
+      hydratedMessages.length !== target.messages.length ||
+      hydratedMessages.some(
+        (message, index) => message !== target.messages[index],
+      )
+    ) {
+      target.setMessages(hydratedMessages as typeof target.messages);
+    }
 
     if (isCurrentRun(token)) setRunError(null);
     awaitingReplies.current.add(token.generation);
@@ -527,10 +627,12 @@ export function ChannelChat({
      * `transcriptMessages` draws user and assistant turns, so this never appears on screen — the
      * chip is what says a skill was used, and it stays visible in the message they sent.
      */
+    historyHydrationState.localWriteStarted = true;
     for (const instruction of skillInstructions) {
+      const systemMessageId = newId();
       target.addMessage({
         content: instruction,
-        id: newId(),
+        id: systemMessageId,
         role: "system",
       });
     }

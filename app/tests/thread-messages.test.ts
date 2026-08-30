@@ -1,9 +1,19 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
+  cachedThreadMessages,
+  clearThreadMessagesCache,
   createThreadHistoryCache,
+  mergeAuthoritativeThreadMessages,
   mergeThreadMessagesById,
   readableTurns,
+  refreshThreadMessages,
 } from "../src/lib/copilot/thread-messages";
+
+const realFetch = globalThis.fetch;
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  clearThreadMessagesCache("user-a");
+});
 
 /**
  * Reading back a conversation that used a tool.
@@ -273,8 +283,22 @@ describe("bounded stale-while-revalidate history", () => {
 
     const cached = cache.peek("user-a", "thread-a", "agent");
     expect(cached?.stale).toBe(true);
+    expect(cached?.complete).toBe(false);
     expect(cached?.messages).toHaveLength(500);
     expect(cached?.messages[0]?.id).toBe("message-100");
+  });
+
+  test("marks a cached snapshot complete when no authoritative messages were trimmed", () => {
+    const cache = createThreadHistoryCache({ maxMessagesPerEntry: 500 });
+    cache.set("user-a", "thread-a", "agent", {
+      messages: [
+        { id: "message-1", role: "user", content: "Question" },
+        { id: "message-2", role: "assistant", content: "Answer" },
+      ],
+      unreadable: 0,
+    });
+
+    expect(cache.peek("user-a", "thread-a", "agent")?.complete).toBe(true);
   });
 
   test("keeps cache content isolated by authenticated user scope", () => {
@@ -287,6 +311,64 @@ describe("bounded stale-while-revalidate history", () => {
     expect(cache.peek("user-b", "thread", "agent")).toBeNull();
     cache.clearScope("user-a");
     expect(cache.peek("user-a", "thread", "agent")).toBeNull();
+  });
+
+  test("does not recreate a cleared session cache from an aborted late response", async () => {
+    const controller = new AbortController();
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      expect(init?.signal).toBe(controller.signal);
+      return {
+        ok: true,
+        json: async () => {
+          controller.abort(new Error("signed out"));
+          return {
+            messages: [
+              { id: "private-a", role: "assistant", content: "Secret A" },
+            ],
+          };
+        },
+      } as Response;
+    }) as typeof fetch;
+
+    await expect(
+      refreshThreadMessages("user-a", "thread", "agent", {
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("signed out");
+
+    expect(cachedThreadMessages("user-a", "thread", "agent")).toBeNull();
+  });
+
+  test("does not recreate a cleared session cache from a late refresh without an abort signal", async () => {
+    let markJsonStarted = () => {};
+    const jsonStarted = new Promise<void>((resolve) => {
+      markJsonStarted = resolve;
+    });
+    let releaseJson = () => {};
+    const jsonReleased = new Promise<void>((resolve) => {
+      releaseJson = resolve;
+    });
+    globalThis.fetch = (async () =>
+      ({
+        ok: true,
+        json: async () => {
+          markJsonStarted();
+          await jsonReleased;
+          return {
+            messages: [
+              { id: "private-a", role: "assistant", content: "Secret A" },
+            ],
+          };
+        },
+      }) as Response) as typeof fetch;
+
+    const refreshing = refreshThreadMessages("user-a", "late", "agent");
+    await jsonStarted;
+    clearThreadMessagesCache("user-a");
+    releaseJson();
+    await refreshing;
+
+    expect(cachedThreadMessages("user-a", "late", "agent")).toBeNull();
   });
 
   test("merges refreshed history in server order while retaining equal row identity", () => {
@@ -316,5 +398,57 @@ describe("bounded stale-while-revalidate history", () => {
       { retainMissing: false },
     );
     expect(authoritative.map((message) => message.id)).toEqual(["one"]);
+  });
+
+  test("an authoritative empty revision clears a stale cached tail", () => {
+    const stale = {
+      id: "stale",
+      role: "assistant" as const,
+      content: "No longer on the server",
+    };
+
+    expect(mergeAuthoritativeThreadMessages([stale], [], false)).toEqual([]);
+  });
+
+  test("a shorter authoritative revision drops stale rows before the first local write", () => {
+    const retained = {
+      id: "one",
+      role: "user" as const,
+      content: "One",
+    };
+    const stale = {
+      id: "stale",
+      role: "assistant" as const,
+      content: "Stale",
+    };
+    const merged = mergeAuthoritativeThreadMessages(
+      [retained, stale],
+      [{ ...retained, content: "One updated" }],
+      false,
+    );
+
+    expect(merged.map((message) => message.id)).toEqual(["one"]);
+    expect(merged[0]?.content).toBe("One updated");
+  });
+
+  test("an authoritative revision does not remove rows created after the first local write", () => {
+    const persisted = {
+      id: "one",
+      role: "user" as const,
+      content: "One",
+    };
+    const local = {
+      id: "local",
+      role: "assistant" as const,
+      content: "A streamed row that is not persisted yet",
+    };
+
+    const merged = mergeAuthoritativeThreadMessages(
+      [persisted, local],
+      [persisted],
+      true,
+    );
+
+    expect(merged).toEqual([persisted, local]);
   });
 });

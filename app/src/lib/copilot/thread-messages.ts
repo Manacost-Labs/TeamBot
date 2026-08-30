@@ -50,6 +50,8 @@ const NOTHING: StoredThread = { messages: [], unreadable: 0 };
 export type CachedStoredThread = StoredThread & {
   /** Cache is a paint-first snapshot; every channel open revalidates it against the server. */
   stale: true;
+  /** False when the bounded cache contains only the authoritative history's newest tail. */
+  complete: boolean;
   cachedAt: number;
 };
 
@@ -74,6 +76,7 @@ function historyCacheKey(
 /** Bounded, authenticated-session-scoped history used only for instant paint before revalidation. */
 export class ThreadHistoryCache {
   private readonly entries = new Map<string, CachedStoredThread>();
+  private readonly scopeEpochs = new Map<string, number>();
   private readonly maxEntries: number;
   private readonly maxMessagesPerEntry: number;
   private readonly now: () => number;
@@ -110,11 +113,13 @@ export class ThreadHistoryCache {
     value: StoredThread,
   ): CachedStoredThread {
     const key = historyCacheKey(sessionScope, threadId, agentId);
+    const complete = value.messages.length <= this.maxMessagesPerEntry;
     const cached: CachedStoredThread = {
       messages: value.messages.slice(-this.maxMessagesPerEntry),
       unreadable: value.unreadable,
       cachedAt: this.now(),
       stale: true,
+      complete,
     };
     this.entries.delete(key);
     this.entries.set(key, cached);
@@ -126,11 +131,28 @@ export class ThreadHistoryCache {
     return cached;
   }
 
+  epoch(sessionScope: string): number {
+    return this.scopeEpochs.get(sessionScope) ?? 0;
+  }
+
+  setIfCurrent(
+    sessionScope: string,
+    threadId: string,
+    agentId: string,
+    epoch: number,
+    value: StoredThread,
+  ): CachedStoredThread | null {
+    return this.epoch(sessionScope) === epoch
+      ? this.set(sessionScope, threadId, agentId, value)
+      : null;
+  }
+
   invalidate(sessionScope: string, threadId: string, agentId: string): void {
     this.entries.delete(historyCacheKey(sessionScope, threadId, agentId));
   }
 
   clearScope(sessionScope: string): void {
+    this.scopeEpochs.set(sessionScope, this.epoch(sessionScope) + 1);
     const prefix = `${encodeURIComponent(sessionScope)}:`;
     for (const key of this.entries.keys()) {
       if (key.startsWith(prefix)) this.entries.delete(key);
@@ -186,6 +208,24 @@ export function mergeThreadMessagesById(
   return options.retainMissing === false
     ? merged
     : [...merged, ...previous.filter((message) => !freshIds.has(message.id))];
+}
+
+/**
+ * Replace a stale snapshot with the server's complete revision while preserving writes this tab
+ * has made that may not have reached persistence yet.
+ *
+ * Before the first local write, every missing row came from the stale cache and is discarded. Once
+ * writing starts, the runtime may have optimistic, streamed, tool and user rows not persisted yet;
+ * those are retained because removing any one of them can break the live run.
+ */
+export function mergeAuthoritativeThreadMessages(
+  previous: readonly Message[],
+  fresh: readonly Message[],
+  localWriteStarted: boolean,
+): Message[] {
+  return mergeThreadMessagesById(previous, fresh, {
+    retainMissing: localWriteStarted,
+  });
 }
 
 function sameMessage(left: Message, right: Message): boolean {
@@ -334,6 +374,7 @@ export async function refreshThreadMessages(
   agentId: string,
   options: { signal?: AbortSignal } = {},
 ): Promise<StoredThread> {
+  const cacheEpoch = threadHistoryCache.epoch(sessionScope);
   const response = await client(
     `/api/copilotkit/threads/${encodeURIComponent(threadId)}/messages?agentId=${encodeURIComponent(agentId)}`,
     {
@@ -346,7 +387,16 @@ export async function refreshThreadMessages(
     throw new Error("Не удалось прочитать историю диалога.");
   }
   const result = readableTurns(stored);
-  threadHistoryCache.set(sessionScope, threadId, agentId, result);
+  // A sign-out or scope switch can happen while response JSON is being parsed. The signal is the
+  // fast cancellation path; the captured epoch also covers authoritative refreshes with no signal.
+  options.signal?.throwIfAborted();
+  threadHistoryCache.setIfCurrent(
+    sessionScope,
+    threadId,
+    agentId,
+    cacheEpoch,
+    result,
+  );
   return result;
 }
 
@@ -355,7 +405,9 @@ export async function prefetchThreadMessages(
   sessionScope: string,
   threadId: string,
   agentId: string,
+  options: { signal?: AbortSignal } = {},
 ): Promise<void> {
+  options.signal?.throwIfAborted();
   const cached = threadHistoryCache.peek(sessionScope, threadId, agentId);
   if (cached && Date.now() - cached.cachedAt < PREFETCH_DEDUP_MS) return;
   const key = historyCacheKey(sessionScope, threadId, agentId);
@@ -364,7 +416,12 @@ export async function prefetchThreadMessages(
     await pending.catch(() => {});
     return;
   }
-  const refresh = refreshThreadMessages(sessionScope, threadId, agentId);
+  const refresh = refreshThreadMessages(
+    sessionScope,
+    threadId,
+    agentId,
+    options,
+  );
   prefetches.set(key, refresh);
   try {
     await refresh;
