@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import {
   chmod,
@@ -12,6 +12,17 @@ import {
 } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { Readable } from "node:stream";
+import type {
+  AttachmentLifecycleClaim,
+  AttachmentLifecycleStore,
+} from "./lifecycle";
+import type {
+  AttachmentRecord,
+  AttachmentReservation,
+  AttachmentSource,
+  AttachmentStore,
+  FinalizeAttachmentInput,
+} from "./store";
 
 const DEFAULT_MAX_BYTES = 25 * 1024 * 1024;
 const ROOT_MODE = 0o700;
@@ -28,20 +39,60 @@ export type StoredAttachmentBlob = {
 type AttachmentBlobStoreOptions = {
   root: string;
   maxBytes?: number;
+  durability?: AttachmentBlobDurability;
 };
 
 type WriteOptions = {
   signal?: AbortSignal;
+  onReaderAcquired?(): void;
+};
+
+export type AttachmentBlobPresence = {
+  temporary: boolean;
+  live: boolean;
+};
+
+export type AttachmentBlobDurability = {
+  syncFile(handle: FileHandle): Promise<void>;
+  syncDirectory(path: string): Promise<void>;
+};
+
+type AttachmentBlobLease = {
+  writeTemporary(
+    source: ReadableStream<Uint8Array>,
+    options?: WriteOptions,
+  ): Promise<StoredAttachmentBlob>;
+  inspect(): Promise<AttachmentBlobPresence>;
+  publish(): Promise<boolean>;
+  delete(): Promise<boolean>;
+};
+
+const durableFilesystem: AttachmentBlobDurability = {
+  syncFile: (handle) => handle.sync(),
+  async syncDirectory(path) {
+    const handle = await openFile(
+      path,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  },
 };
 
 /** A streaming, private filesystem store for attachment bytes. */
 export class AttachmentBlobStore {
   private readonly root: string;
   private readonly maxBytes: number;
+  private readonly durability: AttachmentBlobDurability;
+  private readonly keyTails = new Map<string, Promise<void>>();
 
   constructor({
     root,
     maxBytes = DEFAULT_MAX_BYTES,
+    durability = durableFilesystem,
   }: AttachmentBlobStoreOptions) {
     if (!root.trim()) throw new Error("Attachment storage root is required");
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
@@ -49,19 +100,55 @@ export class AttachmentBlobStore {
     }
     this.root = resolve(root);
     this.maxBytes = maxBytes;
+    this.durability = durability;
+    blobStoreInternals.set(this, {
+      withKey: this.withKey.bind(this),
+    });
   }
 
-  async write(
+  private async withKey<T>(
+    storageKey: string,
+    operation: (lease: AttachmentBlobLease) => Promise<T>,
+  ): Promise<T> {
+    this.assertStorageKey(storageKey);
+    const previous = this.keyTails.get(storageKey) ?? Promise.resolve();
+    let release = () => {};
+    const turn = new Promise<void>((done) => {
+      release = done;
+    });
+    const tail = previous.catch(() => {}).then(() => turn);
+    this.keyTails.set(storageKey, tail);
+    await previous.catch(() => {});
+
+    try {
+      return await operation({
+        writeTemporary: (source, options) =>
+          this.writeTemporary(storageKey, source, options),
+        inspect: () => this.inspect(storageKey),
+        publish: () => this.publish(storageKey),
+        delete: () => this.delete(storageKey),
+      });
+    } finally {
+      release();
+      if (this.keyTails.get(storageKey) === tail) {
+        this.keyTails.delete(storageKey);
+      }
+    }
+  }
+
+  private async writeTemporary(
+    storageKey: string,
     source: ReadableStream<Uint8Array>,
     options: WriteOptions = {},
   ): Promise<StoredAttachmentBlob> {
+    this.assertStorageKey(storageKey);
     options.signal?.throwIfAborted();
     await this.ensurePrivateRoot();
 
-    const storageKey = randomUUID();
     const targetPath = this.pathFor(storageKey);
-    const temporaryPath = join(this.root, `.tmp-${randomUUID()}`);
+    const temporaryPath = this.temporaryPathFor(storageKey);
     const reader = source.getReader();
+    options.onReaderAcquired?.();
     const hash = createHash("sha256");
     let size = 0;
     let handle: FileHandle | null = null;
@@ -69,7 +156,7 @@ export class AttachmentBlobStore {
     let completed = false;
 
     try {
-      if (await pathKind(targetPath)) {
+      if ((await pathKind(targetPath)) || (await pathKind(temporaryPath))) {
         throw new Error("Attachment storage key collision");
       }
       handle = await openFile(
@@ -82,6 +169,7 @@ export class AttachmentBlobStore {
       );
       temporaryExists = true;
       await handle.chmod(FILE_MODE);
+      await this.durability.syncDirectory(this.root);
 
       while (true) {
         const next = await readWithAbort(reader, options.signal);
@@ -106,15 +194,10 @@ export class AttachmentBlobStore {
       options.signal?.throwIfAborted();
       if (size === 0) throw new Error("Attachment cannot be empty");
       await handle.chmod(FILE_MODE);
+      await this.durability.syncFile(handle);
       await handle.close();
       handle = null;
 
-      // Recheck the root immediately before publishing. The rename is the only point at which a
-      // reader can observe this key, so partial uploads never become addressable blobs.
-      await this.ensurePrivateRoot();
-      options.signal?.throwIfAborted();
-      await rename(temporaryPath, targetPath);
-      temporaryExists = false;
       completed = true;
       return { storageKey, size, sha256: hash.digest("hex") };
     } finally {
@@ -129,11 +212,50 @@ export class AttachmentBlobStore {
       if (handle) {
         await handle.close().catch(() => {});
       }
-      if (temporaryExists) {
-        await unlink(temporaryPath).catch((error: unknown) => {
-          if (!hasCode(error, "ENOENT")) throw error;
-        });
+      if (!completed && temporaryExists) {
+        await this.unlinkIfPresent(temporaryPath);
       }
+    }
+  }
+
+  private async inspect(storageKey: string): Promise<AttachmentBlobPresence> {
+    this.assertStorageKey(storageKey);
+    await this.ensurePrivateRoot();
+    const temporary = await this.inspectBlobPath(
+      this.temporaryPathFor(storageKey),
+      "temporary attachment blob",
+    );
+    const live = await this.inspectBlobPath(
+      this.pathFor(storageKey),
+      "attachment blob",
+    );
+    return { temporary, live };
+  }
+
+  private async publish(storageKey: string): Promise<boolean> {
+    this.assertStorageKey(storageKey);
+    await this.ensurePrivateRoot();
+    const temporaryPath = this.temporaryPathFor(storageKey);
+    const targetPath = this.pathFor(storageKey);
+    const presence = await this.inspect(storageKey);
+    if (presence.temporary && presence.live) {
+      throw new Error("Attachment blob has both temporary and live files");
+    }
+    if (presence.live) return false;
+    if (!presence.temporary) throw new Error("Attachment blob not found");
+
+    await this.ensurePrivateRoot();
+    try {
+      await rename(temporaryPath, targetPath);
+      await this.durability.syncDirectory(this.root);
+      return true;
+    } catch (error) {
+      if (hasCode(error, "ENOENT")) {
+        const afterRace = await this.inspect(storageKey);
+        if (afterRace.live && !afterRace.temporary) return false;
+        throw new Error("Attachment blob not found", { cause: error });
+      }
+      throw error;
     }
   }
 
@@ -175,24 +297,20 @@ export class AttachmentBlobStore {
     }
   }
 
-  async delete(storageKey: string): Promise<boolean> {
+  private async delete(storageKey: string): Promise<boolean> {
     this.assertStorageKey(storageKey);
     await this.ensurePrivateRoot();
+    const temporaryPath = this.temporaryPathFor(storageKey);
     const targetPath = this.pathFor(storageKey);
-    const kind = await pathKind(targetPath);
-    if (kind === null) return false;
-    if (kind === "symlink") {
-      throw new Error("Attachment blob cannot be a symbolic link");
+    const presence = await this.inspect(storageKey);
+    let deleted = false;
+    if (presence.temporary) {
+      deleted = (await this.unlinkIfPresent(temporaryPath)) || deleted;
     }
-    if (kind !== "file") throw new Error("Attachment blob is not a file");
-
-    try {
-      await unlink(targetPath);
-      return true;
-    } catch (error) {
-      if (hasCode(error, "ENOENT")) return false;
-      throw error;
+    if (presence.live) {
+      deleted = (await this.unlinkIfPresent(targetPath)) || deleted;
     }
+    return deleted;
   }
 
   private assertStorageKey(storageKey: string): void {
@@ -203,6 +321,31 @@ export class AttachmentBlobStore {
 
   private pathFor(storageKey: string): string {
     return join(this.root, storageKey);
+  }
+
+  private temporaryPathFor(storageKey: string): string {
+    return join(this.root, `.tmp-${storageKey}`);
+  }
+
+  private async inspectBlobPath(path: string, label: string): Promise<boolean> {
+    const kind = await pathKind(path);
+    if (kind === null) return false;
+    if (kind === "symlink") {
+      throw new Error(`${label} cannot be a symbolic link`);
+    }
+    if (kind !== "file") throw new Error(`${label} is not a file`);
+    return true;
+  }
+
+  private async unlinkIfPresent(path: string): Promise<boolean> {
+    try {
+      await unlink(path);
+      await this.durability.syncDirectory(this.root);
+      return true;
+    } catch (error) {
+      if (hasCode(error, "ENOENT")) return false;
+      throw error;
+    }
   }
 
   private async ensurePrivateRoot(): Promise<void> {
@@ -225,6 +368,156 @@ export class AttachmentBlobStore {
     await chmod(this.root, ROOT_MODE);
   }
 }
+
+type InternalAttachmentBlobStore = {
+  withKey<T>(
+    storageKey: string,
+    operation: (lease: AttachmentBlobLease) => Promise<T>,
+  ): Promise<T>;
+};
+
+const blobStoreInternals = new WeakMap<
+  AttachmentBlobStore,
+  InternalAttachmentBlobStore
+>();
+
+function withAttachmentBlobKey<T>(
+  store: AttachmentBlobStore,
+  storageKey: string,
+  operation: (lease: AttachmentBlobLease) => Promise<T>,
+): Promise<T> {
+  const internal =
+    blobStoreInternals.get(store) ??
+    (store as unknown as InternalAttachmentBlobStore);
+  return internal.withKey(storageKey, operation);
+}
+
+type AttachmentUploadMetadataPort = Pick<
+  AttachmentStore,
+  "cancel" | "withUploadingLease"
+>;
+
+type AttachmentUploadDeadline = {
+  signal: AbortSignal;
+  bound(expiresAt: Date): void;
+};
+
+/** Composition-only upload flow. It never returns a raw filesystem mutation capability. */
+export async function executeFencedAttachmentUpload(options: {
+  metadata: AttachmentUploadMetadataPort;
+  blobs: AttachmentBlobStore;
+  actorUserId: string;
+  channelId: string;
+  source: AttachmentSource;
+  reservation: AttachmentReservation;
+  input: Omit<FinalizeAttachmentInput, "sha256" | "size">;
+  body: ReadableStream<Uint8Array>;
+  deadline: AttachmentUploadDeadline;
+  beforeRead(): void;
+}): Promise<AttachmentRecord | null> {
+  let operationFailed = false;
+  return withAttachmentBlobKey(
+    options.blobs,
+    options.reservation.storageKey,
+    async (blob) => {
+      options.deadline.signal.throwIfAborted();
+      try {
+        const guarded = await options.metadata.withUploadingLease(
+          options.actorUserId,
+          options.channelId,
+          options.reservation,
+          async (lease) => {
+            options.deadline.bound(lease.expiresAt);
+            options.deadline.signal.throwIfAborted();
+            try {
+              const stored = await blob.writeTemporary(options.body, {
+                signal: options.deadline.signal,
+                onReaderAcquired: options.beforeRead,
+              });
+              options.deadline.signal.throwIfAborted();
+              const attachment = await lease.finalize(options.source, {
+                ...options.input,
+                size: stored.size,
+                sha256: stored.sha256,
+              });
+              if (!attachment) {
+                throw new Error("Attachment upload lease changed");
+              }
+              options.deadline.signal.throwIfAborted();
+              await blob.publish();
+              options.deadline.signal.throwIfAborted();
+              if (!(await lease.markLive())) {
+                throw new Error("Attachment upload lease expired");
+              }
+              return attachment;
+            } catch (error) {
+              operationFailed = true;
+              await blob.delete().catch(() => false);
+              throw error;
+            }
+          },
+        );
+        return guarded.acquired ? guarded.value : null;
+      } catch (error) {
+        if (operationFailed) {
+          await options.metadata
+            .cancel(options.actorUserId, options.channelId, options.reservation)
+            .catch(() => false);
+        }
+        throw error;
+      }
+    },
+  );
+}
+
+async function executeAttachmentBlobClaim(
+  blobs: AttachmentBlobStore,
+  lifecycle: AttachmentLifecycleStore,
+  claim: AttachmentLifecycleClaim,
+) {
+  return withAttachmentBlobKey(blobs, claim.storageKey, async (blob) =>
+    lifecycle.withClaim(claim, async (lease) => {
+      if (claim.state === "publishing") {
+        const presence = await blob.inspect();
+        if (presence.temporary && !presence.live) {
+          await blob.publish();
+        } else if (!presence.live || presence.temporary) {
+          throw new Error("Attachment publishing state is inconsistent");
+        }
+        return lease.completePublishing();
+      }
+
+      await blob.delete();
+      return lease.completeDeletion();
+    }),
+  );
+}
+
+/** Opaque composition port: lifecycle workers can run claims but cannot obtain a raw blob lease. */
+export type AttachmentBlobMaintenance = {
+  execute(
+    lifecycle: AttachmentLifecycleStore,
+    claim: AttachmentLifecycleClaim,
+  ): ReturnType<typeof executeAttachmentBlobClaim>;
+};
+
+export function createAttachmentBlobMaintenance(
+  blobs: AttachmentBlobStore,
+): AttachmentBlobMaintenance {
+  return Object.freeze({
+    execute: (lifecycle, claim) =>
+      executeAttachmentBlobClaim(blobs, lifecycle, claim),
+  });
+}
+
+type UnsafePublicBlobMutation = Extract<
+  keyof AttachmentBlobStore,
+  "delete" | "inspect" | "publish" | "withKey" | "writeTemporary"
+>;
+const attachmentBlobStoreHasNoPublicMutation: UnsafePublicBlobMutation extends never
+  ? true
+  : false = true;
+void attachmentBlobStoreHasNoPublicMutation;
 
 async function readWithAbort(
   reader: ReadableStreamDefaultReader<Uint8Array>,

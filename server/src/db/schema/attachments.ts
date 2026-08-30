@@ -5,6 +5,7 @@ import {
   check,
   foreignKey,
   index,
+  integer,
   pgEnum,
   pgTable,
   text,
@@ -20,6 +21,58 @@ export const attachmentSource = pgEnum("attachment_source", [
   "tool_generated",
   "google_export",
 ]);
+
+export const attachmentBlobState = pgEnum("attachment_blob_state", [
+  "uploading",
+  "publishing",
+  "live",
+  "deleting",
+]);
+
+/** Durable inventory and lease state for every temporary or published attachment blob. */
+export const attachmentBlobs = pgTable(
+  "attachment_blobs",
+  {
+    storageKey: varchar("storage_key", { length: 1024 }).primaryKey(),
+    state: attachmentBlobState("state").notNull(),
+    ownerUserId: text("owner_user_id").notNull(),
+    channelId: text("channel_id").notNull(),
+    leaseToken: uuid("lease_token"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      name: "attachment_blobs_channel_membership_fk",
+      columns: [table.channelId, table.ownerUserId],
+      foreignColumns: [channelMemberships.channelId, channelMemberships.userId],
+    }),
+    check("attachment_blobs_attempts_check", sql`${table.attempts} >= 0`),
+    check(
+      "attachment_blobs_lease_pair_check",
+      sql`(${table.leaseToken} IS NULL) = (${table.leaseExpiresAt} IS NULL)`,
+    ),
+    check(
+      "attachment_blobs_storage_key_length_check",
+      sql`char_length(${table.storageKey}) BETWEEN 1 AND 1024`,
+    ),
+    index("attachment_blobs_due_lease_idx").on(
+      table.state,
+      table.nextAttemptAt,
+      table.leaseExpiresAt,
+      table.storageKey,
+    ),
+  ],
+);
 
 /**
  * Content-free attachment metadata.
@@ -49,6 +102,11 @@ export const attachments = pgTable(
       name: "attachments_channel_membership_fk",
       columns: [table.channelId, table.ownerUserId],
       foreignColumns: [channelMemberships.channelId, channelMemberships.userId],
+    }),
+    foreignKey({
+      name: "attachments_storage_key_attachment_blobs_storage_key_fk",
+      columns: [table.storageKey],
+      foreignColumns: [attachmentBlobs.storageKey],
     }),
     check("attachments_size_check", sql`${table.size} > 0`),
     check("attachments_sha256_check", sql`${table.sha256} ~ '^[0-9a-f]{64}$'`),

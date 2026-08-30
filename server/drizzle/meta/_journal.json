@@ -176,6 +176,13 @@
       "when": 1788119872773,
       "tag": "0024_nice_frightful_four",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1788122945344,
+      "tag": "0025_attachment_blob_inventory",
+      "breakpoints": true
     }
   ]
 }
