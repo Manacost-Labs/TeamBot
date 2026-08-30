@@ -4,23 +4,28 @@ export type ConversationUiState = {
   draft: Segment[];
   scrollTop: number | null;
   distanceFromEnd: number | null;
-  historyLimit: number;
+  /** Null follows the live tail; an id pins the first mounted row while browsing older history. */
+  historyStartId: string | null;
+  historyWindowSize: number;
 };
 
 type ConversationStateCacheOptions = {
   maxEntries?: number;
   historyPageSize?: number;
+  historyWindowMax?: number;
 };
 
 const DEFAULT_MAX_ENTRIES = 12;
-const DEFAULT_HISTORY_PAGE_SIZE = 60;
+export const TRANSCRIPT_HISTORY_PAGE_SIZE = 60;
+export const TRANSCRIPT_HISTORY_WINDOW_MAX = 180;
 
 function initialState(historyPageSize: number): ConversationUiState {
   return {
     draft: [],
     scrollTop: null,
     distanceFromEnd: null,
-    historyLimit: historyPageSize,
+    historyStartId: null,
+    historyWindowSize: historyPageSize,
   };
 }
 
@@ -29,12 +34,17 @@ export class ConversationStateCache {
   private readonly states = new Map<string, ConversationUiState>();
   private readonly maxEntries: number;
   private readonly historyPageSize: number;
+  private readonly historyWindowMax: number;
 
   constructor(options: ConversationStateCacheOptions = {}) {
     this.maxEntries = Math.max(1, options.maxEntries ?? DEFAULT_MAX_ENTRIES);
     this.historyPageSize = Math.max(
       1,
-      Math.floor(options.historyPageSize ?? DEFAULT_HISTORY_PAGE_SIZE),
+      finiteInteger(options.historyPageSize, TRANSCRIPT_HISTORY_PAGE_SIZE),
+    );
+    this.historyWindowMax = Math.max(
+      this.historyPageSize,
+      finiteInteger(options.historyWindowMax, TRANSCRIPT_HISTORY_WINDOW_MAX),
     );
   }
 
@@ -68,9 +78,19 @@ export class ConversationStateCache {
     });
   }
 
-  setHistoryLimit(channelId: string, historyLimit: number): void {
+  setHistoryWindow(
+    channelId: string,
+    { startId, size }: { startId: string | null; size: number },
+  ): void {
     this.update(channelId, {
-      historyLimit: Math.max(this.historyPageSize, Math.floor(historyLimit)),
+      historyStartId: startId,
+      historyWindowSize: Math.min(
+        this.historyWindowMax,
+        Math.max(
+          this.historyPageSize,
+          finiteInteger(size, this.historyPageSize),
+        ),
+      ),
     });
   }
 
@@ -99,6 +119,12 @@ function cloneState(state: ConversationUiState): ConversationUiState {
   return { ...state, draft: [...state.draft] };
 }
 
+function finiteInteger(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isFinite(value)
+    ? Math.floor(value)
+    : fallback;
+}
+
 export function createConversationStateCache(
   options: ConversationStateCacheOptions = {},
 ): ConversationStateCache {
@@ -107,14 +133,11 @@ export function createConversationStateCache(
 
 export const conversationStateCache = createConversationStateCache();
 
-/** Preserve the first previously visible pixel when prepending older transcript rows. */
+/** Preserve one retained row's screen position while rows are prepended and newer rows are dropped. */
 export function anchoredScrollTop(
   previousScrollTop: number,
-  previousScrollHeight: number,
-  nextScrollHeight: number,
+  previousAnchorTop: number,
+  nextAnchorTop: number,
 ): number {
-  return Math.max(
-    0,
-    previousScrollTop + Math.max(0, nextScrollHeight - previousScrollHeight),
-  );
+  return Math.max(0, previousScrollTop + nextAnchorTop - previousAnchorTop);
 }

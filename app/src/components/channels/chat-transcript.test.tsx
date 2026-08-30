@@ -1,11 +1,15 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import type { Message } from "@ag-ui/core";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
+import { conversationStateCache } from "@/lib/channels/conversation-state";
 import { ChatTranscript } from "./chat-transcript";
 
 GlobalRegistrator.register();
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  conversationStateCache.clear();
+});
 afterAll(() => GlobalRegistrator.unregister());
 
 class ResizeObserverStub {
@@ -91,5 +95,83 @@ describe("transcript windowing", () => {
     );
 
     expect(view.queryByText("private trace")).toBeNull();
+  });
+
+  test("keeps at most 180 rows mounted while navigating a 500-message history", () => {
+    const renders = new Map<string, number>();
+    const view = render(
+      <ChatTranscript
+        conversationKey="long-history"
+        messages={messages(500)}
+        onRowRender={(id) => renders.set(id, (renders.get(id) ?? 0) + 1)}
+      />,
+    );
+    const mountedRows = () =>
+      view.container.querySelectorAll("[data-transcript-window-row]");
+    const showPrevious = () =>
+      view.getByRole("button", { name: /Показать предыдущие сообщения/ });
+
+    expect(mountedRows()).toHaveLength(60);
+    fireEvent.click(showPrevious());
+    expect(mountedRows()).toHaveLength(120);
+    fireEvent.click(showPrevious());
+    expect(mountedRows()).toHaveLength(180);
+    expect(renders.get("message-380")).toBe(1);
+
+    const viewport = view.container.querySelector<HTMLElement>(
+      '[data-slot="message-scroller-viewport"]',
+    );
+    const retainedAnchor = mountedRows()[0] as HTMLElement;
+    let anchorMeasurement = 0;
+    retainedAnchor.getBoundingClientRect = () =>
+      ({
+        top: anchorMeasurement++ === 0 ? 100 : 700,
+      }) as DOMRect;
+    if (!viewport) throw new Error("Expected transcript viewport");
+    viewport.scrollTop = 300;
+
+    fireEvent.click(showPrevious());
+    expect(mountedRows()).toHaveLength(180);
+    expect(viewport.scrollTop).toBe(900);
+    expect(view.getByText("Answer 260")).toBeTruthy();
+    expect(view.queryByText("Answer 499")).toBeNull();
+    expect(renders.get("message-380")).toBe(1);
+
+    fireEvent.click(
+      view.getByRole("button", {
+        name: /Вернуться к последним сообщениям/,
+      }),
+    );
+    expect(mountedRows()).toHaveLength(60);
+    expect(view.getByText("Answer 499")).toBeTruthy();
+  });
+
+  test("pins the first expanded window while new messages arrive at the live tail", () => {
+    const view = render(
+      <ChatTranscript
+        conversationKey="pinned-history"
+        messages={messages(500)}
+      />,
+    );
+
+    fireEvent.click(
+      view.getByRole("button", { name: /Показать предыдущие сообщения/ }),
+    );
+    expect(view.getByText("Answer 380")).toBeTruthy();
+    expect(view.getByText("Answer 499")).toBeTruthy();
+
+    view.rerender(
+      <ChatTranscript
+        conversationKey="pinned-history"
+        messages={messages(501)}
+      />,
+    );
+
+    expect(view.getByText("Answer 380")).toBeTruthy();
+    expect(view.getByText("Answer 499")).toBeTruthy();
+    expect(view.queryByText("Answer 500")).toBeNull();
+    expect(
+      view.getByRole("button", { name: /Вернуться к последним сообщениям/ }),
+    ).toBeTruthy();
   });
 });

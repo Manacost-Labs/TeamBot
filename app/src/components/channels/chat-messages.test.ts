@@ -4,6 +4,7 @@ import {
   activityLabelFor,
   activitySnapshotFor,
   newestVisibleChatItems,
+  projectTranscriptWindow,
   toVisibleChatItems,
   type VisibleChatItem,
 } from "./chat-messages";
@@ -229,5 +230,94 @@ describe("newestVisibleChatItems", () => {
 
     expect(window.hidden).toBe(0);
     expect(window.items).toBe(items);
+  });
+});
+
+describe("projectTranscriptWindow", () => {
+  const longHistory = Array.from({ length: 500 }, (_, index) => ({
+    id: `message-${index}`,
+    role: "assistant" as const,
+    content: `Answer ${index}`,
+  }));
+
+  test("projects the newest 60 rows without truncating the source history", () => {
+    const window = projectTranscriptWindow(longHistory, { size: 60 });
+
+    expect(longHistory).toHaveLength(500);
+    expect(window.items).toHaveLength(60);
+    expect(window.items[0]?.id).toBe("message-440");
+    expect(window.items.at(-1)?.id).toBe("message-499");
+    expect(window.hiddenBefore).toBe(440);
+    expect(window.hiddenAfter).toBe(0);
+    expect(window.olderStartId).toBe("message-380");
+  });
+
+  test("shifts a fixed-size window older and stays pinned when the live tail grows", () => {
+    const tail = projectTranscriptWindow(longHistory, { size: 180 });
+    const older = projectTranscriptWindow(longHistory, {
+      size: 180,
+      startId: tail.olderStartId,
+    });
+    const withNewTail = projectTranscriptWindow(
+      [
+        ...longHistory,
+        { id: "message-500", role: "assistant", content: "Answer 500" },
+      ],
+      { size: 180, startId: tail.olderStartId },
+    );
+
+    expect(tail.items[0]?.id).toBe("message-320");
+    expect(tail.olderStartId).toBe("message-260");
+    expect(older.items).toHaveLength(180);
+    expect(older.items[0]?.id).toBe("message-260");
+    expect(older.items.at(-1)?.id).toBe("message-439");
+    expect(older.hiddenBefore).toBe(260);
+    expect(older.hiddenAfter).toBe(60);
+    expect(withNewTail.items.map((item) => item.id)).toEqual(
+      older.items.map((item) => item.id),
+    );
+    expect(withNewTail.hiddenAfter).toBe(61);
+  });
+
+  test("pairs a tool result from the tail and does not spend a row on reasoning", () => {
+    const toolCall = {
+      id: "tool-1",
+      type: "function" as const,
+      function: { name: "search", arguments: '{"query":"test"}' },
+    };
+    const window = projectTranscriptWindow(
+      [
+        {
+          id: "assistant",
+          role: "assistant",
+          content: "Checking",
+          toolCalls: [toolCall],
+        },
+        { id: "reasoning", role: "reasoning", content: "private trace" },
+        {
+          id: "tool-result",
+          role: "tool",
+          toolCallId: "tool-1",
+          content: "Found",
+        },
+      ] as Message[],
+      { size: 1 },
+    );
+
+    expect(window.items).toEqual([
+      { kind: "tool", id: "tool-1", toolCall, result: "Found" },
+    ]);
+    expect(window.hiddenBefore).toBe(1);
+  });
+
+  test("falls back to the live tail when a saved row no longer exists", () => {
+    const window = projectTranscriptWindow(longHistory, {
+      size: 60,
+      startId: "deleted-message",
+    });
+
+    expect(window.resolvedStartId).toBeNull();
+    expect(window.items[0]?.id).toBe("message-440");
+    expect(window.items.at(-1)?.id).toBe("message-499");
   });
 });

@@ -1,8 +1,8 @@
 import type { Message, ToolCall } from "@ag-ui/core";
 import {
+  type AgentRunState,
   agentRunStatusLabel,
   isAgentRunActive,
-  type AgentRunState,
 } from "@/lib/copilot/run-state";
 
 /**
@@ -23,6 +23,24 @@ export type VisibleChatItem =
 export type VisibleChatWindow = {
   items: readonly VisibleChatItem[];
   hidden: number;
+};
+
+export type TranscriptWindow = {
+  items: readonly Exclude<VisibleChatItem, { kind: "reasoning" }>[];
+  /** Renderable rows before this window. Reasoning and standalone tool results do not consume it. */
+  hiddenBefore: number;
+  /** Renderable rows after this window when the reader has navigated away from the live tail. */
+  hiddenAfter: number;
+  /** The first row of the next older page, or null once the beginning is visible. */
+  olderStartId: string | null;
+  /** Null means the requested cursor disappeared and the projection safely fell back to the tail. */
+  resolvedStartId: string | null;
+};
+
+type TranscriptWindowOptions = {
+  size: number;
+  startId?: string | null;
+  olderStep?: number;
 };
 
 export type ActivityStep = {
@@ -215,7 +233,8 @@ export function activitySnapshotFor(
   // The transcript is still the source of truth for the answer, while the explicit run state is
   // the source of truth for what is happening between messages. This prevents a long tool call or a
   // reconnect gap from looking idle just because no new message has arrived yet.
-  if (!run || (run.status === "completed" && run.startedAt === null)) return base;
+  if (!run || (run.status === "completed" && run.startedAt === null))
+    return base;
 
   const active = busy || isAgentRunActive(run.status);
   const explicitLabel = agentRunStatusLabel(run.status);
@@ -271,6 +290,136 @@ export function newestVisibleChatItems(
   };
 }
 
+/**
+ * Project a bounded transcript window from the newest message backwards.
+ *
+ * The agent keeps the complete `messages` array. This reader never slices or rewrites it; it walks
+ * from the durable tail so a tool result is observed before the assistant tool call it completes.
+ * Reasoning stays available to lifecycle/activity projections through `toVisibleChatItems`, but it
+ * does not consume a transcript row and is never returned here.
+ *
+ * A non-null `startId` pins an older window to a real row. New messages can then arrive at the tail
+ * without moving what the reader is looking at. Only the nearest `size - 1` newer rows are retained,
+ * so both the returned window and the scan's working set stay bounded.
+ */
+export function projectTranscriptWindow(
+  messages: ReadonlyArray<Readonly<Message>>,
+  { size, startId = null, olderStep = 60 }: TranscriptWindowOptions,
+): TranscriptWindow {
+  type TranscriptItem = Exclude<VisibleChatItem, { kind: "reasoning" }>;
+
+  const safeSize = Math.max(1, Math.floor(size));
+  const safeOlderStep = Math.max(1, Math.floor(olderStep));
+  const results = new Map<string, string | undefined>();
+  const tailNewestFirst: TranscriptItem[] = [];
+  const pinnedNewerNewestFirst: TranscriptItem[] = [];
+  const pinnedNewestFirst: TranscriptItem[] = [];
+  let foundPinnedStart = false;
+  let total = 0;
+  let newerThanPinned = 0;
+  let tailOlderSeen = 0;
+  let tailOlderStartId: string | null = null;
+  let pinnedOlderSeen = 0;
+  let pinnedOlderStartId: string | null = null;
+
+  const visit = (item: TranscriptItem) => {
+    total += 1;
+
+    if (tailNewestFirst.length < safeSize) {
+      tailNewestFirst.push(item);
+    } else if (tailOlderSeen < safeOlderStep) {
+      tailOlderSeen += 1;
+      tailOlderStartId = item.id;
+    }
+
+    if (startId === null) return;
+    if (!foundPinnedStart) {
+      if (item.id === startId) {
+        foundPinnedStart = true;
+        newerThanPinned = total - 1;
+        pinnedNewestFirst.push(...pinnedNewerNewestFirst, item);
+        return;
+      }
+      if (safeSize > 1) {
+        pinnedNewerNewestFirst.push(item);
+        if (pinnedNewerNewestFirst.length > safeSize - 1) {
+          pinnedNewerNewestFirst.shift();
+        }
+      }
+      return;
+    }
+    if (pinnedOlderSeen < safeOlderStep) {
+      pinnedOlderSeen += 1;
+      pinnedOlderStartId = item.id;
+    }
+  };
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message) continue;
+
+    if (isToolResult(message)) {
+      // Scanning backwards sees the latest result first. Preserve it if malformed history contains
+      // more than one result for the same call, matching the forward reader's last-result-wins rule.
+      if (!results.has(message.toolCallId)) {
+        results.set(message.toolCallId, message.content);
+      }
+      continue;
+    }
+
+    if (message.role === "assistant") {
+      const calls = message.toolCalls ?? [];
+      for (let callIndex = calls.length - 1; callIndex >= 0; callIndex -= 1) {
+        const toolCall = calls[callIndex];
+        if (!toolCall) continue;
+        visit({
+          kind: "tool",
+          id: toolCall.id,
+          toolCall,
+          ...(results.has(toolCall.id)
+            ? { result: results.get(toolCall.id) }
+            : {}),
+        });
+      }
+      if (message.content) {
+        visit({
+          kind: "text",
+          id: message.id,
+          role: "assistant",
+          text: message.content,
+        });
+      }
+      continue;
+    }
+
+    if (message.role !== "user") continue;
+    const text = userMessageText(message);
+    if (text) {
+      visit({ kind: "text", id: message.id, role: "user", text });
+    }
+  }
+
+  if (startId !== null && foundPinnedStart) {
+    const pinnedItems = [...pinnedNewestFirst].reverse();
+    return {
+      items: pinnedItems,
+      hiddenBefore: Math.max(0, total - newerThanPinned - 1),
+      hiddenAfter: Math.max(0, newerThanPinned - (pinnedItems.length - 1)),
+      olderStartId: pinnedOlderStartId,
+      resolvedStartId: startId,
+    };
+  }
+
+  const items = tailNewestFirst.reverse();
+  return {
+    items,
+    hiddenBefore: Math.max(0, total - items.length),
+    hiddenAfter: 0,
+    olderStartId: tailOlderStartId,
+    resolvedStartId: null,
+  };
+}
+
 /** A tool result, as it arrives, its own message, pointing back at the call it answers. */
 type ToolResultMessage = { role: "tool"; toolCallId: string; content?: string };
 
@@ -321,14 +470,18 @@ export function toVisibleChatItems(
 
     if (message.role !== "user") return [];
 
-    const text =
-      typeof message.content === "string"
-        ? message.content
-        : message.content
-            .filter((part) => part.type === "text")
-            .map((part) => part.text)
-            .join("\n");
+    const text = userMessageText(message);
 
     return text ? [{ kind: "text", id: message.id, role: "user", text }] : [];
   });
+}
+
+function userMessageText(message: Readonly<Message>): string {
+  if (message.role !== "user") return "";
+  return typeof message.content === "string"
+    ? message.content
+    : message.content
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("\n");
 }

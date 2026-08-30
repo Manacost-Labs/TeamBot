@@ -29,6 +29,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   anchoredScrollTop,
   conversationStateCache,
+  TRANSCRIPT_HISTORY_PAGE_SIZE,
+  TRANSCRIPT_HISTORY_WINDOW_MAX,
 } from "@/lib/channels/conversation-state";
 import {
   type AgentRunState,
@@ -37,11 +39,7 @@ import {
 import { markdownComponents } from "@/lib/markdown";
 import { readToolName } from "@/lib/plugins/tool-name";
 import { asText, forDisplay, REFUSAL_MARKER } from "@/lib/plugins/tool-result";
-import {
-  newestVisibleChatItems,
-  toVisibleChatItems,
-  type VisibleChatItem,
-} from "./chat-messages";
+import { projectTranscriptWindow } from "./chat-messages";
 import type { QueuedMessage } from "./composer";
 import { ToolRenderBoundary } from "./tool-boundary";
 import { ToolLine } from "./tool-line";
@@ -81,9 +79,11 @@ type ChatTranscriptProps = {
 /** One shared empty array, so a screen without a queue does not hand down a new one per render. */
 const EMPTY_QUEUE: readonly QueuedMessage[] = [];
 
-/** Enough context for an opened channel without mounting years of markdown and tool output. */
-const HISTORY_PAGE_SIZE = 60;
-type RenderedChatItem = Exclude<VisibleChatItem, { kind: "reasoning" }>;
+type HistoryWindowState = {
+  /** Null follows the live tail; an id pins the first mounted row while reading older history. */
+  startId: string | null;
+  size: number;
+};
 
 /**
  * Split a person's message into the skill they invoked and the rest of what they typed.
@@ -494,31 +494,34 @@ export function ChatTranscript({
   stopped,
   onRetry,
 }: ChatTranscriptProps) {
+  const [historyWindow, setHistoryWindow] = useState<HistoryWindowState>(() => {
+    const saved = conversationKey
+      ? conversationStateCache.get(conversationKey)
+      : null;
+    return {
+      startId: saved?.historyStartId ?? null,
+      size: saved?.historyWindowSize ?? TRANSCRIPT_HISTORY_PAGE_SIZE,
+    };
+  });
   /*
-   * NOT MEMOISED, AND THAT IS DELIBERATE. `useMemo` keyed on `messages` looks obviously right and
-   * silently broke the transcript: the agent hands back the SAME array and mutates it, so the
-   * dependency never changed, the cached items were kept forever and a reply never appeared. A Bot
-   * that answered looked like a Bot that had not.
-   *
-   * It was never the expensive part either. Rebuilding this list is a flatMap over messages; the
-   * cost was markdown parsing and chart SVGs, and those are skipped by the memoised children below,
-   * which is where the 25x came from. This runs per render and is not worth guarding.
+   * NOT MEMOISED, AND THAT IS DELIBERATE. The agent can mutate the same `messages` array while a
+   * streamed answer arrives, so an identity-keyed memo can freeze the transcript. The projection
+   * walks from the durable tail and only returns the mounted window; expensive markdown/tool rows
+   * below remain memoised on primitive props.
    */
-  const items = toVisibleChatItems(messages).filter(
-    (item): item is RenderedChatItem => item.kind !== "reasoning",
-  );
-  const [historyLimit, setHistoryLimit] = useState(() =>
-    conversationKey
-      ? conversationStateCache.get(conversationKey).historyLimit
-      : HISTORY_PAGE_SIZE,
-  );
-  const visible = newestVisibleChatItems(items, historyLimit);
+  const visible = projectTranscriptWindow(messages, {
+    size: historyWindow.size,
+    startId: historyWindow.startId,
+    olderStep: TRANSCRIPT_HISTORY_PAGE_SIZE,
+  });
   const viewportRef = useRef<HTMLDivElement>(null);
   const restoredScroll = useRef(false);
   const revealAnchor = useRef<{
-    scrollHeight: number;
+    element: HTMLElement;
+    top: number;
     scrollTop: number;
   } | null>(null);
+  const scrollToLiveTail = useRef(false);
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
@@ -526,7 +529,7 @@ export function ChatTranscript({
       !viewport ||
       restoredScroll.current ||
       restoring ||
-      items.length === 0 ||
+      visible.items.length === 0 ||
       !conversationKey
     )
       return;
@@ -541,32 +544,79 @@ export function ChatTranscript({
             );
     }
     restoredScroll.current = true;
-  }, [conversationKey, items.length, restoring]);
+  }, [conversationKey, restoring, visible.items.length]);
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
+    if (viewport && scrollToLiveTail.current) {
+      viewport.scrollTop = Math.max(
+        0,
+        viewport.scrollHeight - viewport.clientHeight,
+      );
+      scrollToLiveTail.current = false;
+      revealAnchor.current = null;
+      if (conversationKey) {
+        conversationStateCache.setScroll(conversationKey, {
+          scrollTop: viewport.scrollTop,
+          distanceFromEnd: 0,
+        });
+      }
+      return;
+    }
+
     const anchor = revealAnchor.current;
     if (!viewport || !anchor) return;
-    viewport.scrollTop = anchoredScrollTop(
-      anchor.scrollTop,
-      anchor.scrollHeight,
-      viewport.scrollHeight,
-    );
+    if (anchor.element.isConnected) {
+      viewport.scrollTop = anchoredScrollTop(
+        anchor.scrollTop,
+        anchor.top,
+        anchor.element.getBoundingClientRect().top,
+      );
+    }
     revealAnchor.current = null;
   });
 
-  const revealOlder = () => {
+  const rememberHistoryWindow = (next: HistoryWindowState) => {
+    if (conversationKey) {
+      conversationStateCache.setHistoryWindow(conversationKey, next);
+    }
+    setHistoryWindow(next);
+  };
+
+  const rememberVisibleAnchor = () => {
     const viewport = viewportRef.current;
-    if (viewport) {
+    const element = viewport?.querySelector<HTMLElement>(
+      "[data-transcript-window-row]",
+    );
+    if (viewport && element) {
       revealAnchor.current = {
-        scrollHeight: viewport.scrollHeight,
+        element,
+        top: element.getBoundingClientRect().top,
         scrollTop: viewport.scrollTop,
       };
     }
-    const next = historyLimit + HISTORY_PAGE_SIZE;
-    if (conversationKey)
-      conversationStateCache.setHistoryLimit(conversationKey, next);
-    setHistoryLimit(next);
+  };
+
+  const revealOlder = () => {
+    rememberVisibleAnchor();
+
+    if (visible.olderStartId) {
+      rememberHistoryWindow({
+        startId: visible.olderStartId,
+        size: Math.min(
+          TRANSCRIPT_HISTORY_WINDOW_MAX,
+          historyWindow.size + TRANSCRIPT_HISTORY_PAGE_SIZE,
+        ),
+      });
+    }
+  };
+
+  const returnToLatest = () => {
+    scrollToLiveTail.current = true;
+    rememberHistoryWindow({
+      startId: null,
+      size: TRANSCRIPT_HISTORY_PAGE_SIZE,
+    });
   };
 
   return (
@@ -600,21 +650,27 @@ export function ChatTranscript({
                * chart SVGs — and that is what is skipped.
                */}
               {/* Instead of the rows, never alongside them: one real message and this is a lie. */}
-              {items.length === 0 && restoring ? <RestoringTranscript /> : null}
-              {visible.hidden > 0 ? (
+              {visible.items.length === 0 && restoring ? (
+                <RestoringTranscript />
+              ) : null}
+              {visible.hiddenBefore > 0 ? (
                 <div className="flex justify-center pb-6">
                   <button
                     className="rounded-full border border-border bg-background px-4 py-2 text-muted-foreground text-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                     onClick={revealOlder}
                     type="button"
                   >
-                    Показать предыдущие сообщения ({visible.hidden})
+                    Показать предыдущие сообщения ({visible.hiddenBefore})
                   </button>
                 </div>
               ) : null}
               {visible.items.map((item, index) =>
                 item.kind === "tool" ? (
-                  <MessageScrollerItem key={item.id} messageId={item.id}>
+                  <MessageScrollerItem
+                    data-transcript-window-row=""
+                    key={item.id}
+                    messageId={item.id}
+                  >
                     <TranscriptToolCall
                       args={item.toolCall.function.arguments}
                       id={item.id}
@@ -624,8 +680,12 @@ export function ChatTranscript({
                       toolCallId={item.toolCall.id}
                     />
                   </MessageScrollerItem>
-                ) : item.kind === "reasoning" ? null : (
-                  <MessageScrollerItem key={item.id} messageId={item.id}>
+                ) : (
+                  <MessageScrollerItem
+                    data-transcript-window-row=""
+                    key={item.id}
+                    messageId={item.id}
+                  >
                     <TranscriptMessage
                       commandNames={commandNames}
                       id={item.id}
@@ -633,6 +693,7 @@ export function ChatTranscript({
                       role={item.role}
                       streaming={
                         busy &&
+                        visible.hiddenAfter === 0 &&
                         item.role === "assistant" &&
                         index === visible.items.length - 1
                       }
@@ -641,6 +702,17 @@ export function ChatTranscript({
                   </MessageScrollerItem>
                 ),
               )}
+              {visible.hiddenAfter > 0 ? (
+                <div className="flex justify-center py-2">
+                  <button
+                    className="rounded-full border border-border bg-background px-4 py-2 text-muted-foreground text-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                    onClick={returnToLatest}
+                    type="button"
+                  >
+                    Вернуться к последним сообщениям ({visible.hiddenAfter})
+                  </button>
+                </div>
+              ) : null}
               {busy ? (
                 <p
                   className="flex items-center gap-2 text-muted-foreground text-sm"
