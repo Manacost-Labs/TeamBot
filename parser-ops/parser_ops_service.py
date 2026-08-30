@@ -554,15 +554,18 @@ def validate_workspace(mode: Any, test_paths: Any = None) -> dict[str, Any]:
 
 def _require_publishable(head: str) -> list[str]:
     _git("fetch", "--quiet", "origin", "main", timeout=180)
-    if subprocess.run(
+    origin_main = _git("rev-parse", "origin/main")
+    already_pushed = origin_main == head
+    if not already_pushed and subprocess.run(
         ["git", "merge-base", "--is-ancestor", "origin/main", head],
         cwd=WORKSPACE,
         check=False,
     ).returncode != 0:
         raise Refused("origin/main advanced; rebase the repair and validate the new commit.")
+    base = _git("rev-parse", f"{head}^") if already_pushed else origin_main
     changed = [
         path
-        for path in _git("diff", "--name-only", "origin/main..HEAD").splitlines()
+        for path in _git("diff", "--name-only", f"{base}..{head}").splitlines()
         if path
     ]
     if not changed:
@@ -587,8 +590,16 @@ def _deploy(commit: str) -> str:
     return _run(["sudo", "-n", DEPLOY_HELPER, commit], timeout=45 * 60)
 
 
+def _git_patch(old_commit: str, failed_commit: str) -> str:
+    """Return an inverse binary patch without stripping its required final newline."""
+    return _run(
+        ["git", "diff", "--binary", failed_commit, old_commit],
+        timeout=180,
+    )
+
+
 def _revert_and_deploy(old_commit: str, failed_commit: str, reason: str) -> dict[str, Any]:
-    inverse = _git("diff", "--binary", failed_commit, old_commit, timeout=180)
+    inverse = _git_patch(old_commit, failed_commit)
     _run(["git", "apply", "--index"], input_text=inverse, timeout=180)
     _run(
         ["git", "commit", "-m", "revert: restore parser after failed verification"],
@@ -613,11 +624,14 @@ def publish_and_verify(source_ids: Any, summary: Any) -> dict[str, Any]:
     with MUTATION_LOCK:
         head = _require_clean_candidate()
         changed = _require_publishable(head)
-        old_commit = _git("rev-parse", "origin/main")
-        pushed = False
+        origin_main = _git("rev-parse", "origin/main")
+        already_pushed = origin_main == head
+        old_commit = _git("rev-parse", f"{head}^") if already_pushed else origin_main
+        pushed = already_pushed
         try:
-            _run(["git", "push", "origin", "HEAD:main"], timeout=300)
-            pushed = True
+            if not already_pushed:
+                _run(["git", "push", "origin", "HEAD:main"], timeout=300)
+                pushed = True
             deploy_output = _deploy(head)
             refresh = retry_sources(ids, f"Post-deploy verification: {summary}")
             results = refresh.get("results")

@@ -152,11 +152,8 @@ class ParserOpsValidationTest(unittest.TestCase):
     def test_revert_applies_inverse_patch_then_publishes_exact_revert(self) -> None:
         inverse = "diff --git a/app/a.py b/app/a.py\n"
         with (
-            patch.object(
-                service,
-                "_git",
-                side_effect=[inverse, "c" * 40],
-            ),
+            patch.object(service, "_git_patch", return_value=inverse),
+            patch.object(service, "_git", return_value="c" * 40),
             patch.object(service, "_run", return_value="") as run,
             patch.object(service, "_deploy", return_value="deployed") as deploy,
         ):
@@ -173,6 +170,35 @@ class ParserOpsValidationTest(unittest.TestCase):
             ]
         )
         deploy.assert_called_once_with("c" * 40)
+
+    def test_publish_resumes_an_already_pushed_validated_commit(self) -> None:
+        head = "a" * 40
+        with (
+            patch.object(service, "_source_ids", return_value=["source"]),
+            patch.object(service, "_require_clean_candidate", return_value=head),
+            patch.object(service, "_require_publishable", return_value=["app/source.py"]),
+            patch.object(service, "_git", side_effect=[head, "b" * 40]),
+            patch.object(service, "_run") as run,
+            patch.object(service, "_deploy", return_value="deployed") as deploy,
+            patch.object(
+                service,
+                "retry_sources",
+                return_value={
+                    "results": [
+                        {"sourceId": "source", "outcome": "fresh_published"}
+                    ]
+                },
+            ),
+            patch.object(
+                service,
+                "audit_all_sources",
+                return_value={"health": {"hard_failed_sources": []}},
+            ),
+        ):
+            result = service.publish_and_verify(["source"], "resume repair")
+        self.assertTrue(result["published"])
+        deploy.assert_called_once_with(head)
+        run.assert_not_called()
 
 
 if __name__ == "__main__":
