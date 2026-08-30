@@ -6,6 +6,7 @@ import {
   classifyTool,
   customUrlRefusal,
   hostAdmissible,
+  missingToolScopes,
   resolveServerUrl,
   serverCredentialKind,
 } from "../src/plugins/catalogue";
@@ -167,28 +168,74 @@ describe("Google Drive", () => {
     expect(resolveServerUrl("google-drive")?.url).toBe(
       "https://www.googleapis.com/drive/v3",
     );
-    expect(drive?.transport).toBe("google-drive-rest");
+    expect(drive?.transport).toBe("google-workspace-rest");
   });
 
   test("is reached as the person asking, not as the deployment", () => {
     expect(drive?.auth.kind).toBe("user-oauth");
   });
 
-  test("asks only to read", () => {
-    // K1 answers questions and writes nothing. A wider scope would be granted by every person who
-    // connects and used by nothing, which is the kind of permission nobody remembers agreeing to.
+  test("uses one Google consent for Drive reads and governed Docs and Sheets writes", () => {
+    // Drive itself stays read-only; document and spreadsheet writes use their product scopes.
     expect(drive?.auth.kind === "user-oauth" ? drive.auth.scopes : []).toEqual([
       "https://www.googleapis.com/auth/drive.readonly",
+      "https://www.googleapis.com/auth/documents",
+      "https://www.googleapis.com/auth/spreadsheets",
     ]);
+    expect(
+      drive?.auth.kind === "user-oauth"
+        ? drive.auth.authorizationParams?.include_granted_scopes
+        : undefined,
+    ).toBe("true");
   });
 
-  test("still calls its writes writes, and lets Google be the one to refuse them", () => {
-    // The read-only scope means these fail at the vendor. They stay classified as writes anyway, so
-    // a boundary written about writes keeps covering them if the scope ever widens.
+  test("classifies every Google mutation as a write", () => {
     expect(classifyTool(drive, "create_file", true)).toBe("write");
     expect(classifyTool(drive, "copy_file", true)).toBe("write");
     expect(classifyTool(drive, "search_files", true)).toBe("read");
     expect(classifyTool(drive, "read_file_content", true)).toBe("read");
+    expect(classifyTool(drive, "read_google_document", true)).toBe("read");
+    expect(classifyTool(drive, "read_google_sheet_range", true)).toBe("read");
+    expect(classifyTool(drive, "create_google_doc", true)).toBe("write");
+    expect(classifyTool(drive, "append_google_sheet_rows", true)).toBe("write");
+  });
+
+  test("requires old connections to be renewed before new product scopes are used", () => {
+    expect(
+      missingToolScopes(
+        drive,
+        "read_google_document",
+        "https://www.googleapis.com/auth/drive.readonly",
+      ),
+    ).toEqual(["https://www.googleapis.com/auth/documents"]);
+    expect(
+      missingToolScopes(
+        drive,
+        "read_google_sheet_range",
+        "https://www.googleapis.com/auth/drive.readonly",
+      ),
+    ).toEqual(["https://www.googleapis.com/auth/spreadsheets"]);
+    expect(
+      missingToolScopes(
+        drive,
+        "create_google_doc",
+        "https://www.googleapis.com/auth/drive.readonly",
+      ),
+    ).toEqual(["https://www.googleapis.com/auth/documents"]);
+    expect(
+      missingToolScopes(
+        drive,
+        "create_google_doc",
+        "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/documents",
+      ),
+    ).toEqual([]);
+    expect(
+      missingToolScopes(
+        drive,
+        "append_google_sheet_rows",
+        "https://www.googleapis.com/auth/drive.readonly",
+      ),
+    ).toEqual(["https://www.googleapis.com/auth/spreadsheets"]);
   });
 });
 

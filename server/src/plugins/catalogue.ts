@@ -121,6 +121,12 @@ export type CatalogueEntry = {
    */
   writeTools: readonly string[];
   /**
+   * Extra OAuth scopes required by individual tools after a connector gains new capabilities.
+   * Stored grants created before a scope was requested fail with a reconnect instruction instead of
+   * reaching the vendor and looking like a broken tool. Absent means the entry-level scopes suffice.
+   */
+  requiredToolScopes?: Readonly<Record<string, readonly string[]>>;
+  /**
    * Which protocol reaches this vendor. Absent means MCP, which is what every entry was.
    *
    * A field rather than an inference, because the answer is not derivable from the host: Google
@@ -153,9 +159,9 @@ export type CatalogueEntry = {
 export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
   {
     key: "google-drive",
-    title: "Google Drive",
+    title: "Google Workspace",
     vendor: "Google",
-    summary: "Files in the Drive of whoever is asking.",
+    summary: "Drive files, Docs and Sheets of whoever is asking.",
     /*
      * Google publishes one MCP server per Workspace product, each on its own host: Gmail, Docs,
      * Sheets, Slides, Calendar, Chat and People have their own. Drive is here because it is the one
@@ -177,7 +183,7 @@ export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
      */
     host: "https://www.googleapis.com",
     path: "/drive/v3",
-    transport: "google-drive-rest",
+    transport: "google-workspace-rest",
     /*
      * The first vendor here that cannot be reached with a token an administrator pastes. Google
      * issues no such token: access is an authorization-code grant belonging to a person. That is
@@ -189,8 +195,16 @@ export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
       authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth",
       tokenUrl: "https://oauth2.googleapis.com/token",
       revokeUrl: "https://oauth2.googleapis.com/revoke",
-      // Read-only, because nothing in this slice writes to anybody's Drive.
-      scopes: Object.freeze(["https://www.googleapis.com/auth/drive.readonly"]),
+      /*
+       * One per-person Google connection serves Drive, Docs and Sheets. Drive stays read-only;
+       * document and spreadsheet writes use their product-specific scopes instead of unrestricted
+       * Drive write access. Employee grants and the policy engine remain the action boundary.
+       */
+      scopes: Object.freeze([
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/documents",
+        "https://www.googleapis.com/auth/spreadsheets",
+      ]),
       /*
        * `offline` and `consent` are both load bearing FOR GOOGLE. Without `access_type=offline`
        * Google returns no refresh token; without `prompt=consent` a reconnect returns none either.
@@ -198,6 +212,7 @@ export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
        */
       authorizationParams: Object.freeze({
         access_type: "offline",
+        include_granted_scopes: "true",
         prompt: "consent",
       }),
     },
@@ -208,7 +223,59 @@ export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
      * written about writes covering them, so widening the scope later cannot quietly turn a write
      * into something the policy engine has never heard of.
      */
-    writeTools: Object.freeze(["create_file", "copy_file"]),
+    writeTools: Object.freeze([
+      "create_file",
+      "copy_file",
+      "create_google_doc",
+      "append_google_doc",
+      "replace_google_doc_range",
+      "create_google_spreadsheet",
+      "create_google_sheet_tab",
+      "append_google_sheet_rows",
+      "update_google_sheet_range",
+      "clear_google_sheet_range",
+    ]),
+    requiredToolScopes: Object.freeze({
+      read_google_document: Object.freeze([
+        "https://www.googleapis.com/auth/documents",
+      ]),
+      read_google_document_edit_map: Object.freeze([
+        "https://www.googleapis.com/auth/documents",
+      ]),
+      create_google_doc: Object.freeze([
+        "https://www.googleapis.com/auth/documents",
+      ]),
+      append_google_doc: Object.freeze([
+        "https://www.googleapis.com/auth/documents",
+      ]),
+      replace_google_doc_range: Object.freeze([
+        "https://www.googleapis.com/auth/documents",
+      ]),
+      get_google_sheet_metadata: Object.freeze([
+        "https://www.googleapis.com/auth/spreadsheets",
+      ]),
+      list_google_sheet_tabs: Object.freeze([
+        "https://www.googleapis.com/auth/spreadsheets",
+      ]),
+      read_google_sheet_range: Object.freeze([
+        "https://www.googleapis.com/auth/spreadsheets",
+      ]),
+      create_google_spreadsheet: Object.freeze([
+        "https://www.googleapis.com/auth/spreadsheets",
+      ]),
+      create_google_sheet_tab: Object.freeze([
+        "https://www.googleapis.com/auth/spreadsheets",
+      ]),
+      append_google_sheet_rows: Object.freeze([
+        "https://www.googleapis.com/auth/spreadsheets",
+      ]),
+      update_google_sheet_range: Object.freeze([
+        "https://www.googleapis.com/auth/spreadsheets",
+      ]),
+      clear_google_sheet_range: Object.freeze([
+        "https://www.googleapis.com/auth/spreadsheets",
+      ]),
+    }),
     docsUrl:
       "https://developers.google.com/workspace/guides/configure-mcp-servers",
   },
@@ -422,6 +489,18 @@ export function classifyTool(
   if (!entry) return "write";
   if (!advertised) return "write";
   return entry.writeTools.includes(toolName) ? "write" : "read";
+}
+
+/** Scopes a stored per-person grant still lacks for one reviewed tool. */
+export function missingToolScopes(
+  entry: CatalogueEntry | null,
+  toolName: string,
+  grantedScope: string,
+): string[] {
+  const required = entry?.requiredToolScopes?.[toolName] ?? [];
+  if (required.length === 0) return [];
+  const granted = new Set(grantedScope.split(/\s+/).filter(Boolean));
+  return required.filter((scope) => !granted.has(scope));
 }
 
 /**

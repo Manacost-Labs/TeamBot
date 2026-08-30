@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { catalogueEntry } from "../src/plugins/catalogue";
 import { callTool, listTools } from "../src/plugins/google-drive-rest";
+import { callTool as workspaceCallTool } from "../src/plugins/google-workspace-rest";
 import { transportFor } from "../src/plugins/transport";
 
 /**
@@ -24,19 +25,48 @@ afterEach(() => {
 /** Records what was requested and answers with a fixed body. */
 function stubFetch(
   body: unknown,
-  init: { status?: number; text?: string } = {},
+  init: { status?: number; text?: string; contentLength?: number } = {},
 ) {
-  const calls: { url: string; authorization: string | null }[] = [];
+  const calls: {
+    url: string;
+    authorization: string | null;
+    redirect: RequestRedirect | undefined;
+    signal: AbortSignal | null;
+  }[] = [];
   globalThis.fetch = (async (input: string | URL, options?: RequestInit) => {
     calls.push({
       url: String(input),
       authorization: new Headers(options?.headers).get("authorization") ?? null,
+      redirect: options?.redirect,
+      signal: options?.signal ?? null,
     });
     const payload = init.text ?? JSON.stringify(body);
     return new Response(payload, {
       status: init.status ?? 200,
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...(init.contentLength === undefined
+          ? {}
+          : { "content-length": String(init.contentLength) }),
+      },
     });
+  }) as typeof fetch;
+  return calls;
+}
+
+/** Answers consecutive Drive calls with different bodies. */
+function stubFetchSequence(
+  responses: { body: unknown; contentType?: string }[],
+) {
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: string | URL) => {
+    calls.push(String(input));
+    const next = responses.shift();
+    if (!next) throw new Error("unexpected request");
+    return new Response(
+      typeof next.body === "string" ? next.body : JSON.stringify(next.body),
+      { headers: { "content-type": next.contentType ?? "application/json" } },
+    );
   }) as typeof fetch;
   return calls;
 }
@@ -44,9 +74,9 @@ function stubFetch(
 describe("the adapter is the transport the catalogue asks for", () => {
   test("the Drive entry resolves to this adapter, not to MCP", async () => {
     const entry = catalogueEntry("google-drive");
-    expect(entry?.transport).toBe("google-drive-rest");
-    // Identity, not shape: proves the registry wired this module rather than something MCP-shaped.
-    expect(transportFor(entry).callTool).toBe(callTool);
+    expect(entry?.transport).toBe("google-workspace-rest");
+    // The unified transport keeps this adapter behind the same stable catalogue key.
+    expect(transportFor(entry).callTool).toBe(workspaceCallTool);
   });
 
   test("a server with no catalogue entry falls back to MCP", () => {
@@ -64,6 +94,34 @@ describe("the adapter is the transport the catalogue asks for", () => {
       expect(result.text).not.toContain("is not a tool this connector");
     }
   });
+
+  test("advertises only bounded, schema-described capabilities", async () => {
+    const tools = await listTools(connection);
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "search_files",
+      "list_recent_files",
+      "list_folder",
+      "get_file_metadata",
+      "read_file_content",
+      "export_file",
+    ]);
+
+    for (const tool of tools) {
+      expect(tool.inputSchema.additionalProperties).toBe(false);
+    }
+    const search = tools.find((tool) => tool.name === "search_files");
+    expect(search?.inputSchema).toMatchObject({
+      anyOf: [
+        { required: ["query"] },
+        { required: ["keywords"] },
+        { required: ["name"] },
+        { required: ["mimeType"] },
+        { required: ["modifiedAfter"] },
+        { required: ["modifiedBefore"] },
+        { required: ["folderId"] },
+      ],
+    });
+  });
 });
 
 describe("a search becomes the right Drive request", () => {
@@ -77,9 +135,11 @@ describe("a search becomes the right Drive request", () => {
       "https://www.googleapis.com/drive/v3/files",
     );
     expect(url.searchParams.get("q")).toBe(
-      "name contains 'roadmap' or fullText contains 'roadmap'",
+      "(name contains 'roadmap' or fullText contains 'roadmap') and trashed = false",
     );
     expect(calls[0].authorization).toBe("Bearer test-token");
+    expect(calls[0].redirect).toBe("manual");
+    expect(calls[0].signal).toBeInstanceOf(AbortSignal);
   });
 
   /*
@@ -93,7 +153,7 @@ describe("a search becomes the right Drive request", () => {
 
     const q = new URL(calls[0].url).searchParams.get("q");
     expect(q).toBe(
-      "name contains 'don\\'t ship' or fullText contains 'don\\'t ship'",
+      "(name contains 'don\\'t ship' or fullText contains 'don\\'t ship') and trashed = false",
     );
   });
 
@@ -103,12 +163,75 @@ describe("a search becomes the right Drive request", () => {
 
     const url = new URL(calls[0].url);
     expect(url.searchParams.get("orderBy")).toBe("modifiedTime desc");
-    expect(url.searchParams.has("q")).toBe(false);
+    expect(url.searchParams.get("q")).toBe("trashed = false");
   });
 
   test("a search with nothing to search for is refused before the network", async () => {
     const calls = stubFetch({ files: [] });
     const result = await callTool(connection, "search_files", {});
+
+    expect(result.isError).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("scopes name, keywords, type, time and folder as independent clauses", async () => {
+    const calls = stubFetch({ files: [] });
+    await callTool(connection, "search_files", {
+      name: "Q3 plan",
+      keywords: "launch notes",
+      mimeType: "application/vnd.google-apps.document",
+      modifiedAfter: "2026-01-01T00:00:00Z",
+      modifiedBefore: "2026-08-01T00:00:00+00:00",
+      folderId: "folder_123-abc",
+    });
+
+    expect(new URL(calls[0].url).searchParams.get("q")).toBe(
+      "name contains 'Q3 plan' and fullText contains 'launch notes' and mimeType = 'application/vnd.google-apps.document' and modifiedTime > '2026-01-01T00:00:00Z' and modifiedTime < '2026-08-01T00:00:00+00:00' and 'folder_123-abc' in parents and trashed = false",
+    );
+  });
+
+  test("rejects oversized and malformed filters before the network", async () => {
+    const calls = stubFetch({ files: [] });
+    const tooLong = await callTool(connection, "search_files", {
+      keywords: "x".repeat(201),
+    });
+    const badDate = await callTool(connection, "search_files", {
+      modifiedAfter: "yesterday",
+    });
+    const invertedDates = await callTool(connection, "search_files", {
+      modifiedAfter: "2026-08-01T00:00:00Z",
+      modifiedBefore: "2026-01-01T00:00:00Z",
+    });
+    const badFolder = await callTool(connection, "search_files", {
+      folderId: "folder' or trashed = true",
+    });
+
+    expect(tooLong.isError).toBe(true);
+    expect(badDate.isError).toBe(true);
+    expect(invertedDates.isError).toBe(true);
+    expect(badFolder.isError).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("listing one folder", () => {
+  test("uses parent membership and excludes trashed children", async () => {
+    const calls = stubFetch({ files: [] });
+    await callTool(connection, "list_folder", { folderId: "folder-123" });
+
+    const url = new URL(calls[0].url);
+    expect(url.pathname).toBe("/drive/v3/files");
+    expect(url.searchParams.get("q")).toBe(
+      "'folder-123' in parents and trashed = false",
+    );
+    expect(url.searchParams.get("orderBy")).toBe("name_natural");
+  });
+
+  test("requires a canonical Drive id", async () => {
+    const calls = stubFetch({ files: [] });
+    const result = await callTool(connection, "list_folder", {
+      folderId: "../../token",
+    });
 
     expect(result.isError).toBe(true);
     expect(calls).toHaveLength(0);
@@ -154,22 +277,59 @@ describe("what a model is told", () => {
     expect(result.text).toContain("Nothing was found");
   });
 
-  test("Google's own refusal is passed through, not replaced", async () => {
+  test("a Google refusal is useful but never exposes its raw body", async () => {
     stubFetch(
       {},
       {
         status: 403,
         text: JSON.stringify({
-          error: { message: "Google Drive API has not been used in project 1" },
+          error: {
+            message:
+              "Google Drive API denied token ya29.secret and document contents",
+          },
         }),
       },
     );
 
     const result = await callTool(connection, "search_files", { query: "x" });
     expect(result.isError).toBe(true);
-    // The sentence naming what to fix, which is the whole reason the body is kept.
-    expect(result.text).toContain("has not been used in project 1");
-    expect(result.text).toContain("403");
+    expect(result.text).toContain("denied access");
+    expect(result.text).toContain("permissions");
+    expect(result.text).not.toContain("ya29.secret");
+    expect(result.text).not.toContain("document contents");
+  });
+
+  test("a network exception does not echo an unsafe error message", async () => {
+    globalThis.fetch = (async () => {
+      throw new Error("request failed with token ya29.network-secret");
+    }) as typeof fetch;
+
+    const result = await callTool(connection, "search_files", { query: "x" });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("could not be reached");
+    expect(result.text).not.toContain("ya29.network-secret");
+  });
+
+  test("metadata includes creation time, parents, owner and description", async () => {
+    stubFetch({
+      id: "doc1",
+      name: "Plan",
+      mimeType: "application/vnd.google-apps.document",
+      createdTime: "2026-01-01T00:00:00Z",
+      modifiedTime: "2026-02-01T00:00:00Z",
+      parents: ["folder1"],
+      owners: [{ emailAddress: "owner@example.com" }],
+      description: "Release plan",
+    });
+
+    const result = await callTool(connection, "get_file_metadata", {
+      fileId: "doc1",
+    });
+    expect(result.isError).toBe(false);
+    expect(result.text).toContain("created: 2026-01-01T00:00:00Z");
+    expect(result.text).toContain("parent ids: folder1");
+    expect(result.text).toContain("owner: owner@example.com");
+    expect(result.text).toContain("description: Release plan");
   });
 });
 
@@ -235,5 +395,81 @@ describe("reading a file asks Drive what it is first", () => {
 
     expect(result.isError).toBe(true);
     expect(calls).toHaveLength(0);
+  });
+
+  test("does not buffer a response declared larger than the tool limit", async () => {
+    const calls = stubFetch(
+      { id: "txt1", name: "notes.txt", mimeType: "text/plain" },
+      { contentLength: 100_000 },
+    );
+    const result = await callTool(connection, "read_file_content", {
+      fileId: "txt1",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("too large");
+    // Metadata itself was rejected before a content download could start.
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe("explicit text export", () => {
+  test("exports a Google Sheet as bounded CSV", async () => {
+    const calls = stubFetchSequence([
+      {
+        body: {
+          id: "sheet1",
+          name: "Budget",
+          mimeType: "application/vnd.google-apps.spreadsheet",
+        },
+      },
+      { body: "month,total\nJan,42", contentType: "text/csv" },
+    ]);
+
+    const result = await callTool(connection, "export_file", {
+      fileId: "sheet1",
+      mimeType: "text/csv",
+    });
+
+    expect(result.isError).toBe(false);
+    expect(result.text).toContain("Budget (text/csv)");
+    expect(result.text).toContain("Jan,42");
+    expect(calls).toHaveLength(2);
+    expect(new URL(calls[1]).searchParams.get("mimeType")).toBe("text/csv");
+  });
+
+  test("refuses binary and source-incompatible export formats", async () => {
+    const calls = stubFetchSequence([
+      {
+        body: {
+          id: "doc1",
+          name: "Plan",
+          mimeType: "application/vnd.google-apps.document",
+        },
+      },
+      {
+        body: {
+          id: "doc1",
+          name: "Plan",
+          mimeType: "application/vnd.google-apps.document",
+        },
+      },
+    ]);
+
+    const binary = await callTool(connection, "export_file", {
+      fileId: "doc1",
+      mimeType: "application/pdf",
+    });
+    const incompatible = await callTool(connection, "export_file", {
+      fileId: "doc1",
+      mimeType: "text/csv",
+    });
+
+    expect(binary.isError).toBe(true);
+    expect(binary.text).toContain("text-only");
+    expect(incompatible.isError).toBe(true);
+    expect(incompatible.text).toContain("cannot be exported as text/csv");
+    // Binary is rejected locally; the incompatible text format stops after metadata.
+    expect(calls).toHaveLength(1);
   });
 });

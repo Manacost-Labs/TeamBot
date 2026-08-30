@@ -3,7 +3,7 @@ import * as builtinHeartPulseOps from "./builtin-heartpulse-ops";
 import * as builtinParserOps from "./builtin-parser-ops";
 import * as builtinRoutines from "./builtin-routines";
 import type { CatalogueEntry } from "./catalogue";
-import * as driveRest from "./google-drive-rest";
+import * as googleWorkspaceRest from "./google-workspace-rest";
 import type { McpCallResult, McpTool } from "./mcp";
 import * as mcp from "./mcp";
 
@@ -104,7 +104,7 @@ export type VendorTransport = {
  */
 export type TransportKind =
   | "mcp"
-  | "google-drive-rest"
+  | "google-workspace-rest"
   | "builtin-attachments"
   | "builtin-routines"
   | "builtin-parser-ops"
@@ -112,7 +112,7 @@ export type TransportKind =
 
 const TRANSPORTS: Record<TransportKind, VendorTransport> = {
   mcp,
-  "google-drive-rest": driveRest,
+  "google-workspace-rest": googleWorkspaceRest,
   "builtin-attachments": builtinAttachments,
   "builtin-routines": builtinRoutines,
   "builtin-parser-ops": builtinParserOps,

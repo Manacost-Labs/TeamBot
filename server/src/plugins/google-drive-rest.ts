@@ -33,6 +33,15 @@ const REQUEST_TIMEOUT_MS = 30_000;
 /** How many files a listing returns before the model is reading a directory rather than an answer. */
 const PAGE_SIZE = 25;
 
+/** Search strings are human phrases, not a place for an unbounded Drive query language program. */
+const MAX_SEARCH_CHARS = 200;
+
+/** Drive ids are opaque but currently use only URL-safe base64-like characters. */
+const MAX_ID_CHARS = 256;
+
+/** Four UTF-8 bytes per result character, plus room for metadata around the content. */
+const MAX_RESPONSE_BYTES = MAX_RESULT_CHARS * 4 + 16_384;
+
 /**
  * The fields asked for, rather than Drive's default.
  *
@@ -41,7 +50,7 @@ const PAGE_SIZE = 25;
  * answer and an assertion about an answer.
  */
 const FILE_FIELDS =
-  "id,name,mimeType,modifiedTime,webViewLink,size,owners(emailAddress)";
+  "id,name,mimeType,createdTime,modifiedTime,webViewLink,size,parents,owners(emailAddress),description";
 
 /**
  * Google's editor formats, and the plain-text export each one has.
@@ -54,6 +63,35 @@ const EXPORTABLE: Record<string, string> = {
   "application/vnd.google-apps.spreadsheet": "text/csv",
   "application/vnd.google-apps.presentation": "text/plain",
 };
+
+/** Text formats that are both supported by Drive and safe to return through an MCP text result. */
+const TEXT_EXPORTS: Readonly<Record<string, readonly string[]>> = Object.freeze(
+  {
+    "application/vnd.google-apps.document": Object.freeze([
+      "text/plain",
+      "text/markdown",
+    ]),
+    "application/vnd.google-apps.spreadsheet": Object.freeze([
+      "text/csv",
+      "text/tab-separated-values",
+    ]),
+    "application/vnd.google-apps.presentation": Object.freeze(["text/plain"]),
+  },
+);
+
+const DRIVE_ID_SCHEMA = {
+  type: "string",
+  minLength: 1,
+  maxLength: MAX_ID_CHARS,
+  pattern: "^[A-Za-z0-9_-]+$",
+} as const;
+
+const SEARCH_TERM_SCHEMA = {
+  type: "string",
+  minLength: 1,
+  maxLength: MAX_SEARCH_CHARS,
+  pattern: "^[^\\u0000-\\u001F\\u007F]+$",
+} as const;
 
 /**
  * What this adapter offers, as the same shape a server would have answered `tools/list` with.
@@ -71,18 +109,80 @@ const TOOLS: readonly McpTool[] = Object.freeze([
       type: "object",
       properties: {
         query: {
+          ...SEARCH_TERM_SCHEMA,
+          description:
+            "Legacy combined search across the file name/title and indexed contents.",
+        },
+        name: {
+          ...SEARCH_TERM_SCHEMA,
+          description: "Text that the Drive filename/title must contain.",
+        },
+        keywords: {
+          ...SEARCH_TERM_SCHEMA,
+          description: "Keywords that the indexed file contents must contain.",
+        },
+        mimeType: {
           type: "string",
-          description: "What to look for, in file names and file contents.",
+          minLength: 3,
+          maxLength: 255,
+          pattern:
+            "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$",
+          description: "An exact MIME type to match.",
+        },
+        modifiedAfter: {
+          type: "string",
+          format: "date-time",
+          maxLength: 40,
+          description: "Only files modified after this RFC 3339 timestamp.",
+        },
+        modifiedBefore: {
+          type: "string",
+          format: "date-time",
+          maxLength: 40,
+          description: "Only files modified before this RFC 3339 timestamp.",
+        },
+        folderId: {
+          ...DRIVE_ID_SCHEMA,
+          description: "Only direct children of this Drive folder.",
         },
       },
-      required: ["query"],
+      anyOf: [
+        { required: ["query"] },
+        { required: ["keywords"] },
+        { required: ["name"] },
+        { required: ["mimeType"] },
+        { required: ["modifiedAfter"] },
+        { required: ["modifiedBefore"] },
+        { required: ["folderId"] },
+      ],
+      additionalProperties: false,
     },
   },
   {
     name: "list_recent_files",
     description:
       "List the files in your Google Drive that changed most recently, newest first.",
-    inputSchema: { type: "object", properties: {} },
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_folder",
+    description:
+      "List the direct children of one Google Drive folder, ordered by filename/title.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        folderId: {
+          ...DRIVE_ID_SCHEMA,
+          description: "The Drive folder id whose direct children to list.",
+        },
+      },
+      required: ["folderId"],
+      additionalProperties: false,
+    },
   },
   {
     name: "get_file_metadata",
@@ -91,9 +191,13 @@ const TOOLS: readonly McpTool[] = Object.freeze([
     inputSchema: {
       type: "object",
       properties: {
-        fileId: { type: "string", description: "The file's Drive id." },
+        fileId: {
+          ...DRIVE_ID_SCHEMA,
+          description: "The file's Drive id.",
+        },
       },
       required: ["fileId"],
+      additionalProperties: false,
     },
   },
   {
@@ -103,9 +207,39 @@ const TOOLS: readonly McpTool[] = Object.freeze([
     inputSchema: {
       type: "object",
       properties: {
-        fileId: { type: "string", description: "The file's Drive id." },
+        fileId: {
+          ...DRIVE_ID_SCHEMA,
+          description: "The file's Drive id.",
+        },
       },
       required: ["fileId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "export_file",
+    description:
+      "Export a native Google Doc, Sheet or Slide into a supported text format. Binary exports are not returned by this connector.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: {
+          ...DRIVE_ID_SCHEMA,
+          description: "The native Google Workspace file's Drive id.",
+        },
+        mimeType: {
+          type: "string",
+          enum: [
+            "text/plain",
+            "text/markdown",
+            "text/csv",
+            "text/tab-separated-values",
+          ],
+          description: "The requested text export MIME type.",
+        },
+      },
+      required: ["fileId", "mimeType"],
+      additionalProperties: false,
     },
   },
 ]);
@@ -153,6 +287,8 @@ async function request(
   try {
     response = await fetch(url, {
       headers: { authorization: `Bearer ${connection.token}` },
+      // A bearer token is only for Google's pinned API host, never a redirect target.
+      redirect: "manual",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
@@ -161,34 +297,93 @@ async function request(
       message:
         error instanceof Error && error.name === "TimeoutError"
           ? "Google Drive did not answer in time."
-          : `Google Drive could not be reached: ${error instanceof Error ? error.message : String(error)}`,
+          : "Google Drive could not be reached. Try again shortly.",
     };
   }
 
   if (!response.ok) {
-    /*
-     * Google's own sentence, kept. For a 403 this is where it names the API that is not enabled and
-     * gives the console URL, which is the difference between a fix and a guess. Dropping it once
-     * already cost a diagnosis.
-     */
-    const body = await response.text().catch(() => "");
-    let detail = "";
-    try {
-      const parsed = JSON.parse(body) as { error?: { message?: unknown } };
-      if (typeof parsed.error?.message === "string")
-        detail = parsed.error.message;
-    } catch {
-      // Not JSON. The status alone is still worth saying.
-    }
+    await response.body?.cancel().catch(() => undefined);
+    const message = (() => {
+      if (response.status === 401)
+        return "Google Drive authorization is no longer valid. Reconnect the Google account and try again.";
+      if (response.status === 403)
+        return "Google Drive denied access. Check that the Drive API is enabled and that the connected account has the required permissions.";
+      if (response.status === 404)
+        return "Google Drive could not find that file or folder, or the connected account cannot access it.";
+      if (response.status === 429)
+        return "Google Drive is temporarily rate-limiting requests. Try again shortly.";
+      if (response.status >= 500)
+        return "Google Drive is temporarily unavailable. Try again shortly.";
+      return `Google Drive refused this request (${response.status}).`;
+    })();
     return {
       ok: false,
-      message: detail
-        ? `Google Drive refused this request (${response.status}): ${detail}`
-        : `Google Drive refused this request (${response.status}).`,
+      message,
+    };
+  }
+
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
+    return {
+      ok: false,
+      message:
+        "Google Drive returned content that is too large for a conversation tool result.",
     };
   }
 
   return { ok: true, response };
+}
+
+type ReadResult<T> = { ok: true; value: T } | { ok: false; message: string };
+
+/** Read at most the amount that can become one bounded model result. */
+async function readResponseText(
+  response: Response,
+): Promise<ReadResult<string>> {
+  if (!response.body) return { ok: true, value: "" };
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let totalBytes = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      totalBytes += chunk.value.byteLength;
+      if (totalBytes > MAX_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        return {
+          ok: false,
+          message:
+            "Google Drive returned content that is too large for a conversation tool result.",
+        };
+      }
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    text += decoder.decode();
+    return { ok: true, value: text };
+  } catch {
+    await reader.cancel().catch(() => undefined);
+    return {
+      ok: false,
+      message: "Google Drive returned unreadable text content.",
+    };
+  }
+}
+
+async function readResponseJson<T>(response: Response): Promise<ReadResult<T>> {
+  const body = await readResponseText(response);
+  if (!body.ok) return body;
+  try {
+    return { ok: true, value: JSON.parse(body.value) as T };
+  } catch {
+    return {
+      ok: false,
+      message: "Google Drive returned an invalid response.",
+    };
+  }
 }
 
 /**
@@ -220,10 +415,13 @@ type DriveFile = {
   id?: string;
   name?: string;
   mimeType?: string;
+  createdTime?: string;
   modifiedTime?: string;
   webViewLink?: string;
   size?: string;
+  parents?: string[];
   owners?: { emailAddress?: string }[];
+  description?: string;
 };
 
 /**
@@ -266,8 +464,11 @@ function fileLine(file: DriveFile): string {
  * searching for `don't` would become a syntax error at best, and at worst a different search than
  * the one asked for. Escaped, a term is only ever a term.
  */
+const escapeDriveQueryValue = (query: string) =>
+  query.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+
 const driveQuery = (query: string) => {
-  const escaped = query.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  const escaped = escapeDriveQueryValue(query);
   return `name contains '${escaped}' or fullText contains '${escaped}'`;
 };
 
@@ -304,6 +505,242 @@ const failure = (message: string): McpCallResult => ({
   truncated: false,
 });
 
+const RFC3339 =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+const DRIVE_ID = /^[A-Za-z0-9_-]+$/;
+const MIME_TYPE =
+  /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/;
+
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 31 || code === 127) return true;
+  }
+  return false;
+}
+
+function unexpectedArgument(
+  args: Record<string, unknown>,
+  allowed: readonly string[],
+): string | null {
+  const extra = Object.keys(args).find((key) => !allowed.includes(key));
+  return extra ? `The argument ${extra} is not supported by this tool.` : null;
+}
+
+function textArgument(
+  args: Record<string, unknown>,
+  key: string,
+  label: string,
+  options: { required?: boolean; maxLength?: number } = {},
+): ReadResult<string | undefined> {
+  const value = args[key];
+  if (value === undefined) {
+    return options.required
+      ? { ok: false, message: `${label} is required.` }
+      : { ok: true, value: undefined };
+  }
+  if (typeof value !== "string" || value.trim() === "") {
+    return { ok: false, message: `${label} must be a non-empty string.` };
+  }
+  const trimmed = value.trim();
+  if (trimmed.length > (options.maxLength ?? MAX_SEARCH_CHARS)) {
+    return { ok: false, message: `${label} is too long.` };
+  }
+  if (hasControlCharacter(trimmed)) {
+    return { ok: false, message: `${label} contains unsupported characters.` };
+  }
+  return { ok: true, value: trimmed };
+}
+
+function idArgument(
+  args: Record<string, unknown>,
+  key: string,
+  label: string,
+  required = true,
+): ReadResult<string | undefined> {
+  const parsed = textArgument(args, key, label, {
+    required,
+    maxLength: MAX_ID_CHARS,
+  });
+  if (!parsed.ok || parsed.value === undefined) return parsed;
+  return DRIVE_ID.test(parsed.value)
+    ? parsed
+    : { ok: false, message: `${label} is not a valid Drive id.` };
+}
+
+function mimeArgument(
+  args: Record<string, unknown>,
+  required = false,
+): ReadResult<string | undefined> {
+  const parsed = textArgument(args, "mimeType", "The MIME type", {
+    required,
+    maxLength: 255,
+  });
+  if (!parsed.ok || parsed.value === undefined) return parsed;
+  return MIME_TYPE.test(parsed.value)
+    ? parsed
+    : { ok: false, message: "The MIME type is invalid." };
+}
+
+function dateArgument(
+  args: Record<string, unknown>,
+  key: "modifiedAfter" | "modifiedBefore",
+): ReadResult<string | undefined> {
+  const parsed = textArgument(args, key, key, { maxLength: 40 });
+  if (!parsed.ok || parsed.value === undefined) return parsed;
+  return RFC3339.test(parsed.value) && !Number.isNaN(Date.parse(parsed.value))
+    ? parsed
+    : { ok: false, message: `${key} must be an RFC 3339 timestamp.` };
+}
+
+function scopedDriveQuery(args: Record<string, unknown>): ReadResult<string> {
+  const allowed = [
+    "query",
+    "name",
+    "keywords",
+    "mimeType",
+    "modifiedAfter",
+    "modifiedBefore",
+    "folderId",
+  ] as const;
+  const extra = unexpectedArgument(args, allowed);
+  if (extra) return { ok: false, message: extra };
+
+  const query = textArgument(args, "query", "The search query");
+  const name = textArgument(args, "name", "The filename/title");
+  const keywords = textArgument(args, "keywords", "The keywords");
+  const mimeType = mimeArgument(args);
+  const modifiedAfter = dateArgument(args, "modifiedAfter");
+  const modifiedBefore = dateArgument(args, "modifiedBefore");
+  const folderId = idArgument(args, "folderId", "The folder id", false);
+  if (!query.ok) return query;
+  if (!name.ok) return name;
+  if (!keywords.ok) return keywords;
+  if (!mimeType.ok) return mimeType;
+  if (!modifiedAfter.ok) return modifiedAfter;
+  if (!modifiedBefore.ok) return modifiedBefore;
+  if (!folderId.ok) return folderId;
+
+  if (
+    modifiedAfter.value &&
+    modifiedBefore.value &&
+    Date.parse(modifiedAfter.value) >= Date.parse(modifiedBefore.value)
+  ) {
+    return {
+      ok: false,
+      message: "modifiedAfter must be earlier than modifiedBefore.",
+    };
+  }
+
+  const clauses: string[] = [];
+  if (query.value) clauses.push(`(${driveQuery(query.value)})`);
+  if (name.value)
+    clauses.push(`name contains '${escapeDriveQueryValue(name.value)}'`);
+  if (keywords.value)
+    clauses.push(
+      `fullText contains '${escapeDriveQueryValue(keywords.value)}'`,
+    );
+  if (mimeType.value)
+    clauses.push(`mimeType = '${escapeDriveQueryValue(mimeType.value)}'`);
+  if (modifiedAfter.value)
+    clauses.push(`modifiedTime > '${modifiedAfter.value}'`);
+  if (modifiedBefore.value)
+    clauses.push(`modifiedTime < '${modifiedBefore.value}'`);
+  if (folderId.value) clauses.push(`'${folderId.value}' in parents`);
+  if (clauses.length === 0) {
+    return { ok: false, message: "A search needs at least one filter." };
+  }
+  clauses.push("trashed = false");
+  return { ok: true, value: clauses.join(" and ") };
+}
+
+function driveFiles(value: unknown): ReadResult<DriveFile[]> {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("files" in value) ||
+    !Array.isArray(value.files)
+  ) {
+    return { ok: false, message: "Google Drive returned an invalid response." };
+  }
+  return {
+    ok: true,
+    value: value.files.flatMap((file) => {
+      const normalized = normalizeDriveFile(file);
+      return normalized ? [normalized] : [];
+    }),
+  };
+}
+
+function normalizeDriveFile(value: unknown): DriveFile | null {
+  if (typeof value !== "object" || value === null) return null;
+  const file = value as Record<string, unknown>;
+  const optionalString = (key: string) =>
+    typeof file[key] === "string" ? (file[key] as string) : undefined;
+  const owners = Array.isArray(file.owners)
+    ? file.owners.flatMap((owner) => {
+        if (typeof owner !== "object" || owner === null) return [];
+        const emailAddress = (owner as Record<string, unknown>).emailAddress;
+        return typeof emailAddress === "string" ? [{ emailAddress }] : [];
+      })
+    : undefined;
+  const parents = Array.isArray(file.parents)
+    ? file.parents.filter(
+        (parent): parent is string => typeof parent === "string",
+      )
+    : undefined;
+  return {
+    id: optionalString("id"),
+    name: optionalString("name"),
+    mimeType: optionalString("mimeType"),
+    createdTime: optionalString("createdTime"),
+    modifiedTime: optionalString("modifiedTime"),
+    webViewLink: optionalString("webViewLink"),
+    size: optionalString("size"),
+    parents,
+    owners,
+    description: optionalString("description"),
+  };
+}
+
+async function readMetadata(
+  connection: Connection,
+  fileId: string,
+  fields = FILE_FIELDS,
+): Promise<ReadResult<DriveFile>> {
+  const result = await request(
+    connection,
+    `/files/${encodeURIComponent(fileId)}`,
+    { fields },
+  );
+  if (!result.ok) return result;
+  const body = await readResponseJson<unknown>(result.response);
+  if (!body.ok) return body;
+  const file = normalizeDriveFile(body.value);
+  if (!file) {
+    return { ok: false, message: "Google Drive returned an invalid response." };
+  }
+  return { ok: true, value: file };
+}
+
+async function listDriveFiles(
+  connection: Connection,
+  query: Record<string, string>,
+): Promise<McpCallResult> {
+  const result = await request(connection, "/files", {
+    pageSize: String(PAGE_SIZE),
+    fields: `files(${FILE_FIELDS})`,
+    ...query,
+  });
+  if (!result.ok) return failure(result.message);
+  const body = await readResponseJson<unknown>(result.response);
+  if (!body.ok) return failure(body.message);
+  const files = driveFiles(body.value);
+  return files.ok
+    ? asResult(files.value.map(fileLine).join("\n"))
+    : failure(files.message);
+}
+
 /**
  * Call one tool.
  *
@@ -317,48 +754,56 @@ export async function callTool(
   toolName: string,
   args: Record<string, unknown>,
 ): Promise<McpCallResult> {
-  const stringArg = (key: string): string | null => {
-    const value = args[key];
-    return typeof value === "string" && value.trim() !== "" ? value : null;
-  };
+  if (toolName === "search_files") {
+    const query = scopedDriveQuery(args);
+    return query.ok
+      ? listDriveFiles(connection, { q: query.value })
+      : failure(query.message);
+  }
 
-  if (toolName === "search_files" || toolName === "list_recent_files") {
-    const query = stringArg("query");
-    if (toolName === "search_files" && !query) {
-      return failure("A search needs something to search for.");
-    }
-
-    const result = await request(connection, "/files", {
-      pageSize: String(PAGE_SIZE),
-      fields: `files(${FILE_FIELDS})`,
-      // Drive's own ordering for "recent". Search leaves it to relevance.
-      ...(query ? { q: driveQuery(query) } : { orderBy: "modifiedTime desc" }),
+  if (toolName === "list_recent_files") {
+    const extra = unexpectedArgument(args, []);
+    if (extra) return failure(extra);
+    return listDriveFiles(connection, {
+      q: "trashed = false",
+      orderBy: "modifiedTime desc",
     });
-    if (!result.ok) return failure(result.message);
+  }
 
-    const body = (await result.response.json()) as { files?: DriveFile[] };
-    const files = body.files ?? [];
-    return asResult(files.map(fileLine).join("\n"));
+  if (toolName === "list_folder") {
+    const extra = unexpectedArgument(args, ["folderId"]);
+    if (extra) return failure(extra);
+    const folderId = idArgument(args, "folderId", "The folder id");
+    if (!folderId.ok || !folderId.value)
+      return failure(
+        folderId.ok ? "The folder id is required." : folderId.message,
+      );
+    return listDriveFiles(connection, {
+      q: `'${folderId.value}' in parents and trashed = false`,
+      orderBy: "name_natural",
+    });
   }
 
   if (toolName === "get_file_metadata") {
-    const fileId = stringArg("fileId");
-    if (!fileId) return failure("A file id is needed to look a file up.");
-
-    const result = await request(
-      connection,
-      `/files/${encodeURIComponent(fileId)}`,
-      { fields: FILE_FIELDS },
-    );
-    if (!result.ok) return failure(result.message);
-
-    const file = (await result.response.json()) as DriveFile;
+    const extra = unexpectedArgument(args, ["fileId"]);
+    if (extra) return failure(extra);
+    const fileId = idArgument(args, "fileId", "The file id");
+    if (!fileId.ok || !fileId.value)
+      return failure(
+        fileId.ok ? "A file id is needed to look a file up." : fileId.message,
+      );
+    const metadata = await readMetadata(connection, fileId.value);
+    if (!metadata.ok) return failure(metadata.message);
+    const file = metadata.value;
     const owner = file.owners?.[0]?.emailAddress;
     return asResult(
       [
         fileLine(file),
+        file.createdTime ? `created: ${file.createdTime}` : null,
         file.size ? `size: ${file.size} bytes` : null,
         owner ? `owner: ${owner}` : null,
+        file.parents?.length ? `parent ids: ${file.parents.join(", ")}` : null,
+        file.description ? `description: ${file.description}` : null,
       ]
         .filter(Boolean)
         .join("\n"),
@@ -366,21 +811,26 @@ export async function callTool(
   }
 
   if (toolName === "read_file_content") {
-    const fileId = stringArg("fileId");
-    if (!fileId) return failure("A file id is needed to read a file.");
+    const extra = unexpectedArgument(args, ["fileId"]);
+    if (extra) return failure(extra);
+    const fileId = idArgument(args, "fileId", "The file id");
+    if (!fileId.ok || !fileId.value)
+      return failure(
+        fileId.ok ? "A file id is needed to read a file." : fileId.message,
+      );
 
     /*
      * The type is looked up first, because how a file is read depends on what it is. A Doc has no
      * bytes and must be exported; anything else is downloaded. Asking Drive rather than guessing from
      * the name means a mislabelled file still reads correctly.
      */
-    const metadata = await request(
+    const metadata = await readMetadata(
       connection,
-      `/files/${encodeURIComponent(fileId)}`,
-      { fields: "id,name,mimeType" },
+      fileId.value,
+      "id,name,mimeType",
     );
     if (!metadata.ok) return failure(metadata.message);
-    const file = (await metadata.response.json()) as DriveFile;
+    const file = metadata.value;
 
     const exportAs = file.mimeType ? EXPORTABLE[file.mimeType] : undefined;
 
@@ -399,24 +849,77 @@ export async function callTool(
      */
     if (!exportAs && !isTextual(file.mimeType)) {
       return failure(
-        `${file.name ?? fileId} is a ${file.mimeType ?? "binary"} file, which this connector cannot read as text. Its metadata and link are available, and somebody can open it themselves.`,
+        `${file.name ?? fileId.value} is a ${file.mimeType ?? "binary"} file, which this connector cannot read as text. Its metadata and link are available, and somebody can open it themselves.`,
       );
     }
 
     const content = exportAs
       ? await request(
           connection,
-          `/files/${encodeURIComponent(fileId)}/export`,
+          `/files/${encodeURIComponent(fileId.value)}/export`,
           { mimeType: exportAs },
         )
-      : await request(connection, `/files/${encodeURIComponent(fileId)}`, {
-          alt: "media",
-        });
+      : await request(
+          connection,
+          `/files/${encodeURIComponent(fileId.value)}`,
+          {
+            alt: "media",
+          },
+        );
     if (!content.ok) return failure(content.message);
 
-    const text = await content.response.text();
+    const text = await readResponseText(content.response);
+    if (!text.ok) return failure(text.message);
     // Named, because a model handed only the body cannot cite what it read.
-    return asResult(`${file.name ?? fileId}\n\n${text}`);
+    return asResult(`${file.name ?? fileId.value}\n\n${text.value}`);
+  }
+
+  if (toolName === "export_file") {
+    const extra = unexpectedArgument(args, ["fileId", "mimeType"]);
+    if (extra) return failure(extra);
+    const fileId = idArgument(args, "fileId", "The file id");
+    const mimeType = mimeArgument(args, true);
+    if (!fileId.ok || !fileId.value)
+      return failure(
+        fileId.ok ? "A file id is needed to export a file." : fileId.message,
+      );
+    if (!mimeType.ok || !mimeType.value)
+      return failure(
+        mimeType.ok ? "An export MIME type is required." : mimeType.message,
+      );
+
+    const allTextFormats = new Set(Object.values(TEXT_EXPORTS).flat());
+    if (!allTextFormats.has(mimeType.value)) {
+      return failure(
+        "This connector supports text-only exports. Binary exports require a protected artifact gateway.",
+      );
+    }
+
+    const metadata = await readMetadata(
+      connection,
+      fileId.value,
+      "id,name,mimeType",
+    );
+    if (!metadata.ok) return failure(metadata.message);
+    const file = metadata.value;
+    const supported = file.mimeType ? TEXT_EXPORTS[file.mimeType] : undefined;
+    if (!supported?.includes(mimeType.value)) {
+      return failure(
+        `${file.name ?? fileId.value} (${file.mimeType ?? "unknown type"}) cannot be exported as ${mimeType.value} by this text-only connector.`,
+      );
+    }
+
+    const exported = await request(
+      connection,
+      `/files/${encodeURIComponent(fileId.value)}/export`,
+      { mimeType: mimeType.value },
+    );
+    if (!exported.ok) return failure(exported.message);
+    const text = await readResponseText(exported.response);
+    if (!text.ok) return failure(text.message);
+    return asResult(
+      `${file.name ?? fileId.value} (${mimeType.value})\n\n${text.value}`,
+    );
   }
 
   return failure(

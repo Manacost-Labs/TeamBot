@@ -32,6 +32,7 @@ import {
   catalogueEntry,
   classifyTool,
   customUrlRefusal,
+  missingToolScopes,
   resolveServerUrl,
   serverCredentialKind,
 } from "./catalogue";
@@ -724,6 +725,7 @@ export function createPluginStore(options: PluginStoreOptions) {
     row: { id: string; url: string; credentialId: string | null },
     entry: CatalogueEntry | null,
     actorId: string,
+    toolName?: string,
   ): Promise<{ token?: string }> {
     if (entry?.auth.kind !== "user-oauth") {
       const token = row.credentialId
@@ -756,7 +758,10 @@ export function createPluginStore(options: PluginStoreOptions) {
      * when the row stays put, the secret inside it does not.
      */
     const [held] = await database
-      .select({ credentialId: mcpUserCredentials.credentialId })
+      .select({
+        credentialId: mcpUserCredentials.credentialId,
+        scope: mcpUserCredentials.scope,
+      })
       .from(mcpUserCredentials)
       .where(
         and(
@@ -769,6 +774,12 @@ export function createPluginStore(options: PluginStoreOptions) {
     if (!held) {
       throw new PluginRefusedError(
         `You have not connected your ${entry.title} account. Connect it in Settings and ask again.`,
+        null,
+      );
+    }
+    if (toolName && missingToolScopes(entry, toolName, held.scope).length > 0) {
+      throw new PluginRefusedError(
+        `Your ${entry.title} connection predates this capability. Reconnect it in Settings to grant the required access, then ask again.`,
         null,
       );
     }
@@ -931,6 +942,15 @@ export function createPluginStore(options: PluginStoreOptions) {
           if (!current) {
             throw new PluginRefusedError(
               `You have not connected your ${title} account. Connect it in Settings and ask again.`,
+              null,
+            );
+          }
+          if (
+            toolName &&
+            missingToolScopes(entry, toolName, current.scope).length > 0
+          ) {
+            throw new PluginRefusedError(
+              `Your ${title} connection predates this capability. Reconnect it in Settings to grant the required access, then ask again.`,
               null,
             );
           }
@@ -2905,7 +2925,12 @@ export function createPluginStore(options: PluginStoreOptions) {
        * it did.
        */
       try {
-        const { token } = await connectionTokenFor(row, entry, input.actorId);
+        const { token } = await connectionTokenFor(
+          row,
+          entry,
+          input.actorId,
+          toolName,
+        );
         const vendor = injectedVendor ?? transportFor(entry).callTool;
         const result = await vendor(
           vendorToolConnection({ url: effectiveUrl(row, entry), token }, input),

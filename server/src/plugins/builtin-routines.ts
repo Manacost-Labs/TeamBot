@@ -14,7 +14,7 @@ import { MAX_RESULT_CHARS, type McpCallResult, type McpTool } from "./mcp";
  * instructions, without leaving the building.
  *
  * WHAT MAKES THIS DIFFERENT FROM EVERY OTHER TRANSPORT. There is no vendor. `mcp` dials somebody
- * else's server and `google-drive-rest` dials Google; both answer to a credential, and who holds it
+ * else's server and `google-workspace-rest` dials Google; both answer to a credential, and who holds it
  * is settled before the connection is built. Here there is no credential at all — the call runs
  * against this deployment's own tables — so the ACTOR is not context, it is the authorization. That
  * is why {@link callTool} refuses a run that is not attributed to a person, and why the owner and
