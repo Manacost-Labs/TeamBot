@@ -101,12 +101,20 @@ def _audit_payload(payload: Any) -> dict[str, Any]:
     return {"ok": status == "healthy", "status": status, "source": root.get("source"), "fetchedAt": root.get("fetchedAt") or root.get("fetched_at"), "count": len(rows), "tierCounts": tier_counts, "strategiesWithCards": with_cards, "strategiesWithMetrics": with_metrics, "issues": issues}
 
 
+def _audit_response(http_status: int, payload: Any) -> dict[str, Any]:
+    """Keep an auth-protected public route distinct from a malformed data payload."""
+    audit = _audit_payload(payload)
+    if http_status in {401, 403}:
+        audit.update({"ok": False, "status": "access_protected", "issues": ["endpoint_requires_auth"]})
+    return {"httpStatus": http_status, **audit}
+
+
 def audit_strategy_data() -> dict[str, Any]:
     local_status, local_payload = _request_json(LOCAL_URL)
     public_status, public_payload = _request_json(PUBLIC_URL)
-    local = _audit_payload(local_payload)
-    public = _audit_payload(public_payload)
-    return {"checkedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "local": {"httpStatus": local_status, **local}, "public": {"httpStatus": public_status, **public}}
+    local = _audit_response(local_status, local_payload)
+    public = _audit_response(public_status, public_payload)
+    return {"checkedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "local": local, "public": public}
 
 
 def diagnose_rendering() -> dict[str, Any]:
@@ -115,6 +123,8 @@ def diagnose_rendering() -> dict[str, Any]:
     public = audit["public"]
     if local["status"] == "invalid":
         disposition = "parser_or_api"
+    elif public["status"] == "access_protected":
+        disposition = "heartpulse_access_protected"
     elif public["status"] == "invalid":
         disposition = "heartpulse_api_or_cache"
     elif local["tierCounts"] != public["tierCounts"] or local["count"] != public["count"]:
