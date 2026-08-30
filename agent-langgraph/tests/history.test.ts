@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { AIMessage, ToolMessage } from "@langchain/core/messages";
 import type { RunAgentInput } from "@ag-ui/core";
+import { AIMessage, ToolMessage } from "@langchain/core/messages";
 import { NO_ANSWER_CAME, toLangChainMessages } from "../src/history";
 
 /**
@@ -102,5 +102,41 @@ describe("history with a tool call nobody answered", () => {
     );
     expect(byId.get("answered")).toBe("real");
     expect(byId.get("orphan")).toBe(NO_ANSWER_CAME);
+  });
+});
+
+describe("structured AG-UI history", () => {
+  test("projects user attachments to governed ids without private binary fields", () => {
+    const attachmentId = "00000000-0000-4000-8000-000000000001";
+    const messages = toLangChainMessages(
+      input([
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Review this." },
+            {
+              type: "binary",
+              id: attachmentId,
+              data: "PRIVATE_BASE64_BYTES",
+              url: "https://private.invalid/blob",
+              filename: "private.pdf",
+              mimeType: "application/pdf",
+              storageKey: "private/storage/key",
+            },
+          ],
+        },
+      ]),
+    );
+    const human = messages.find((message) => message.getType() === "human");
+    const content = String(human?.content ?? "");
+
+    expect(content).toContain("Review this.");
+    expect(content).toContain(attachmentId);
+    expect(content).not.toContain("[object Object]");
+    expect(content).not.toContain("PRIVATE_BASE64_BYTES");
+    expect(content).not.toContain("private.invalid");
+    expect(content).not.toContain("private.pdf");
+    expect(content).not.toContain("application/pdf");
+    expect(content).not.toContain("private/storage/key");
   });
 });

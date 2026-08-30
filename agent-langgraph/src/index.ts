@@ -12,6 +12,7 @@ import {
 import { ChatOpenAI } from "@langchain/openai";
 import { serve } from "bun";
 import { hasManagedAgentToken } from "../../shared/agent-authorisation";
+import { projectMessageContent } from "../../shared/message-content";
 import { textOfChunk } from "./deltas";
 import { toLangChainMessages } from "./history";
 import { readReasoningEffort } from "./model-options";
@@ -538,7 +539,7 @@ async function runAgent(input: RunAgentInput): Promise<Response> {
                 type: "TOOL_CALL_RESULT",
                 messageId: `${id}-result`,
                 toolCallId: id,
-                content: String(message.content ?? ""),
+                content: projectMessageContent(message.content, "tool"),
                 role: "tool",
               } as BaseEvent);
               pending.delete(id);

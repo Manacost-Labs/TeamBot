@@ -251,3 +251,40 @@ describe("a tool call restored from the thread store", () => {
     expect(fn.arguments).toBe('{"url":"https://news.ycombinator.com"}');
   });
 });
+
+describe("structured AG-UI history", () => {
+  test("projects attachment-only user turns without passing private binary fields", () => {
+    const attachmentId = "00000000-0000-4000-8000-000000000001";
+    const messages = withoutGuidance(
+      toProviderMessages(
+        input([
+          {
+            id: "1",
+            role: "user",
+            content: [
+              {
+                type: "binary",
+                id: attachmentId,
+                data: "PRIVATE_BASE64_BYTES",
+                url: "https://private.invalid/blob",
+                filename: "private.pdf",
+                mimeType: "application/pdf",
+                storageKey: "private/storage/key",
+              },
+            ],
+          } as unknown as Message,
+        ]),
+      ),
+    );
+    const content = String(messages[0]?.content ?? "");
+
+    expect(content).toContain(attachmentId);
+    expect(content).not.toBe("");
+    expect(content).not.toContain("[object Object]");
+    expect(content).not.toContain("PRIVATE_BASE64_BYTES");
+    expect(content).not.toContain("private.invalid");
+    expect(content).not.toContain("private.pdf");
+    expect(content).not.toContain("application/pdf");
+    expect(content).not.toContain("private/storage/key");
+  });
+});

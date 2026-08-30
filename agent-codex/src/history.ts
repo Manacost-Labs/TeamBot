@@ -3,6 +3,7 @@ import {
   COMPUTER_GUIDANCE,
   PROVENANCE_GUIDANCE,
 } from "../../shared/bot-prompt";
+import { projectMessageContent } from "../../shared/message-content";
 
 type Message = RunAgentInput["messages"][number];
 
@@ -57,7 +58,9 @@ export function instructionsFor(input: RunAgentInput): string {
     .filter(
       (message) => message.role === "system" || message.role === "developer",
     )
-    .map((message) => String(message.content ?? "").trim())
+    .map((message) =>
+      projectMessageContent(message.content, message.role).trim(),
+    )
     .filter(Boolean)
     .join("\n\n");
 
@@ -153,10 +156,14 @@ function formatMessage(message: Message): string[] {
   if (message.role === "tool") {
     const toolCallId =
       (message as { toolCallId?: string }).toolCallId ?? "unknown";
-    return [`[tool result ${toolCallId}] ${String(message.content ?? "")}`];
+    return [
+      `[tool result ${toolCallId}] ${projectMessageContent(message.content, "tool")}`,
+    ];
   }
 
-  const lines = [`[${message.role}] ${String(message.content ?? "")}`];
+  const lines = [
+    `[${message.role}] ${projectMessageContent(message.content, message.role)}`,
+  ];
   if (message.role === "assistant") {
     for (const call of message.toolCalls ?? []) {
       const details = "function" in call ? call.function : call;

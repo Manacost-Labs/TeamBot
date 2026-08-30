@@ -14,6 +14,7 @@ import {
   ToolMessage,
 } from "@langchain/core/messages";
 import { COMPUTER_GUIDANCE, NO_ANSWER_CAME } from "../../shared/bot-prompt";
+import { projectMessageContent } from "../../shared/message-content";
 
 /*
  * Re-exported so this module's own tests and callers keep reading it from here, while the wording
@@ -49,11 +50,15 @@ export function toLangChainMessages(input: RunAgentInput): BaseMessage[] {
 
   for (const message of input.messages) {
     if (message.role === "user") {
-      messages.push(new HumanMessage(String(message.content ?? "")));
+      messages.push(
+        new HumanMessage(projectMessageContent(message.content, "user")),
+      );
       continue;
     }
     if (message.role === "system" || message.role === "developer") {
-      messages.push(new SystemMessage(String(message.content ?? "")));
+      messages.push(
+        new SystemMessage(projectMessageContent(message.content, message.role)),
+      );
       continue;
     }
     if (message.role === "tool") {
@@ -61,7 +66,7 @@ export function toLangChainMessages(input: RunAgentInput): BaseMessage[] {
       messages.push(
         new ToolMessage({
           tool_call_id: message.toolCallId,
-          content: String(message.content ?? ""),
+          content: projectMessageContent(message.content, "tool"),
         }),
       );
       continue;
@@ -69,7 +74,7 @@ export function toLangChainMessages(input: RunAgentInput): BaseMessage[] {
     if (message.role === "assistant") {
       messages.push(
         new AIMessage({
-          content: message.content ?? "",
+          content: projectMessageContent(message.content, "assistant"),
           tool_calls:
             message.toolCalls?.map((call) => ({
               id: call.id,

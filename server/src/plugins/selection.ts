@@ -1,4 +1,4 @@
-import { textOf } from "../agents/message-text";
+import { projectMessageContent } from "../../../shared/message-content";
 /**
  * Choosing which of a Bot's tools to put in front of the model, one run at a time.
  *
@@ -260,11 +260,10 @@ export function latestUserText(
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role !== "user") continue;
-    // AG-UI allows structured content, and text parts are the only part a selector can read. See
-    // textOf: a hop asks the same question of the same shapes.
-    if (typeof message.content === "string") return message.content;
-    const text = textOf(message.content);
-    return text === "" ? "" : text;
+    // Structured attachment turns must still select the governed reader. The shared projection
+    // carries only text and bounded public attachment ids; bytes, URLs and storage metadata are
+    // discarded before the selector sees them.
+    return projectMessageContent(message.content, "user");
   }
   return "";
 }

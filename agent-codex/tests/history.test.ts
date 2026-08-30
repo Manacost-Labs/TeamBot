@@ -95,6 +95,66 @@ describe("Codex prompt translation", () => {
     expect(transcriptFor(input)).toContain("[user] Hello");
   });
 
+  test("projects structured user attachments to governed ids only", () => {
+    const attachmentId = "00000000-0000-4000-8000-000000000001";
+    const structured = {
+      ...input,
+      messages: [
+        {
+          id: "u",
+          role: "user",
+          content: [
+            { type: "text", text: "Edit this." },
+            {
+              type: "binary",
+              id: attachmentId,
+              data: "PRIVATE_BASE64_BYTES",
+              url: "https://private.invalid/blob",
+              filename: "private.docx",
+              mimeType:
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              storageKey: "private/storage/key",
+            },
+          ],
+        },
+      ],
+    } as unknown as RunAgentInput;
+
+    const transcript = transcriptFor(structured);
+    expect(transcript).toContain("Edit this.");
+    expect(transcript).toContain(attachmentId);
+    expect(transcript).not.toContain("[object Object]");
+    expect(transcript).not.toContain("PRIVATE_BASE64_BYTES");
+    expect(transcript).not.toContain("private.invalid");
+    expect(transcript).not.toContain("private.docx");
+    expect(transcript).not.toContain("wordprocessingml");
+    expect(transcript).not.toContain("private/storage/key");
+  });
+
+  test("keeps structured system instructions text-only", () => {
+    const structured = {
+      ...input,
+      messages: [
+        {
+          id: "s",
+          role: "system",
+          content: [
+            { type: "text", text: "Tenant rule." },
+            {
+              type: "binary",
+              id: "00000000-0000-4000-8000-000000000001",
+              data: "PRIVATE_BASE64_BYTES",
+            },
+          ],
+        },
+      ],
+    } as unknown as RunAgentInput;
+
+    expect(instructionsFor(structured)).toContain("Tenant rule.");
+    expect(instructionsFor(structured)).not.toContain("00000000-0000");
+    expect(instructionsFor(structured)).not.toContain("PRIVATE_BASE64_BYTES");
+  });
+
   test("does not feed display-only reasoning summaries back into the next turn", () => {
     const withReasoning = {
       ...input,

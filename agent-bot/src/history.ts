@@ -8,6 +8,7 @@
 import type { RunAgentInput } from "@ag-ui/core";
 import type OpenAI from "openai";
 import { COMPUTER_GUIDANCE, NO_ANSWER_CAME } from "../../shared/bot-prompt";
+import { projectMessageContent } from "../../shared/message-content";
 
 export { NO_ANSWER_CAME };
 
@@ -45,18 +46,26 @@ export function toProviderMessages(
   for (const message of input.messages) {
     if (message.role !== "tool") continue;
     const id = (message as { toolCallId?: string }).toolCallId;
-    if (id) resultsByCall.set(id, String(message.content ?? ""));
+    if (id) {
+      resultsByCall.set(id, projectMessageContent(message.content, "tool"));
+    }
   }
 
   for (const message of input.messages) {
     // Placed with the call they answer, below, rather than wherever they arrived.
     if (message.role === "tool") continue;
     if (message.role === "user") {
-      messages.push({ role: "user", content: String(message.content ?? "") });
+      messages.push({
+        role: "user",
+        content: projectMessageContent(message.content, "user"),
+      });
       continue;
     }
     if (message.role === "system" || message.role === "developer") {
-      messages.push({ role: "system", content: String(message.content ?? "") });
+      messages.push({
+        role: "system",
+        content: projectMessageContent(message.content, message.role),
+      });
       continue;
     }
     if (message.role === "assistant") {
@@ -67,7 +76,7 @@ export function toProviderMessages(
       }));
       messages.push({
         role: "assistant",
-        content: message.content ?? null,
+        content: projectMessageContent(message.content, "assistant"),
         ...(toolCalls?.length ? { tool_calls: toolCalls } : {}),
       });
 

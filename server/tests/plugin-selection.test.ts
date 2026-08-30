@@ -323,7 +323,33 @@ describe("which message pass one reads", () => {
           ],
         },
       ]),
-    ).toBe("look at this");
+    ).toBe("look at\nthis");
+  });
+
+  test("attachment-only content still selects the governed attachment capability", () => {
+    const attachmentId = "00000000-0000-4000-8000-000000000001";
+    const text = latestUserText([
+      {
+        role: "user",
+        content: [
+          {
+            type: "binary",
+            id: attachmentId,
+            data: "PRIVATE_BASE64_BYTES",
+            url: "https://private.invalid/blob",
+            filename: "private.pdf",
+            storageKey: "private/storage/key",
+          },
+        ],
+      },
+    ]);
+
+    expect(text).toContain("governed tools");
+    expect(text).toContain(attachmentId);
+    expect(text).not.toContain("PRIVATE_BASE64_BYTES");
+    expect(text).not.toContain("private.invalid");
+    expect(text).not.toContain("private.pdf");
+    expect(text).not.toContain("private/storage/key");
   });
 
   test("no user message at all reads as nothing to select against", () => {
