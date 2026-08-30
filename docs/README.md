@@ -13,5 +13,8 @@ Start with the root [README](../README.md), then use these references:
 - [Deployment](deployment.md): the container, what is in the image, minimum sizes, and the platform notes.
 - [Kubernetes](../charts/openbot/README.md): the Helm chart, what a cluster needs before it, and the values that differ per cloud.
 - [Releasing](releasing.md): how a release is proposed, reviewed and published.
+- Russian production runbooks:
+  - [Runtime and security boundaries](production-runtime.ru.md): production topology, authentication, runtime-state ownership, AG-UI streaming, permissions, workspaces, and editor boundaries.
+  - [Operations and execution timing](production-operations.ru.md): backup, deployment, rollback, timing phases, troubleshooting, verification, and known limitations.
 
 Do not include credential values, customer data, transcripts, or local-only notes in public docs.
