@@ -703,6 +703,7 @@ const routineRunner = createRoutineRunner({
     intelligence: routineIntelligence,
     runner: routineAgentRunner,
     buildAgentFor,
+    turnTimeoutMsForAgent: { "data-control": 30 * 60_000 },
   }),
 });
 

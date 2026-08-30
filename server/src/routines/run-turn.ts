@@ -354,6 +354,8 @@ export function createTurnRunner(options: {
   }) => Promise<AbstractAgent>;
   /** How long one headless turn may take before it is stopped. */
   turnTimeoutMs?: number;
+  /** Per-agent override for maintenance turns that legitimately wait on governed tools. */
+  turnTimeoutMsForAgent?: Readonly<Record<string, number>>;
   lockTtlSeconds?: number;
   heartbeatMs?: number;
   /** See {@link DEFAULT_ABORT_GRACE_MS}. */
@@ -364,12 +366,15 @@ export function createTurnRunner(options: {
     runner,
     buildAgentFor,
     turnTimeoutMs = DEFAULT_TURN_TIMEOUT_MS,
+    turnTimeoutMsForAgent = {},
     lockTtlSeconds = DEFAULT_LOCK_TTL_SECONDS,
     heartbeatMs = DEFAULT_HEARTBEAT_MS,
     abortGraceMs = DEFAULT_ABORT_GRACE_MS,
   } = options;
 
   return async ({ ownerUserId, agentId, threadId, instruction }) => {
+    const effectiveTurnTimeoutMs =
+      turnTimeoutMsForAgent[agentId] ?? turnTimeoutMs;
     /*
      * One id for this turn, minted once.
      *
@@ -577,15 +582,15 @@ export function createTurnRunner(options: {
         deadline = setTimeout(() => {
           stopped = true;
           stopTurn();
-        }, turnTimeoutMs);
+        }, effectiveTurnTimeoutMs);
         deadline.unref?.();
         backstop = setTimeout(() => {
           reject(
             new Error(
-              `The routine's turn did not finish within ${Math.round(turnTimeoutMs / 1000)}s and could not be stopped.`,
+              `The routine's turn did not finish within ${Math.round(effectiveTurnTimeoutMs / 1000)}s and could not be stopped.`,
             ),
           );
-        }, turnTimeoutMs + abortGraceMs);
+        }, effectiveTurnTimeoutMs + abortGraceMs);
         backstop.unref?.();
       });
 
@@ -628,7 +633,7 @@ export function createTurnRunner(options: {
     if (stopped) {
       await stopPromise;
       throw new Error(
-        `The routine's turn was stopped after ${Math.round(turnTimeoutMs / 1000)}s.`,
+        `The routine's turn was stopped after ${Math.round(effectiveTurnTimeoutMs / 1000)}s.`,
       );
     }
 

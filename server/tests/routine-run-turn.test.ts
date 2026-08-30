@@ -103,6 +103,8 @@ function harness(options: {
    */
   renew?: () => unknown;
   turnTimeoutMs?: number;
+  turnTimeoutMsForAgent?: Readonly<Record<string, number>>;
+  agentId?: string;
   abortGraceMs?: number;
   heartbeatMs?: number;
   lockTtlSeconds?: number;
@@ -127,7 +129,8 @@ function harness(options: {
     stops: [] as { threadId: string; runId?: string }[],
   };
 
-  const agent = new FakeAgent({ agentId: AGENT_ID });
+  const agentId = options.agentId ?? AGENT_ID;
+  const agent = new FakeAgent({ agentId });
   const drive = options.drive ?? answers;
 
   const intelligence = {
@@ -204,6 +207,9 @@ function harness(options: {
     ...(options.turnTimeoutMs === undefined
       ? {}
       : { turnTimeoutMs: options.turnTimeoutMs }),
+    ...(options.turnTimeoutMsForAgent === undefined
+      ? {}
+      : { turnTimeoutMsForAgent: options.turnTimeoutMsForAgent }),
     ...(options.abortGraceMs === undefined
       ? {}
       : { abortGraceMs: options.abortGraceMs }),
@@ -218,7 +224,7 @@ function harness(options: {
   const run = () =>
     runTurn({
       ownerUserId: OWNER,
-      agentId: AGENT_ID,
+      agentId,
       threadId: THREAD_ID,
       instruction: INSTRUCTION,
     });
@@ -632,6 +638,20 @@ describe("the lock is released on every exit path", () => {
     expect(calls.cleaned).toEqual([
       { threadId: THREAD_ID, runId: calls.acquired[0]?.runId ?? "" },
     ]);
+  });
+
+  test("a configured maintenance agent may outlive the ordinary deadline", async () => {
+    const { run, calls } = harness({
+      agentId: "data-control",
+      drive: (context) => setTimeout(() => answers(context), 12),
+      turnTimeoutMs: 5,
+      turnTimeoutMsForAgent: { "data-control": 40 },
+    });
+
+    await run();
+
+    expect(calls.stops).toEqual([]);
+    expect(calls.cleaned).toHaveLength(1);
   });
 
   test("when a heartbeat renew rejects", async () => {

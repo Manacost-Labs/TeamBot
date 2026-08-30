@@ -78,6 +78,64 @@ class ParserOpsValidationTest(unittest.TestCase):
         self.assertEqual(result[0]["completeness"]["sources_below_target"], 2)
         self.assertNotIn("ai_quality", result[0])
 
+    def test_triage_requires_code_inspection_for_internal_contract_rejection(self) -> None:
+        result = service._diagnostic_triage(
+            {"flags": ["cached_after_failure"]},
+            {
+                "last_refresh_error": (
+                    "source contract failed: upstream freshness evidence is invalid: "
+                    "unexpected_selected_params"
+                )
+            },
+        )
+        self.assertEqual(result["disposition"], "inspect_adapter")
+        self.assertTrue(result["requiresCodeInspection"])
+        self.assertFalse(result["retryRecommended"])
+
+    def test_triage_recommends_bounded_retry_for_blocked_candidate(self) -> None:
+        result = service._diagnostic_triage(
+            {"flags": ["cached_after_failure"]},
+            {"last_refresh_quality": {"blocked_marker": True}},
+        )
+        self.assertEqual(result["disposition"], "retry_transient")
+        self.assertTrue(result["retryRecommended"])
+
+    def test_triage_does_not_change_code_while_upstream_publication_is_pending(self) -> None:
+        result = service._diagnostic_triage(
+            {"flags": ["cached_after_failure", "stale"]},
+            {
+                "last_refresh_upstream_state": "upstream_publication_pending",
+                "last_refresh_quality": {"blocked_marker": True},
+            },
+        )
+        self.assertEqual(result["disposition"], "upstream_pending")
+        self.assertFalse(result["requiresCodeInspection"])
+        self.assertFalse(result["retryRecommended"])
+
+    def test_triage_honours_an_operationally_disabled_source(self) -> None:
+        result = service._diagnostic_triage(
+            {"flags": ["disabled"]},
+            {"last_refresh_error": "unexpected_selected_params"},
+        )
+        self.assertEqual(result["disposition"], "operationally_disabled")
+        self.assertFalse(result["requiresCodeInspection"])
+
+    def test_triage_preserves_a_valid_upstream_dataset_regression(self) -> None:
+        result = service._diagnostic_triage(
+            {"flags": ["cached_after_failure", "stale"]},
+            {
+                "last_refresh_error": "Dataset regression: metric count dropped 1788 -> 926",
+                "last_refresh_parsesunix_transport": {
+                    "transport_validated": True,
+                    "candidate_validated": True,
+                    "publication_validated": False,
+                },
+            },
+        )
+        self.assertEqual(result["disposition"], "upstream_regression")
+        self.assertFalse(result["requiresCodeInspection"])
+        self.assertFalse(result["retryRecommended"])
+
     def test_publish_does_not_attempt_rollback_when_push_fails(self) -> None:
         with (
             patch.object(service, "_source_ids", return_value=["source"]),

@@ -27,6 +27,23 @@ describe("Codex prompt translation", () => {
     const dataControl = { ...input, agentId: "data-control" } as RunAgentInput;
     expect(permissionProfileFor(dataControl)).toBe("data-control-agent");
     expect(instructionsFor(dataControl)).toContain("dedicated clone");
+    expect(instructionsFor(dataControl)).toContain(
+      "unexpected_selected_params",
+    );
+    expect(instructionsFor(dataControl)).toContain(
+      "Follow diagnose_source.triage",
+    );
+    const detectedByTool = {
+      ...input,
+      tools: [
+        {
+          name: "mcp__parser-ops__diagnose_source",
+          description: "Diagnose",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+    } as unknown as RunAgentInput;
+    expect(permissionProfileFor(detectedByTool)).toBe("data-control-agent");
   });
 
   test("keeps higher-priority instructions out of the quoted transcript", () => {

@@ -1,9 +1,11 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import readline from "node:readline";
 import type { RunAgentInput } from "@ag-ui/core";
+import { DataControlWorkflow } from "./data-control-workflow";
 import {
   deploymentToolNames,
   instructionsFor,
+  isDataControlRun,
   permissionProfileFor,
   runAssertion,
   transcriptFor,
@@ -60,11 +62,17 @@ class CodexProcess {
   private stderr = "";
   private readonly protocolTrace: string[] = [];
   private readonly toolNames = new Map<string, string>();
+  private readonly dataControlWorkflow: DataControlWorkflow | undefined;
+  private threadId: string | undefined;
+  private correctionTurns = 0;
 
   constructor(
     private readonly input: RunAgentInput,
     private readonly callbacks: CodexCallbacks,
   ) {
+    this.dataControlWorkflow = isDataControlRun(input)
+      ? new DataControlWorkflow()
+      : undefined;
     this.finished = new Promise<void>((resolve, reject) => {
       this.finish = resolve;
       this.fail = reject;
@@ -127,6 +135,7 @@ class CodexProcess {
     })) as { thread?: { id?: string } };
     const threadId = started.thread?.id;
     if (!threadId) throw new Error("Codex did not return a thread id.");
+    this.threadId = threadId;
 
     await this.request("turn/start", {
       threadId,
@@ -208,12 +217,31 @@ class CodexProcess {
       const turn = message.params?.turn as
         | { status?: string; error?: unknown }
         | undefined;
-      this.turnCompleted = true;
       if (turn?.status === "failed")
         this.fail(
           new Error(JSON.stringify(turn.error ?? "Codex turn failed.")),
         );
-      else this.finish();
+      else {
+        const correction = this.dataControlWorkflow?.correctionMessage();
+        if (correction && this.correctionTurns < 2) {
+          this.correctionTurns += 1;
+          void this.request("turn/start", {
+            threadId: this.threadId,
+            input: [{ type: "text", text: correction }],
+            effort: REASONING_EFFORT,
+            summary: REASONING_SUMMARY,
+          }).catch(this.fail);
+        } else if (correction) {
+          this.fail(
+            new Error(
+              `Контроль данных did not complete required repairs for: ${this.dataControlWorkflow?.unresolvedSourceIds().join(", ")}`,
+            ),
+          );
+        } else {
+          this.turnCompleted = true;
+          this.finish();
+        }
+      }
       return;
     }
     if (message.method === "error") {
@@ -260,6 +288,7 @@ class CodexProcess {
      */
     this.callbacks.onToolStart(callId, eventName, args);
     const result = await callDeploymentTool(this.input, deploymentName, args);
+    this.dataControlWorkflow?.recordToolResult(deploymentName, args, result);
     this.callbacks.onToolResult(callId, result);
     this.write({
       id,

@@ -62,12 +62,12 @@ export const DEFAULT_GRACE_MS = 10 * 60_000;
  * A server that dies mid-turn strands its run row for ever: the queue item was finished on the 202,
  * so no retry comes back for it, and nothing else writes that row — the routines page reads
  * "running now" for a run no process is running. Twice the server's own turn timeout
- * (`DEFAULT_TURN_TIMEOUT_MS` in `./run-turn`, five minutes), so a slow-but-alive turn is never
+ * (including the 30-minute data-control override in `index.ts`), so a slow-but-alive turn is never
  * closed out from under the server still running it. A local constant rather than an import because
  * the sweep runs as a CronJob and must not drag the runtime's import graph — the Intelligence
  * client and everything behind it — into that process.
  */
-const ABANDONED_RUN_MS = 10 * 60_000;
+const ABANDONED_RUN_MS = 40 * 60_000;
 
 export type RoutineSweepOptions = {
   routineStore: RoutineStore;

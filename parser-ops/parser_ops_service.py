@@ -305,6 +305,85 @@ def audit_all_sources() -> dict[str, Any]:
     }
 
 
+def _diagnostic_triage(
+    source: dict[str, Any], status: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Turn parser evidence into a mandatory next action for the maintenance agent."""
+    status = status if isinstance(status, dict) else {}
+    flags = set(source.get("flags") or [])
+    last_error = str(status.get("last_refresh_error") or "")
+    upstream_state = str(
+        status.get("last_refresh_upstream_state")
+        or status.get("upstream_state")
+        or ""
+    )
+    last_quality = status.get("last_refresh_quality")
+    blocked_marker = (
+        bool(last_quality.get("blocked_marker"))
+        if isinstance(last_quality, dict)
+        else False
+    )
+
+    if "disabled" in flags:
+        return {
+            "disposition": "operationally_disabled",
+            "requiresCodeInspection": False,
+            "retryRecommended": False,
+            "reason": "The source is explicitly disabled by operations policy.",
+        }
+    if upstream_state == "upstream_publication_pending" or (
+        "upstream publication pending" in last_error.lower()
+    ):
+        return {
+            "disposition": "upstream_pending",
+            "requiresCodeInspection": False,
+            "retryRecommended": False,
+            "reason": "The upstream publisher has not finished publishing the expected dataset.",
+        }
+    if "unexpected_selected_params" in last_error:
+        return {
+            "disposition": "inspect_adapter",
+            "requiresCodeInspection": True,
+            "retryRecommended": False,
+            "reason": "A valid candidate was rejected by our selected-parameter contract.",
+        }
+    if blocked_marker:
+        return {
+            "disposition": "retry_transient",
+            "requiresCodeInspection": False,
+            "retryRecommended": True,
+            "reason": "The latest candidate contains an access-blocking marker.",
+        }
+    transport = status.get("last_refresh_parsesunix_transport")
+    if (
+        isinstance(transport, dict)
+        and transport.get("transport_validated") is True
+        and transport.get("candidate_validated") is True
+        and "dataset regression" in last_error.lower()
+    ):
+        return {
+            "disposition": "upstream_regression",
+            "requiresCodeInspection": False,
+            "retryRecommended": False,
+            "reason": "A valid upstream candidate was preserved by the publication regression gate.",
+        }
+    if flags.intersection(
+        {"cached_after_failure", "hard_failed", "semantic_failed", "publication_failed", "stale"}
+    ):
+        return {
+            "disposition": "investigate_implementation",
+            "requiresCodeInspection": True,
+            "retryRecommended": False,
+            "reason": "The failure is not proven to be upstream-only or operationally disabled.",
+        }
+    return {
+        "disposition": "healthy",
+        "requiresCodeInspection": False,
+        "retryRecommended": False,
+        "reason": "No failing health flag remains for this source.",
+    }
+
+
 def diagnose_source(source_id: Any) -> dict[str, Any]:
     ids = _source_ids([source_id])
     encoded = urllib.parse.quote(ids[0], safe="")
@@ -328,9 +407,11 @@ def diagnose_source(source_id: Any) -> dict[str, Any]:
             [],
         ),
     }
+    status = detail.get("status")
     return {
         "source": source,
-        "status": detail.get("status"),
+        "status": status,
+        "triage": _diagnostic_triage(source, status),
         "semanticQuality": detail.get("semantic_quality"),
         "hasDataset": detail.get("has_dataset"),
         "datasetFetchedAt": detail.get("dataset_fetched_at"),

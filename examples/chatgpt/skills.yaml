@@ -8,12 +8,20 @@ skills:
       lkg_served не являются подтверждением свежести: успешный итог — fresh_published.
 
       Для временного сетевого сбоя используй retry_sources не более чем для пяти источников за раз.
+      Для каждого проблемного источника обязательно следуй diagnose_source.triage. retry_transient
+      требует одного bounded retry и повторной диагностики. inspect_adapter и
+      investigate_implementation требуют изучения кода и исправления подтверждённого локального
+      дефекта. unexpected_selected_params, изменение schema/contract или корректный непустой
+      candidate, отклонённый нашим адаптером, уже являются достаточным подтверждением для изучения
+      реализации — не заканчивай проверку формулировкой «дефект не подтверждён».
       Если upstream ещё не опубликовал ожидаемый набор, не меняй код. Если подтверждено изменение
       формата или ошибка адаптера, сначала вызови codegraph_explore, затем внеси минимальное изменение
       в выделенной рабочей копии, добавь регрессионный тест и вызови validate_workspace сначала в
       targeted, затем в full и security режимах. Никогда не читай .env, cookies, токены, credentials,
       production-базы и дампы. Не ослабляй contracts, semantic/completeness validation или publication
       gates ради зелёного статуса. Порядок провайдеров Scrape.do → Firecrawl → Scrapfly неизменяем.
+      Не завершай работу одной диагностикой, пока проблема остаётся, кроме доказанных состояний
+      upstream_pending, upstream_regression и operationally_disabled.
 
       Публикуй только через publish_and_verify. После публикации дождись bounded refresh затронутых
       источников и проверь fresh_published. Если проверка провалилась, исполнитель автоматически

@@ -3,6 +3,7 @@ import { EventEncoder } from "@ag-ui/encoder";
 import { serve } from "bun";
 import { hasManagedAgentToken } from "../../shared/agent-authorisation";
 import { runCodex } from "./codex-run";
+import { SafeStreamWriter } from "./safe-stream";
 
 const PORT = Number.parseInt(process.env.PORT ?? "4202", 10);
 const MANAGED_AGENT_TOKEN = process.env.MANAGED_AGENT_TOKEN?.trim();
@@ -10,16 +11,19 @@ if (!MANAGED_AGENT_TOKEN) throw new Error("MANAGED_AGENT_TOKEN is required.");
 
 async function runAgent(input: RunAgentInput): Promise<Response> {
   const encoder = new EventEncoder();
+  let writer: SafeStreamWriter | undefined;
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      const output = new SafeStreamWriter(controller);
+      writer = output;
       const utf8 = new TextEncoder();
       const send = (event: BaseEvent) =>
-        controller.enqueue(utf8.encode(encoder.encodeSSE(event)));
+        output.enqueue(utf8.encode(encoder.encodeSSE(event)));
       // Bun cannot keep an HTTP request idle for more than 255 seconds. A validation or deployment
       // tool may legitimately run longer, so SSE comments keep the transport alive without adding
       // fake AG-UI events to the conversation.
       const keepAlive = setInterval(
-        () => controller.enqueue(utf8.encode(": keep-alive\n\n")),
+        () => output.enqueue(utf8.encode(": keep-alive\n\n")),
         30_000,
       );
       let openMessage: string | null = null;
@@ -127,8 +131,12 @@ async function runAgent(input: RunAgentInput): Promise<Response> {
         } as BaseEvent);
       } finally {
         clearInterval(keepAlive);
-        controller.close();
+        output.close();
       }
+    },
+    cancel() {
+      // The browser leaving the page ends delivery, not the maintenance work already in progress.
+      writer?.disconnect();
     },
   });
   return new Response(stream, {
