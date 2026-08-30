@@ -511,6 +511,10 @@ const signRunForActor =
     mintRunAssertion(
       { botId, actorId, runId, threadId },
       config.keyEncryptionKey,
+      Date.now(),
+      // Parser repairs legitimately run full validation and a production verification cycle.
+      // Keep ordinary Bots at the shorter default while covering this Bot's 30-minute turn budget.
+      botId === "data-control" ? 35 * 60_000 : undefined,
     );
 
 /*

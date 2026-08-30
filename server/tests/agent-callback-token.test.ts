@@ -74,6 +74,21 @@ describe("the run assertion", () => {
     });
   });
 
+  test("supports a bounded longer assertion for maintenance runs", () => {
+    const signed = mintRunAssertion(RUN, KEY, 0, 35 * 60 * 1000);
+    expect(readRunAssertion(signed, KEY, 30 * 60 * 1000)).toEqual({
+      ...RUN,
+      depth: 0,
+    });
+    expect(readRunAssertion(signed, KEY, 36 * 60 * 1000)).toBeNull();
+  });
+
+  test("refuses an invalid custom lifetime", () => {
+    expect(() => mintRunAssertion(RUN, KEY, 0, 0)).toThrow(
+      "A run assertion lifetime must be a positive number.",
+    );
+  });
+
   test("is refused when it is missing, empty or not a string", () => {
     expect(readRunAssertion(undefined, KEY)).toBeNull();
     expect(readRunAssertion("", KEY)).toBeNull();

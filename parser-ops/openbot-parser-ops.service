@@ -19,7 +19,7 @@ UMask=0007
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/srv/projects/agents/control-data/api /srv/hs-data-api /var/lib/openbot-parser-ops
+ReadWritePaths=/srv/projects/agents/control-data/api /srv/hs-data-api /var/lib/openbot-parser-ops /root/.docker/buildx
 NoNewPrivileges=false
 
 [Install]

@@ -39,7 +39,8 @@ const RUN_LABEL = "openbot:agent-run";
  * How long an assertion is good for.
  *
  * A run is not instant: a Bot may answer, call a tool, read the result and call another. Ten minutes
- * covers a slow tool loop with room to spare, and bounds what a captured assertion is worth.
+ * covers an ordinary tool loop with room to spare, and bounds what a captured assertion is worth.
+ * Long-running maintenance Bots may receive a larger, explicitly bounded window at mint time.
  */
 const RUN_TTL_MS = 10 * 60 * 1000;
 
@@ -117,11 +118,15 @@ export function mintRunAssertion(
   run: RunAssertion,
   encryptionKey: string,
   now: number = Date.now(),
+  ttlMs: number = RUN_TTL_MS,
 ): string {
+  if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
+    throw new Error("A run assertion lifetime must be a positive number.");
+  }
   const payload: SignedRun = {
     ...run,
     depth: run.depth ?? 0,
-    exp: now + RUN_TTL_MS,
+    exp: now + ttlMs,
   };
   const value = Buffer.from(JSON.stringify(payload)).toString("base64url");
   return sign(value, encryptionKey, RUN_LABEL);
