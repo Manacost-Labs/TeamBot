@@ -24,13 +24,20 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  runMetadataPrefetch,
+  scheduleChannelPrefetch,
+} from "@/lib/channels/channel-prefetch";
+import {
   deleteChannelMutationOptions,
   setChannelPinnedMutationOptions,
 } from "@/lib/channels/mutations";
-import { channelQueryOptions } from "@/lib/channels/queries";
+import { channelKeys, channelQueryOptions } from "@/lib/channels/queries";
 import { useAgentRunActivity } from "@/lib/copilot/run-activity-store";
 import { agentRunStatusLabel, isAgentRunActive } from "@/lib/copilot/run-state";
-import { prefetchThreadMessages } from "@/lib/copilot/thread-messages";
+import {
+  clearThreadMessagesCache,
+  prefetchThreadMessages,
+} from "@/lib/copilot/thread-messages";
 import {
   beginChannelTiming,
   shouldBeginChannelTiming,
@@ -94,10 +101,39 @@ export const Channel = memo(function Channel({
     runActivity !== null && isAgentRunActive(runActivity.state.status);
 
   const prefetchChannel = () => {
-    void queryClient.prefetchQuery(channelQueryOptions(channelId));
-    if (historyScope && runtimeAgentId) {
-      void prefetchThreadMessages(historyScope, threadId, runtimeAgentId);
-    }
+    // A global speculative queue may outlive a sign-in transition. Without an authenticated scope
+    // it must not deduplicate or warm metadata on behalf of an unknown session.
+    if (!historyScope) return;
+    scheduleChannelPrefetch({
+      agentId: runtimeAgentId,
+      channelId,
+      sessionScope: historyScope,
+      threadId,
+      onScopeChange: (previousScope) => {
+        // Channel query keys predate authenticated scoping, so they must be destroyed before a new
+        // user's first hover can reuse them. The scheduler has already aborted the old callbacks.
+        void queryClient.cancelQueries({ queryKey: channelKeys.all });
+        queryClient.removeQueries({ queryKey: channelKeys.all });
+        clearThreadMessagesCache(previousScope);
+      },
+      prefetchMetadata: (signal) => {
+        const options = channelQueryOptions(channelId);
+        return runMetadataPrefetch({
+          signal,
+          queryClient,
+          queryKey: options.queryKey,
+          prefetch: () => queryClient.prefetchQuery(options),
+        });
+      },
+      ...(runtimeAgentId
+        ? {
+            prefetchHistory: (signal: AbortSignal) =>
+              prefetchThreadMessages(historyScope, threadId, runtimeAgentId, {
+                signal,
+              }),
+          }
+        : {}),
+    });
   };
 
   const confirmDelete = async () => {

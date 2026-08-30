@@ -74,9 +74,10 @@ export function channelListQueryOptions() {
 export function channelQueryOptions(channelId: string) {
   return queryOptions({
     queryKey: channelKeys.detail(channelId),
-    queryFn: async (): Promise<AgentChannel> => {
+    queryFn: async ({ signal }): Promise<AgentChannel> => {
       return client(`/api/channels/${channelId}`, "channel", {
         fallback: "Could not load this channel",
+        signal,
       });
     },
   });

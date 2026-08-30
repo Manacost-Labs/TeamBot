@@ -47,9 +47,11 @@ import {
 } from "@/components/ui/sidebar";
 import { signOutMutationOptions } from "@/lib/auth/mutations";
 import { currentUserQueryOptions } from "@/lib/auth/queries";
+import { cancelChannelPrefetchScope } from "@/lib/channels/channel-prefetch";
 import { conversationStateCache } from "@/lib/channels/conversation-state";
 import {
   type ChannelSummary,
+  channelKeys,
   channelListQueryOptions,
 } from "@/lib/channels/queries";
 import { useChannelEvents } from "@/lib/channels/use-channel-events";
@@ -300,10 +302,17 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     !searching && (channels.data?.length ?? 0) <= MAX_ANIMATED_ROWS;
 
   const handleSignOut = async () => {
+    if (currentUser) {
+      // Stop speculative authenticated reads before the server session is revoked. Channel query
+      // keys are shared, so leaving even a completed A entry would expose it to the next sign-in B.
+      cancelChannelPrefetchScope(currentUser.id);
+      await queryClient.cancelQueries({ queryKey: channelKeys.all });
+      queryClient.removeQueries({ queryKey: channelKeys.all });
+      clearThreadMessagesCache(currentUser.id);
+    }
     await signOut.mutateAsync();
     if (currentUser) {
       clearAgentRunSessionScope(currentUser.id);
-      clearThreadMessagesCache(currentUser.id);
     }
     conversationStateCache.clear();
     await navigate({ to: "/sign" });
