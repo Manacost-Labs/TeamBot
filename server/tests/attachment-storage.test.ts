@@ -75,7 +75,14 @@ describe("reserved filesystem attachment blobs", () => {
   test("does not expose unfenced namespace mutations on the public store type", () => {
     type UnsafeMutation = Extract<
       keyof AttachmentBlobStore,
-      "delete" | "inspect" | "publish" | "withKey" | "writeTemporary"
+      | "delete"
+      | "inspect"
+      | "openTemporary"
+      | "publish"
+      | "withFilePath"
+      | "withKey"
+      | "withTemporaryFilePath"
+      | "writeTemporary"
     >;
     const hasNoUnsafeMutation: UnsafeMutation extends never ? true : false =
       true;

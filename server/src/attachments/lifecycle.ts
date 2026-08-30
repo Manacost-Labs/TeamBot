@@ -4,6 +4,7 @@ import { attachmentBlobs } from "../db/schema";
 import {
   type AttachmentBlobMaintenance,
   type AttachmentBlobStore,
+  type AttachmentStoredValidator,
   executeFencedAttachmentUpload,
 } from "./blob-store";
 import type {
@@ -253,6 +254,11 @@ export type AttachmentUploadService = {
     actorUserId: string,
     channelId: string,
   ): Promise<AttachmentReservation | null>;
+  cancel(
+    actorUserId: string,
+    channelId: string,
+    reservation: AttachmentReservation,
+  ): Promise<boolean>;
   upload(
     actorUserId: string,
     channelId: string,
@@ -260,7 +266,10 @@ export type AttachmentUploadService = {
     reservation: AttachmentReservation,
     input: UploadAttachmentInput,
     body: ReadableStream<Uint8Array>,
-    options?: { signal?: AbortSignal },
+    options?: {
+      signal?: AbortSignal;
+      readyToFinalize?: Promise<void>;
+    },
   ): Promise<AttachmentRecord | null>;
 };
 
@@ -277,6 +286,7 @@ export class AttachmentUploadBusyError extends Error {
 export function createAttachmentUploadService(options: {
   metadata: AttachmentUploadMetadataPort;
   blobs: AttachmentBlobStore;
+  validator: AttachmentStoredValidator;
   maxConcurrentUploads?: number;
 }): AttachmentUploadService {
   const gate = new UploadConcurrencyGate(
@@ -285,6 +295,8 @@ export function createAttachmentUploadService(options: {
   return {
     reserve: (actorUserId, channelId) =>
       options.metadata.reserve(actorUserId, channelId),
+    cancel: (actorUserId, channelId, reservation) =>
+      options.metadata.cancel(actorUserId, channelId, reservation),
     async upload(
       actorUserId,
       channelId,
@@ -294,6 +306,9 @@ export function createAttachmentUploadService(options: {
       body,
       uploadOptions = {},
     ) {
+      // Multipart parsing may reject before streaming/validation reaches the barrier.
+      // Observe it immediately; the original promise is still awaited and rethrown below.
+      void uploadOptions.readyToFinalize?.catch(() => {});
       const unreadBody = unreadBodyCancellation(body);
       const releaseSlot = gate.tryEnter();
       if (!releaseSlot) {
@@ -321,6 +336,8 @@ export function createAttachmentUploadService(options: {
             reservation,
             input,
             body,
+            validator: options.validator,
+            readyToFinalize: uploadOptions.readyToFinalize,
             deadline,
             beforeRead: unreadBody.markRead,
           });

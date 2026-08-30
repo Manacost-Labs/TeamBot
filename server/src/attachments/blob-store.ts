@@ -23,6 +23,10 @@ import type {
   AttachmentStore,
   FinalizeAttachmentInput,
 } from "./store";
+import type {
+  StoredAttachmentValidationInput,
+  ValidatedAttachmentMetadata,
+} from "./validation";
 
 const DEFAULT_MAX_BYTES = 25 * 1024 * 1024;
 const ROOT_MODE = 0o700;
@@ -62,6 +66,10 @@ type AttachmentBlobLease = {
     source: ReadableStream<Uint8Array>,
     options?: WriteOptions,
   ): Promise<StoredAttachmentBlob>;
+  openTemporary(): Promise<ReadableStream<Uint8Array>>;
+  withTemporaryFilePath<Value>(
+    inspect: (internalPath: string) => Promise<Value>,
+  ): Promise<Value>;
   inspect(): Promise<AttachmentBlobPresence>;
   publish(): Promise<boolean>;
   delete(): Promise<boolean>;
@@ -124,6 +132,9 @@ export class AttachmentBlobStore {
       return await operation({
         writeTemporary: (source, options) =>
           this.writeTemporary(storageKey, source, options),
+        openTemporary: () => this.openTemporary(storageKey),
+        withTemporaryFilePath: (inspect) =>
+          this.withTemporaryFilePath(storageKey, inspect),
         inspect: () => this.inspect(storageKey),
         publish: () => this.publish(storageKey),
         delete: () => this.delete(storageKey),
@@ -262,13 +273,48 @@ export class AttachmentBlobStore {
   async open(storageKey: string): Promise<ReadableStream<Uint8Array>> {
     this.assertStorageKey(storageKey);
     await this.ensurePrivateRoot();
-    const targetPath = this.pathFor(storageKey);
+    return this.openBlobPath(this.pathFor(storageKey), "attachment blob");
+  }
+
+  private async openTemporary(
+    storageKey: string,
+  ): Promise<ReadableStream<Uint8Array>> {
+    this.assertStorageKey(storageKey);
+    await this.ensurePrivateRoot();
+    return this.openBlobPath(
+      this.temporaryPathFor(storageKey),
+      "temporary attachment blob",
+    );
+  }
+
+  private async withTemporaryFilePath<Value>(
+    storageKey: string,
+    inspect: (internalPath: string) => Promise<Value>,
+  ): Promise<Value> {
+    this.assertStorageKey(storageKey);
+    await this.ensurePrivateRoot();
+    const temporaryPath = this.temporaryPathFor(storageKey);
+    if (
+      !(await this.inspectBlobPath(temporaryPath, "temporary attachment blob"))
+    ) {
+      throw new Error("Temporary attachment blob not found");
+    }
+    if ((await realpath(temporaryPath)) !== temporaryPath) {
+      throw new Error("Temporary attachment blob cannot be a symbolic link");
+    }
+    return inspect(temporaryPath);
+  }
+
+  private async openBlobPath(
+    targetPath: string,
+    label: string,
+  ): Promise<ReadableStream<Uint8Array>> {
     const kind = await pathKind(targetPath);
     if (kind === null) throw new Error("Attachment blob not found");
     if (kind === "symlink") {
-      throw new Error("Attachment blob cannot be a symbolic link");
+      throw new Error(`${label} cannot be a symbolic link`);
     }
-    if (kind !== "file") throw new Error("Attachment blob is not a file");
+    if (kind !== "file") throw new Error(`${label} is not a file`);
 
     let handle: FileHandle | null = null;
     try {
@@ -277,7 +323,7 @@ export class AttachmentBlobStore {
         constants.O_RDONLY | constants.O_NOFOLLOW,
       );
       const opened = await handle.stat();
-      if (!opened.isFile()) throw new Error("Attachment blob is not a file");
+      if (!opened.isFile()) throw new Error(`${label} is not a file`);
       const nodeStream = handle.createReadStream({ autoClose: true });
       handle = null;
       return Readable.toWeb(
@@ -289,7 +335,7 @@ export class AttachmentBlobStore {
         throw new Error("Attachment blob not found", { cause: error });
       }
       if (hasCode(error, "ELOOP")) {
-        throw new Error("Attachment blob cannot be a symbolic link", {
+        throw new Error(`${label} cannot be a symbolic link`, {
           cause: error,
         });
       }
@@ -402,6 +448,10 @@ type AttachmentUploadDeadline = {
   bound(expiresAt: Date): void;
 };
 
+export type AttachmentStoredValidator = (
+  input: StoredAttachmentValidationInput,
+) => Promise<ValidatedAttachmentMetadata>;
+
 /** Composition-only upload flow. It never returns a raw filesystem mutation capability. */
 export async function executeFencedAttachmentUpload(options: {
   metadata: AttachmentUploadMetadataPort;
@@ -412,6 +462,8 @@ export async function executeFencedAttachmentUpload(options: {
   reservation: AttachmentReservation;
   input: Omit<FinalizeAttachmentInput, "sha256" | "size">;
   body: ReadableStream<Uint8Array>;
+  validator: AttachmentStoredValidator;
+  readyToFinalize?: Promise<void>;
   deadline: AttachmentUploadDeadline;
   beforeRead(): void;
 }): Promise<AttachmentRecord | null> {
@@ -435,8 +487,46 @@ export async function executeFencedAttachmentUpload(options: {
                 onReaderAcquired: options.beforeRead,
               });
               options.deadline.signal.throwIfAborted();
+              let validationActive = true;
+              const requireValidationScope = () => {
+                if (!validationActive) {
+                  throw new Error("Attachment validation access expired");
+                }
+              };
+              let validated: ValidatedAttachmentMetadata;
+              try {
+                const validation = Promise.resolve().then(() =>
+                  options.validator({
+                    name: options.input.name,
+                    claimedMimeType: options.input.mimeType,
+                    openStream: () => {
+                      requireValidationScope();
+                      return blob.openTemporary();
+                    },
+                    withFilePath: (inspect) => {
+                      requireValidationScope();
+                      return blob.withTemporaryFilePath(
+                        async (internalPath) => {
+                          requireValidationScope();
+                          return inspect(internalPath);
+                        },
+                      );
+                    },
+                  }),
+                );
+                validated = await waitForValidationAndBarrier(
+                  validation,
+                  options.readyToFinalize,
+                  options.deadline.signal,
+                );
+              } finally {
+                validationActive = false;
+              }
+              options.deadline.signal.throwIfAborted();
               const attachment = await lease.finalize(options.source, {
                 ...options.input,
+                name: validated.name,
+                mimeType: validated.mimeType,
                 size: stored.size,
                 sha256: stored.sha256,
               });
@@ -512,12 +602,47 @@ export function createAttachmentBlobMaintenance(
 
 type UnsafePublicBlobMutation = Extract<
   keyof AttachmentBlobStore,
-  "delete" | "inspect" | "publish" | "withKey" | "writeTemporary"
+  | "delete"
+  | "inspect"
+  | "openTemporary"
+  | "publish"
+  | "withFilePath"
+  | "withKey"
+  | "withTemporaryFilePath"
+  | "writeTemporary"
 >;
 const attachmentBlobStoreHasNoPublicMutation: UnsafePublicBlobMutation extends never
   ? true
   : false = true;
 void attachmentBlobStoreHasNoPublicMutation;
+
+async function waitForValidationAndBarrier(
+  validation: Promise<ValidatedAttachmentMetadata>,
+  ready: Promise<void> | undefined,
+  signal: AbortSignal,
+): Promise<ValidatedAttachmentMetadata> {
+  signal.throwIfAborted();
+  const barrier = ready ?? Promise.resolve();
+  // Both tasks may outlive a fail-fast abort. Keep their eventual rejections observed.
+  void validation.catch(() => {});
+  void barrier.catch(() => {});
+  const combined = Promise.all([validation, barrier]).then(
+    ([validated]) => validated,
+  );
+
+  let onAbort = () => {};
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason ?? new Error("Upload aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    const validated = await Promise.race([combined, aborted]);
+    signal.throwIfAborted();
+    return validated;
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
 
 async function readWithAbort(
   reader: ReadableStreamDefaultReader<Uint8Array>,
