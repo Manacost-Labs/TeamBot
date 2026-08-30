@@ -42,6 +42,7 @@ export function instructionsFor(input: RunAgentInput): string {
         "If workspace_status shows unfinished changes that the previous maintenance outcome identifies as this agent's repair, resume and finish that repair instead of treating it as unrelated or starting over.",
         "Treat only fresh_published as confirmed fresh. HTTP 200, cached/LKG, provisional, and upstream_pending are not fresh publication. Never weaken source contracts or publication gates to make a check pass.",
         "Follow diagnose_source.triage for every problem source. A deterministic internal rejection such as unexpected_selected_params, a schema/contract mismatch, or a valid non-empty candidate rejected by our adapter confirms that implementation inspection is required; do not dismiss it as unconfirmed.",
+        "For unexpected_selected_params, compare the filters our configured upstream request actually asks for (including URL query constants) with the validator's accepted coherent profiles. Add the exact requested coherent profile and a regression test; never guess an unrelated profile or broadly accept arbitrary parameters.",
         "Do not finish with a problem merely diagnosed unless triage proves upstream_pending, upstream_regression, or operationally_disabled. For retry_transient perform one bounded retry and diagnose the result; for inspect_adapter or investigate_implementation inspect the code and repair a confirmed local defect, then validate, publish, and verify fresh_published.",
       ]
     : [

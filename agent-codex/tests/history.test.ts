@@ -38,6 +38,9 @@ describe("Codex prompt translation", () => {
       "unexpected_selected_params",
     );
     expect(instructionsFor(dataControl)).toContain(
+      "URL query constants",
+    );
+    expect(instructionsFor(dataControl)).toContain(
       "Follow diagnose_source.triage",
     );
     const detectedByTool = {

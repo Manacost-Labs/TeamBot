@@ -346,6 +346,11 @@ def _diagnostic_triage(
             "requiresCodeInspection": True,
             "retryRecommended": False,
             "reason": "A valid candidate was rejected by our selected-parameter contract.",
+            "inspectionHint": (
+                "Compare the exact filters in the configured upstream request URL/constants "
+                "with the validator's accepted coherent profiles; test that exact profile "
+                "without weakening strict rejection of duplicates, extras, or mixed profiles."
+            ),
         }
     if blocked_marker:
         return {

@@ -91,6 +91,7 @@ class ParserOpsValidationTest(unittest.TestCase):
         self.assertEqual(result["disposition"], "inspect_adapter")
         self.assertTrue(result["requiresCodeInspection"])
         self.assertFalse(result["retryRecommended"])
+        self.assertIn("request URL/constants", result["inspectionHint"])
 
     def test_triage_recommends_bounded_retry_for_blocked_candidate(self) -> None:
         result = service._diagnostic_triage(
