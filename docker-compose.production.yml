@@ -19,6 +19,7 @@ services:
       AGENT_ENDPOINT_ALLOWED_HOSTS: agent-codex:4202
       AGENT_COMPUTER_URL: http://127.0.0.1:4100
       PARSER_OPS_URL: http://host.docker.internal:4031
+      HEARTPULSE_OPS_URL: http://host.docker.internal:4032
       WORKER_SHARED_SECRET: ${AGENT_TOOL_TOKEN}
     ports:
       - "127.0.0.1:3021:3001"
@@ -75,6 +76,7 @@ services:
     volumes:
       - /home/debian/.codex/auth.json:/home/bun/.codex/auth.json
       - /srv/projects/agents/control-data/api:/workspace
+      - /srv/projects/web/HeartPulse-worktrees/heartpulse-control:/workspace-heartpulse
     security_opt:
       # Codex creates its own bwrap namespace. Docker's default seccomp profile blocks that setup;
       # opening it here preserves the inner workspace-only profile and credential deny rule.
