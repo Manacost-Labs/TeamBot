@@ -41,6 +41,8 @@ at `agent-langgraph` on a laptop.
 | `PORT`               | `3001`                             | API server port.                                                    |
 | `NODE_ENV`           | unset                              | `production` refuses the example `KEY_ENCRYPTION_KEY`. It does not decide whether sign-in is required; see `OPENBOT_SINGLE_USER`. |
 | `TENANT_PACKAGE_DIR` | `../examples/fintech`              | Tenant package directory, resolved from `server/`.                  |
+| `ATTACHMENT_STORAGE_DIR` | `server/.openbot/attachments` locally; `/var/lib/openbot/attachments` in production | Directory holding attachment bytes. Local development permits a relative or custom path; production accepts exactly `/var/lib/openbot/attachments`. |
+| `ATTACHMENT_MAX_BYTES` | `26214400` (25 MiB)                | Positive whole-byte limit for one attachment. Values above 1 GiB are refused. |
 | `DEPLOYMENT_ID`      | the tenant package's id            | Names this deployment inside a shared Intelligence project.          |
 | `OPENAI_API_KEY`     | unset                              | Default model key for built-in agents and both shipped Bots.        |
 | `OPENAI_BASE_URL`    | unset                              | OpenAI-compatible endpoint that key is spent against. See below.    |
@@ -56,6 +58,17 @@ at `agent-langgraph` on a laptop.
 | `APP_DIST_DIR`       | unset                              | Where the built app is, when this process serves it. Set inside the container image; unset in development, where Vite serves the app. |
 | `AUDIT_RETENTION_DAYS` | unset                            | Whole number of days to keep audit rows; older ones are removed. Unset keeps the trail forever. |
 | `WORKER_SHARED_SECRET` | unset; `start.sh` uses a fixed local default | The secret the routines worker presents to fire a due routine. Without it the server refuses every handoff, whether or not a worker exists to send one. |
+
+Attachment metadata lives in PostgreSQL, but attachment bytes live under
+`ATTACHMENT_STORAGE_DIR`. That directory therefore needs the same backup and persistence treatment
+as the database. Only the API server should receive its volume; workers, Bots, and Bot computers do
+not need direct access to customer files. Production fixes the path to
+`/var/lib/openbot/attachments`, so a configuration mistake cannot place private bytes under a
+computer workspace, browser profile, system directory, or another shared mount.
+
+The current backend is one local filesystem. Run one API replica only: separate replicas would see
+different files, and a single-writer volume does not turn them into a shared object store. Horizontal
+replicas require a future object-storage backend with shared addressing and lifecycle management.
 
 **`AGENT_STALL_TIMEOUT_MS`** watches for the failure a Bot has that nothing else in the trail can
 show: a stream that stops producing anything. Every other audit row is something that happened, and

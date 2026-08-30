@@ -3,6 +3,8 @@
  * for durable threads and memory. Configuration the product cannot function without belongs at the
  * boot boundary.
  */
+
+import { isAbsolute, resolve } from "node:path";
 import { singleUserEnabled } from "./auth/dev-actor";
 import type { ActionPolicy } from "./computer/policy";
 import { parseActionPolicy } from "./computer/policy-store";
@@ -131,6 +133,13 @@ export type HandoffCaps = {
   maxPerRun: number;
 };
 
+export type AttachmentStorageConfig = {
+  /** Absolute directory containing opaque attachment blobs. */
+  storageDirectory: string;
+  /** Maximum bytes accepted for one attachment. */
+  maxBytes: number;
+};
+
 export type DeploymentConfig = {
   databaseUrl: string;
   keyEncryptionKey: string;
@@ -190,6 +199,7 @@ export type DeploymentConfig = {
    */
   appUrl: string | undefined;
   tenantPackageDirectory: string;
+  attachments: AttachmentStorageConfig;
   runtime: RuntimeCapabilities;
   /**
    * How long a Bot's stream may say nothing before this deployment ends the turn, in milliseconds.
@@ -805,6 +815,69 @@ function agentStallTimeoutMs(environment: Environment): number {
   return milliseconds;
 }
 
+const DEFAULT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
+const MAX_ATTACHMENT_MAX_BYTES = 1024 * 1024 * 1024;
+const LOCAL_ATTACHMENT_STORAGE_DIRECTORY = resolve(
+  import.meta.dir,
+  "..",
+  ".openbot",
+  "attachments",
+);
+const PRODUCTION_ATTACHMENT_STORAGE_DIRECTORY = "/var/lib/openbot/attachments";
+
+/** Local filesystem attachment backend, validated at the same boot boundary as the database. */
+function attachmentStorageConfig(
+  environment: Environment,
+): AttachmentStorageConfig {
+  const configuredDirectory = environment.ATTACHMENT_STORAGE_DIR;
+  if (configuredDirectory !== undefined && !configuredDirectory.trim()) {
+    throw new Error("ATTACHMENT_STORAGE_DIR must not be empty");
+  }
+
+  const production = optional(environment, "NODE_ENV") === "production";
+  const storageDirectory =
+    configuredDirectory?.trim() ??
+    (production
+      ? PRODUCTION_ATTACHMENT_STORAGE_DIRECTORY
+      : LOCAL_ATTACHMENT_STORAGE_DIRECTORY);
+  if (production && !isAbsolute(storageDirectory)) {
+    throw new Error(
+      "ATTACHMENT_STORAGE_DIR must be an absolute path in production",
+    );
+  }
+  const normalizedStorageDirectory = resolve(storageDirectory);
+  if (
+    production &&
+    normalizedStorageDirectory !== PRODUCTION_ATTACHMENT_STORAGE_DIRECTORY
+  ) {
+    throw new Error(
+      `ATTACHMENT_STORAGE_DIR must be exactly ${PRODUCTION_ATTACHMENT_STORAGE_DIRECTORY} in production`,
+    );
+  }
+
+  const configuredMaxBytes = environment.ATTACHMENT_MAX_BYTES;
+  let maxBytes = DEFAULT_ATTACHMENT_MAX_BYTES;
+  if (configuredMaxBytes !== undefined) {
+    const raw = configuredMaxBytes.trim();
+    if (!/^\d+$/.test(raw)) {
+      throw new Error(
+        "ATTACHMENT_MAX_BYTES must be a positive whole number of bytes",
+      );
+    }
+    maxBytes = Number(raw);
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+      throw new Error("ATTACHMENT_MAX_BYTES must be a positive safe integer");
+    }
+    if (maxBytes > MAX_ATTACHMENT_MAX_BYTES) {
+      throw new Error(
+        `ATTACHMENT_MAX_BYTES must not exceed ${MAX_ATTACHMENT_MAX_BYTES} bytes`,
+      );
+    }
+  }
+
+  return { storageDirectory: normalizedStorageDirectory, maxBytes };
+}
+
 export function loadConfig(
   environment: Environment = process.env,
 ): DeploymentConfig {
@@ -830,6 +903,7 @@ export function loadConfig(
     )?.replace(/\/+$/, ""),
     tenantPackageDirectory:
       optional(environment, "TENANT_PACKAGE_DIR") ?? "../examples/fintech",
+    attachments: attachmentStorageConfig(environment),
     runtime: runtimeCapabilities(environment),
     agentStallTimeoutMs: agentStallTimeoutMs(environment),
     auditRetentionDays: auditRetentionDays(environment),

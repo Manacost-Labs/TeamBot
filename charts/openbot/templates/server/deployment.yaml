@@ -1,4 +1,9 @@
 {{- $component := "server" -}}
+{{- $attachments := .Values.server.attachments | default dict -}}
+{{- $attachmentPersistence := $attachments.persistence | default dict -}}
+{{- $attachmentDirectory := $attachments.storageDirectory | default "/var/lib/openbot/attachments" -}}
+{{- $attachmentMaxBytes := $attachments.maxBytes | default 26214400 -}}
+{{- $attachmentExistingClaim := $attachmentPersistence.existingClaim | default "" -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -10,6 +15,9 @@ metadata:
 {{ toYaml . | indent 4 }}
   {{- end }}
 spec:
+  {{- /* A local ReadWriteOnce volume cannot be attached to a surge pod on another node. */}}
+  strategy:
+    type: Recreate
   {{- /* Left unset when the HPA owns it, so a chart upgrade cannot undo a scale the HPA decided. */}}
   {{- if not .Values.server.autoscaling.enabled }}
   replicas: {{ .Values.server.replicaCount }}
@@ -85,6 +93,45 @@ spec:
       tolerations:
 {{ toYaml . | indent 8 }}
       {{- end }}
+      {{- /*
+        A fresh PVC root belongs to root, but the API deliberately runs as pwuser and tightens this
+        directory to 0700. Prepare only that mount before the application starts. The init container
+        receives no credentials, has no writable root filesystem, and gets only the two capabilities
+        required to set the mount root's mode and owner. Its mount path is deliberately fixed: a
+        configured application path such as /etc must not hide the passwd database used by chown.
+      */}}
+      initContainers:
+        - name: prepare-attachment-storage
+          image: {{ include "openbot.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -eu
+            - -c
+            - chmod 0700 /attachment-storage && chown pwuser:pwuser /attachment-storage
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - CHOWN
+                - FOWNER
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 5m
+              memory: 8Mi
+            limits:
+              memory: 32Mi
+          volumeMounts:
+            - name: attachments
+              mountPath: /attachment-storage
       containers:
         - name: server
           image: {{ include "openbot.image" . }}
@@ -100,6 +147,10 @@ spec:
           env:
 {{ include "openbot.databaseUrlEnv" . | indent 12 }}
 {{ include "openbot.commonEnv" . | indent 12 }}
+            - name: ATTACHMENT_STORAGE_DIR
+              value: {{ $attachmentDirectory | quote }}
+            - name: ATTACHMENT_MAX_BYTES
+              value: {{ $attachmentMaxBytes | quote }}
           envFrom:
             - configMapRef:
                 name: {{ include "openbot.configMapName" . }}
@@ -136,9 +187,12 @@ spec:
             periodSeconds: {{ .Values.server.livenessProbe.periodSeconds }}
             timeoutSeconds: {{ .Values.server.livenessProbe.timeoutSeconds }}
             failureThreshold: {{ .Values.server.livenessProbe.failureThreshold }}
-          {{- if eq .Values.computers.mode "sandbox" }}
+          {{- /* Attachment bytes belong only to the API; jobs and Bot computers never mount them. */}}
           {{- /* The shape of a Bot's computer, as a file rather than as a permission to read one. */}}
           volumeMounts:
+            - name: attachments
+              mountPath: {{ $attachmentDirectory | quote }}
+            {{- if eq .Values.computers.mode "sandbox" }}
             - name: sandbox-template
               mountPath: /etc/openbot
               readOnly: true
@@ -147,8 +201,11 @@ spec:
           resources:
 {{ toYaml . | indent 12 }}
           {{- end }}
-      {{- if eq .Values.computers.mode "sandbox" }}
       volumes:
+        - name: attachments
+          persistentVolumeClaim:
+            claimName: {{ default (include "openbot.componentName" (dict "root" . "component" "attachments")) $attachmentExistingClaim }}
+        {{- if eq .Values.computers.mode "sandbox" }}
         - name: sandbox-template
           configMap:
             name: {{ include "openbot.componentName" (dict "root" . "component" "computer-template") }}

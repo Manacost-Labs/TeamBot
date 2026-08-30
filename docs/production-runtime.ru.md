@@ -16,18 +16,21 @@ OpenBot. Общие варианты установки описаны в [Deplo
    `auth_request` и проксирует разрешённый запрос на loopback-порт `3021`.
 2. `edge-auth` слушает loopback-порт `3030`, проверяет HMAC-сессию и отвечает Nginx кодом 204 или
    401. При истёкшей iframe-сессии Nginx показывает страницу безопасного повторного входа.
-3. `openbot` публикует контейнерный порт 3001 только как `127.0.0.1:3021`. В одном контейнере
-   работают API, собранное web-приложение, встроенный Chromium и, при `EMBEDDED_POSTGRES=on`,
-   PostgreSQL.
-4. Copilot runtime отправляет AG-UI-запрос в `agent-codex:4202/ag-ui`. Адрес доступен только в сети
+3. `openbot` публикует контейнерный порт 3001 только как `127.0.0.1:3021`. В нём работают API,
+   собранное web-приложение и, при `EMBEDDED_POSTGRES=on`, PostgreSQL. Computer внутри API явно
+   выключен через `EMBEDDED_COMPUTER=off`.
+4. `agent-computer` запускается из того же image отдельным non-root процессом, получает только
+   `COMPUTER_TOKEN`, `/workspace` и `/profiles`, но не volume вложений. API обращается к нему по
+   `http://agent-computer:4100` только после успешного health check.
+5. Copilot runtime отправляет AG-UI-запрос в `agent-codex:4202/ag-ui`. Адрес доступен только в сети
    Compose и должен оставаться в `AGENT_ENDPOINT_ALLOWED_HOSTS`.
-5. `agent-codex` запускает отдельный `codex app-server` для принятого запроса. Обратные вызовы
+6. `agent-codex` запускает отдельный `codex app-server` для принятого запроса. Обратные вызовы
    разрешённых инструментов идут на `openbot:3001/api/agent-tools/call`.
-6. `routine-worker` разделяет network namespace с `openbot`, читает пароль встроенной БД через
+7. `routine-worker` разделяет network namespace с `openbot`, читает пароль встроенной БД через
    read-only mount и запускает запланированные инструкции.
-7. `editor-gateway` использует тот же AG-UI endpoint, но остаётся отдельным сервисом перед
+8. `editor-gateway` использует тот же AG-UI endpoint, но остаётся отдельным сервисом перед
    `editor-analyzer`. В production Compose для него заданы лимиты попыток, времени и размера текста.
-8. `research-sources` — отдельный шлюз источников для research-профиля. Его ключи не должны попадать
+9. `research-sources` — отдельный шлюз источников для research-профиля. Его ключи не должны попадать
    в AG-UI, журналы выполнения или workspace.
 
 Постоянные данные разделены по владельцам:
@@ -36,6 +39,7 @@ OpenBot. Общие варианты установки описаны в [Deplo
 | --- | --- | --- |
 | Каналы, политики, аудит, профили, grants | PostgreSQL OpenBot | volume `openbot-postgres` либо внешняя БД |
 | История тредов и memory | CopilotKit Intelligence | внешний авторитетный сервис |
+| Приватные bytes вложений | `/var/lib/openbot/attachments` | volume `openbot-attachments`; метаданные отдельно в PostgreSQL |
 | Файлы общего computer | `/workspace` | volume `openbot-workspace` |
 | Browser profile и активные логины | `/profiles` | volume `openbot-profiles` |
 | Артефакты исследований | `/research-runs` | volume `research-runs` |
@@ -157,8 +161,10 @@ Production Compose ослабляет внешний seccomp/AppArmor и доб�
 - `/workspace` в `agent-codex` — выделенный source clone для data-control, а не production runtime.
 - `/workspace-heartpulse` — отдельный HeartPulse worktree. Изменения production-путей запрещены.
 - `/workspace-research` монтируется read-only; результат пишется только в `/research-runs`.
-- Общий `/workspace` контейнера `openbot` принадлежит computer и сохраняется отдельным volume. Это
-  другая граница, несмотря на одинаковое имя каталога внутри разных контейнеров.
+- `/workspace` и `/profiles` монтируются только в отдельный `agent-computer`. В `openbot` этих
+  mounts нет; только API получает `openbot-attachments` по фиксированному пути
+  `/var/lib/openbot/attachments`. Поэтому shell/browser computer не может прочитать вложения через
+  общий процесс или volume.
 - `editor-gateway` ограничивает один запрос параметрами `EDITOR_MAX_ATTEMPTS=3`,
   `EDITOR_TIMEOUT_SEC=240` и `EDITOR_MAX_TEXT_BYTES=524288`, а анализатор вынесен в отдельный сервис.
   Editor не получает обход sandbox: итоговый AG-UI run всё равно проходит профиль `agent-codex`.

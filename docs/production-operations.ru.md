@@ -22,6 +22,10 @@ release-копии или volumes как исходный код.
    docker compose -f "$COMPOSE_FILE" config --quiet
    ```
 
+   Проверьте, что `openbot` имеет `EMBEDDED_COMPUTER=off`, зависит от healthy `agent-computer` и
+   один монтирует `openbot-attachments:/var/lib/openbot/attachments`. У `agent-computer` должны быть
+   только `openbot-workspace` и `openbot-profiles`; volume вложений ему не передаётся.
+
 4. Для изменения исходников выполните quality gates:
 
    ```sh
@@ -55,9 +59,11 @@ docker compose -f "$COMPOSE_FILE" start routine-worker
 Путь `/secure/backup` — пример: выберите каталог с контролем доступа и политикой retention. Проверьте,
 что файл ненулевой, и выполните тестовое восстановление в отдельную БД. Не добавляйте dump в Git.
 
-Workspace, browser profiles и research reports не входят в database dump. Если изменение затрагивает
-их формат, сделайте согласованный snapshot volumes `openbot-workspace`, `openbot-profiles` и
-`research-runs`. Не используйте `docker compose down -v`.
+Attachment bytes, workspace, browser profiles и research reports не входят в database dump. Если
+изменение затрагивает их формат, сделайте согласованный snapshot volumes `openbot-attachments`,
+`openbot-workspace`, `openbot-profiles` и `research-runs`. Метаданные вложений в PostgreSQL и bytes
+из `openbot-attachments` должны восстанавливаться из одной согласованной точки. Не используйте
+`docker compose down -v`.
 
 ## Deployment в приватном Compose-контуре
 
@@ -71,6 +77,8 @@ curl -fsS http://127.0.0.1:3021/health >/dev/null
 curl -fsS http://127.0.0.1:3030/health >/dev/null
 docker compose -f "$COMPOSE_FILE" exec -T agent-codex \
   bun -e "const r=await fetch('http://127.0.0.1:4202/health');process.exit(r.ok?0:1)"
+docker compose -f "$COMPOSE_FILE" exec -T agent-computer \
+  bun -e "const r=await fetch('http://127.0.0.1:4100/health');process.exit(r.ok?0:1)"
 ```
 
 После health checks выполните один реальный test-run без чувствительного текста и найдите его

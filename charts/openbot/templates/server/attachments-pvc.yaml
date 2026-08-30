@@ -1,0 +1,31 @@
+{{- $attachments := .Values.server.attachments | default dict -}}
+{{- $persistence := $attachments.persistence | default dict -}}
+{{- $enabled := true -}}
+{{- if hasKey $persistence "enabled" -}}
+{{- $enabled = $persistence.enabled -}}
+{{- end -}}
+{{- $existingClaim := $persistence.existingClaim | default "" -}}
+{{- $customAnnotations := omit ($persistence.annotations | default dict) "helm.sh/resource-policy" -}}
+{{- if and $enabled (not $existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "openbot.componentName" (dict "root" . "component" "attachments") }}
+  labels:
+{{ include "openbot.componentLabels" (dict "root" . "component" "attachments") | indent 4 }}
+  annotations:
+    # PostgreSQL metadata without these bytes is incomplete. An uninstall must not erase them.
+    helm.sh/resource-policy: keep
+  {{- with $customAnnotations }}
+{{ toYaml . | indent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+{{ toYaml ($persistence.accessModes | default (list "ReadWriteOnce")) | indent 4 }}
+  {{- with $persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $persistence.size | default "20Gi" | quote }}
+{{- end }}

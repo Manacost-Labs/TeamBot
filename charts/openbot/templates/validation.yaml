@@ -186,21 +186,59 @@ This template renders nothing.
 {{- fail "externalSecrets.enabled and secrets.existingSecret are both set. The first creates the Secret and the second says one already exists; pick one." }}
 {{- end }}
 
-{{- /*
-  A replica count that cannot survive the thing replicas are for.
-
-  One replica is a supported way to run this and not the default, so this is a note rather than a
-  refusal only when somebody has also asked for a disruption budget, where one replica means a node
-  drain blocks rather than being safe.
-*/}}
+{{- /* A non-running server is never a useful singleton. */}}
 {{- if and (not .Values.server.autoscaling.enabled) (lt (int .Values.server.replicaCount) 1) }}
 {{- fail "server.replicaCount must be at least 1." }}
 {{- end }}
 
-{{- if .Values.server.embeddedComputer }}
-{{- if gt (int .Values.server.replicaCount) 1 }}
-{{- fail "server.embeddedComputer runs a browser inside every API pod, which cannot be replicated: each replica would hold a profile directory belonging to one Bot. Either set server.replicaCount=1, or leave embeddedComputer off and give the Bots a computer of their own." }}
+{{- /*
+  Attachment bytes have one local filesystem as their source of truth. A PVC makes that filesystem
+  durable, not horizontal: ReadWriteOnce is attached to one server pod and each replica must not
+  invent its own copy. These refusals disappear only when a shared object-storage backend exists.
+
+  Defaults are repeated here for upgrades using --reuse-values, where the newly added attachments
+  map is absent rather than merged from values.yaml.
+*/}}
+{{- $attachments := .Values.server.attachments | default dict -}}
+{{- $attachmentPersistence := $attachments.persistence | default dict -}}
+{{- $attachmentPersistenceEnabled := true -}}
+{{- if hasKey $attachmentPersistence "enabled" -}}
+{{- $attachmentPersistenceEnabled = $attachmentPersistence.enabled -}}
+{{- end -}}
+{{- $attachmentDirectory := "/var/lib/openbot/attachments" -}}
+{{- if hasKey $attachments "storageDirectory" -}}
+{{- $attachmentDirectory = $attachments.storageDirectory -}}
+{{- end -}}
+{{- $attachmentMaxBytesRaw := "26214400" -}}
+{{- if hasKey $attachments "maxBytes" -}}
+{{- if kindIs "string" $attachments.maxBytes -}}
+{{- $attachmentMaxBytesRaw = $attachments.maxBytes -}}
+{{- else -}}
+{{- $attachmentMaxBytesRaw = toJson $attachments.maxBytes -}}
+{{- end -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9]+$" $attachmentMaxBytesRaw) }}
+{{- fail "server.attachments.maxBytes must be a positive whole number of bytes." }}
+{{- end -}}
+{{- $attachmentMaxBytes := int64 $attachmentMaxBytesRaw -}}
+{{- if not $attachmentPersistenceEnabled }}
+{{- fail "server.attachments.persistence.enabled must be true: the local attachment backend must not use an ephemeral pod filesystem." }}
 {{- end }}
+{{- if ne $attachmentDirectory "/var/lib/openbot/attachments" }}
+{{- fail "server.attachments.storageDirectory must be exactly /var/lib/openbot/attachments." }}
+{{- end }}
+{{- if or (lt $attachmentMaxBytes 1) (gt $attachmentMaxBytes 1073741824) }}
+{{- fail "server.attachments.maxBytes must be between 1 and 1073741824." }}
+{{- end }}
+{{- if .Values.server.autoscaling.enabled }}
+{{- fail "The local attachment backend requires server.autoscaling.enabled=false. Object storage is required before the API can scale horizontally." }}
+{{- end }}
+{{- if gt (int .Values.server.replicaCount) 1 }}
+{{- fail "The local attachment backend requires server.replicaCount=1. Object storage is required before the API can scale horizontally." }}
+{{- end }}
+
+{{- if .Values.server.embeddedComputer }}
+{{- fail "server.embeddedComputer must be false while attachments use local storage: the computer process must not share the API pod that mounts customer files." }}
 {{- end }}
 
 {{- /*

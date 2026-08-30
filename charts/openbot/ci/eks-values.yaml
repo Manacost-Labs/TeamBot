@@ -63,10 +63,9 @@ ingress:
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
 server:
-  autoscaling:
-    enabled: true
-    minReplicas: 2
-    maxReplicas: 10
+  attachments:
+    persistence:
+      storageClass: gp3
   topologySpreadConstraints:
     - maxSkew: 1
       topologyKey: topology.kubernetes.io/zone

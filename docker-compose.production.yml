@@ -1,4 +1,54 @@
 services:
+  attachment-storage-init:
+    image: openbot-work:local
+    restart: "no"
+    user: "0:0"
+    entrypoint:
+      - /bin/sh
+      - -eu
+      - -c
+    command:
+      - chmod 0700 /var/lib/openbot/attachments && chown pwuser:pwuser /var/lib/openbot/attachments
+    read_only: true
+    network_mode: none
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - openbot-attachments:/var/lib/openbot/attachments
+
+  agent-computer:
+    image: openbot-work:local
+    restart: unless-stopped
+    user: pwuser:pwuser
+    working_dir: /app
+    entrypoint:
+      - /usr/local/bin/bun
+      - agent-computer/src/index.ts
+    environment:
+      PORT: "4100"
+      COMPUTER_TOKEN: ${COMPUTER_TOKEN:?COMPUTER_TOKEN is required}
+      WORKSPACE_DIR: /workspace
+      PROFILES_DIR: /profiles
+    volumes:
+      - openbot-workspace:/workspace
+      - openbot-profiles:/profiles
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/bin/bun
+        - -e
+        - const r=await fetch('http://127.0.0.1:4100/health');process.exit(r.ok?0:1)
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app
+
   openbot:
     image: openbot-work:local
     build:
@@ -9,8 +59,11 @@ services:
     environment:
       NODE_ENV: production
       EMBEDDED_POSTGRES: "on"
+      EMBEDDED_COMPUTER: "off"
       DATABASE_URL: postgres://openbot@127.0.0.1:5432/openbot
       TENANT_PACKAGE_DIR: /app/examples/chatgpt
+      ATTACHMENT_STORAGE_DIR: /var/lib/openbot/attachments
+      ATTACHMENT_MAX_BYTES: ${ATTACHMENT_MAX_BYTES:-26214400}
       OPENBOT_SINGLE_USER: "true"
       OPENBOT_PUBLIC_URL: https://work-origin.kolodahearthstone.com
       OPENBOT_APP_URL: https://work-origin.kolodahearthstone.com
@@ -18,7 +71,8 @@ services:
       MANAGED_AGENT_AG_UI_URL: http://agent-codex:4202/ag-ui
       AGENT_ENDPOINT_ALLOWED_HOSTS: "agent-codex:4202,editor-gateway:8080"
       AGENT_CONNECTION_TEST_TIMEOUT_MS: "45000"
-      AGENT_COMPUTER_URL: http://127.0.0.1:4100
+      AGENT_COMPUTER_URL: http://agent-computer:4100
+      COMPUTER_TOKEN: ${COMPUTER_TOKEN:?COMPUTER_TOKEN is required}
       PARSER_OPS_URL: http://host.docker.internal:4031
       HEARTPULSE_OPS_URL: http://host.docker.internal:4032
       WORKER_SHARED_SECRET: ${AGENT_TOOL_TOKEN}
@@ -26,10 +80,13 @@ services:
       - "127.0.0.1:3021:3001"
     volumes:
       - openbot-postgres:/var/lib/postgresql
-      - openbot-workspace:/workspace
-      - openbot-profiles:/profiles
+      - openbot-attachments:/var/lib/openbot/attachments
       - ./docker/s6/scripts/migrate.sh:/etc/s6-overlay/scripts/migrate.sh:ro
     depends_on:
+      attachment-storage-init:
+        condition: service_completed_successfully
+      agent-computer:
+        condition: service_healthy
       agent-codex:
         condition: service_healthy
       editor-gateway:
@@ -172,6 +229,7 @@ volumes:
   openbot-postgres:
   openbot-workspace:
   openbot-profiles:
+  openbot-attachments:
   research-runs:
 
 networks:

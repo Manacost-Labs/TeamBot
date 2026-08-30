@@ -18,14 +18,29 @@ image:
 imagePullSecrets: []
 
 server:
-  replicaCount: 2
-  # Two by default because horizontal is the point. Everything that has to survive a replica is in
-  # PostgreSQL, and one replica hides every bug that is not.
+  replicaCount: 1
+  # Attachment bytes currently live on one filesystem-backed PVC. Keep the API a singleton until an
+  # object-storage backend gives every replica the same key namespace and deletion lifecycle.
 
   # THE BROWSER IS NOT IN THIS POD. The image runs a Bot's computer beside the API for the
   # one-container case; a replica of the API must not carry one, because a browser is a few hundred
   # megabytes holding one Bot's logins, and scaling the API would scale those with it.
   embeddedComputer: false
+
+  attachments:
+    storageDirectory: /var/lib/openbot/attachments
+    # 25 MiB per attachment. The server refuses non-positive values and anything above 1 GiB.
+    maxBytes: 26214400
+    persistence:
+      # The local backend is never allowed to run on an ephemeral pod filesystem.
+      enabled: true
+      # Set to a PVC managed outside this chart, or leave empty for the chart to create one.
+      existingClaim: ""
+      storageClass: ""
+      accessModes:
+        - ReadWriteOnce
+      size: 20Gi
+      annotations: {}
 
   resources:
     requests:
@@ -34,7 +49,8 @@ server:
     limits:
       memory: 2Gi
 
-  # Off by default. Turn it on and set the metric you actually want to scale on.
+  # Off while attachments use local storage. Enabling it is refused until a shared object-storage
+  # backend exists; the fields remain here so that backend can restore the HPA without a values rename.
   autoscaling:
     enabled: false
     minReplicas: 2

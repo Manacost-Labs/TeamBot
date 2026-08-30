@@ -1,6 +1,15 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { parse } from "yaml";
+
+function composeService(compose: string, name: string): string {
+  const service = compose
+    .split(/^ {2}(?=\S)/m)
+    .find((block) => block.startsWith(`${name}:`));
+  if (!service) throw new Error(`Expected Compose service ${name}`);
+  return service;
+}
 
 test("provides PostgreSQL with pgvector for local development", () => {
   const compose = readFileSync(
@@ -152,4 +161,335 @@ test("carries per-Bot egress into the computer and the supervisor", () => {
 
   // Optional, because a deployment with no proxy is the ordinary case and must still start.
   expect(compose).toContain("required: false");
+});
+
+test("mounts durable attachment storage only into the production API server", () => {
+  const production = readFileSync(
+    join(import.meta.dir, "..", "docker-compose.production.yml"),
+    "utf8",
+  );
+  const openbot = composeService(production, "openbot");
+
+  expect(openbot).toContain(
+    "ATTACHMENT_STORAGE_DIR: /var/lib/openbot/attachments",
+  );
+  expect(openbot).toContain(
+    "ATTACHMENT_MAX_BYTES: $" + "{ATTACHMENT_MAX_BYTES:-26214400}",
+  );
+  expect(openbot).toContain("openbot-attachments:/var/lib/openbot/attachments");
+  expect(production).toMatch(/^ {2}openbot-attachments:\s*$/m);
+
+  const parsed = parse(production) as {
+    services?: Record<
+      string,
+      {
+        cap_add?: string[];
+        cap_drop?: string[];
+        command?: string[];
+        depends_on?: Record<string, { condition?: string }>;
+        entrypoint?: string[];
+        environment?: Record<string, string>;
+        healthcheck?: { test?: string[] };
+        image?: string;
+        network_mode?: string;
+        read_only?: boolean;
+        restart?: string;
+        user?: string;
+        volumes?: string[];
+        working_dir?: string;
+      }
+    >;
+  };
+  const storageInit = parsed.services?.["attachment-storage-init"];
+  expect(storageInit).toBeDefined();
+  expect(storageInit?.user).toBe("0:0");
+  expect(storageInit?.restart).toBe("no");
+  expect(storageInit?.network_mode).toBe("none");
+  expect(storageInit?.read_only).toBe(true);
+  expect(storageInit?.cap_drop).toEqual(["ALL"]);
+  expect(storageInit?.cap_add).toEqual(["CHOWN", "FOWNER"]);
+  expect(storageInit?.volumes).toEqual([
+    "openbot-attachments:/var/lib/openbot/attachments",
+  ]);
+  expect(storageInit?.command?.join(" ")).toContain(
+    "chmod 0700 /var/lib/openbot/attachments",
+  );
+  expect(storageInit?.command?.join(" ")).toContain(
+    "chown pwuser:pwuser /var/lib/openbot/attachments",
+  );
+  expect(
+    parsed.services?.openbot?.depends_on?.["attachment-storage-init"]
+      ?.condition,
+  ).toBe("service_completed_successfully");
+
+  const api = parsed.services?.openbot;
+  const computer = parsed.services?.["agent-computer"];
+  expect(api?.environment?.EMBEDDED_COMPUTER).toBe("off");
+  expect(api?.environment?.AGENT_COMPUTER_URL).toBe(
+    "http://agent-computer:4100",
+  );
+  expect(api?.depends_on?.["agent-computer"]?.condition).toBe(
+    "service_healthy",
+  );
+  expect(api?.volumes).not.toContain("openbot-workspace:/workspace");
+  expect(api?.volumes).not.toContain("openbot-profiles:/profiles");
+
+  expect(computer?.image).toBe("openbot-work:local");
+  expect(computer?.user).toBe("pwuser:pwuser");
+  expect(computer?.working_dir).toBe("/app");
+  expect(computer?.entrypoint).toEqual([
+    "/usr/local/bin/bun",
+    "agent-computer/src/index.ts",
+  ]);
+  expect(computer?.environment?.PORT).toBe("4100");
+  expect(computer?.environment?.COMPUTER_TOKEN).toContain("COMPUTER_TOKEN");
+  expect(computer?.healthcheck?.test?.join(" ")).toContain(
+    "http://127.0.0.1:4100/health",
+  );
+  expect(computer?.volumes).toEqual([
+    "openbot-workspace:/workspace",
+    "openbot-profiles:/profiles",
+  ]);
+
+  for (const serviceName of [
+    "routine-worker",
+    "agent-computer",
+    "agent-codex",
+    "research-sources",
+    "editor-analyzer",
+    "editor-gateway",
+    "edge-auth",
+  ]) {
+    const service = composeService(production, serviceName);
+    expect(service).not.toContain("openbot-attachments");
+    expect(service).not.toContain("/var/lib/openbot/attachments");
+    expect(service).not.toContain("ATTACHMENT_STORAGE_DIR");
+  }
+});
+
+test("does not expose attachment storage to local Bot or computer services", () => {
+  const compose = readFileSync(
+    join(import.meta.dir, "..", "docker-compose.yml"),
+    "utf8",
+  );
+
+  for (const serviceName of [
+    "migrate",
+    "agent-computer",
+    "supervisor",
+    "agent-bot",
+    "agent-langgraph",
+  ]) {
+    const service = composeService(compose, serviceName);
+    expect(service).not.toContain("openbot-attachments");
+    expect(service).not.toContain("/var/lib/openbot/attachments");
+    expect(service).not.toContain("ATTACHMENT_STORAGE_DIR");
+  }
+});
+
+test("the Helm local attachment backend is durable, singleton, and server-only", () => {
+  const chartRoot = join(import.meta.dir, "..", "charts", "openbot");
+  const values = parse(
+    readFileSync(join(chartRoot, "values.yaml"), "utf8"),
+  ) as {
+    server?: {
+      replicaCount?: number;
+      autoscaling?: { enabled?: boolean };
+      attachments?: {
+        storageDirectory?: string;
+        maxBytes?: number;
+        persistence?: {
+          enabled?: boolean;
+          accessModes?: string[];
+          size?: string;
+        };
+      };
+    };
+  };
+
+  expect(values.server?.replicaCount).toBe(1);
+  expect(values.server?.autoscaling?.enabled).toBe(false);
+  expect(values.server?.attachments).toEqual({
+    storageDirectory: "/var/lib/openbot/attachments",
+    maxBytes: 26_214_400,
+    persistence: {
+      enabled: true,
+      existingClaim: "",
+      storageClass: "",
+      accessModes: ["ReadWriteOnce"],
+      size: "20Gi",
+      annotations: {},
+    },
+  });
+
+  const deployment = readFileSync(
+    join(chartRoot, "templates", "server", "deployment.yaml"),
+    "utf8",
+  );
+  for (const expected of [
+    "ATTACHMENT_STORAGE_DIR",
+    "ATTACHMENT_MAX_BYTES",
+    "strategy:\n    type: Recreate",
+    "initContainers:",
+    "name: prepare-attachment-storage",
+    "runAsUser: 0",
+    "allowPrivilegeEscalation: false",
+    "readOnlyRootFilesystem: true",
+    "mountPath: {{ $attachmentDirectory | quote }}",
+    "name: attachments",
+  ]) {
+    expect(deployment).toContain(expected);
+  }
+  expect(deployment).toMatch(/drop:\s*\n\s*- ALL/);
+  expect(deployment).toMatch(/add:\s*\n\s*- CHOWN\s*\n\s*- FOWNER/);
+  const initContainer = deployment.slice(
+    deployment.indexOf("      initContainers:"),
+    deployment.indexOf("      containers:"),
+  );
+  expect(initContainer).toContain(
+    "chmod 0700 /attachment-storage && chown pwuser:pwuser /attachment-storage",
+  );
+  expect(initContainer).toContain("mountPath: /attachment-storage");
+  expect(initContainer).not.toContain("$attachmentDirectory");
+
+  const pvcPath = join(
+    chartRoot,
+    "templates",
+    "server",
+    "attachments-pvc.yaml",
+  );
+  expect(existsSync(pvcPath)).toBe(true);
+  if (!existsSync(pvcPath)) return;
+  const pvc = readFileSync(pvcPath, "utf8");
+  expect(pvc).toContain("kind: PersistentVolumeClaim");
+  expect(pvc).toContain(".Values.server.attachments");
+  expect(pvc).toContain("$attachments.persistence");
+  expect(pvc).toContain("helm.sh/resource-policy: keep");
+
+  const validation = readFileSync(
+    join(chartRoot, "templates", "validation.yaml"),
+    "utf8",
+  );
+  expect(validation).toContain("server.attachments.persistence.enabled");
+  expect(validation).toContain("server.replicaCount=1");
+  expect(validation).toContain("server.autoscaling.enabled=false");
+  expect(validation).toContain(
+    "server.embeddedComputer must be false while attachments use local storage",
+  );
+  expect(validation).toContain(
+    "server.attachments.storageDirectory must be exactly /var/lib/openbot/attachments",
+  );
+
+  for (const relative of [
+    "templates/migrations/job.yaml",
+    "templates/routines/cronjob.yaml",
+    "templates/computer/statefulset.yaml",
+    "templates/computer/pod-template.yaml",
+  ]) {
+    const workload = readFileSync(join(chartRoot, relative), "utf8");
+    expect(workload).not.toContain("ATTACHMENT_STORAGE_DIR");
+    expect(workload).not.toContain("name: attachments");
+    expect(workload).not.toContain("/var/lib/openbot/attachments");
+  }
+
+  for (const target of [
+    "aks-values.yaml",
+    "eks-sandbox-values.yaml",
+    "eks-values.yaml",
+    "gke-values.yaml",
+    "self-hosted-values.yaml",
+  ]) {
+    const targetValues = parse(
+      readFileSync(join(chartRoot, "ci", target), "utf8"),
+    ) as { server?: { autoscaling?: { enabled?: boolean } } };
+    expect(targetValues.server?.autoscaling?.enabled).not.toBe(true);
+  }
+
+  for (const target of ["eks-sandbox-values.yaml", "eks-values.yaml"]) {
+    const targetValues = parse(
+      readFileSync(join(chartRoot, "ci", target), "utf8"),
+    ) as {
+      server?: {
+        attachments?: { persistence?: { storageClass?: string } };
+      };
+    };
+    expect(targetValues.server?.attachments?.persistence?.storageClass).toBe(
+      "gp3",
+    );
+  }
+
+  const readme = readFileSync(join(chartRoot, "README.md"), "utf8");
+  expect(readme).not.toContain("The API tier holds nothing on disk");
+  expect(readme).toContain("server.attachments.persistence.storageClass");
+});
+
+test("the Helm attachment limit keeps whole numbers out of scientific notation", () => {
+  const validation = readFileSync(
+    join(
+      import.meta.dir,
+      "..",
+      "charts",
+      "openbot",
+      "templates",
+      "validation.yaml",
+    ),
+    "utf8",
+  );
+
+  expect(validation).toContain(
+    "$attachmentMaxBytesRaw = toJson $attachments.maxBytes",
+  );
+  expect(validation).not.toContain(
+    '$attachmentMaxBytesRaw = printf "%v" $attachments.maxBytes',
+  );
+});
+
+test("the Helm default image tag matches the current published package version", () => {
+  const packageJson = JSON.parse(
+    readFileSync(join(import.meta.dir, "..", "package.json"), "utf8"),
+  ) as { version: string };
+  const chart = parse(
+    readFileSync(
+      join(import.meta.dir, "..", "charts", "openbot", "Chart.yaml"),
+      "utf8",
+    ),
+  ) as { appVersion?: string };
+  const expectedTag = `v${packageJson.version}`;
+
+  expect(chart.appVersion).toBe(expectedTag);
+  expect(
+    readFileSync(
+      join(import.meta.dir, "..", "charts", "openbot", "README.md"),
+      "utf8",
+    ),
+  ).toContain(`ghcr.io/copilotkit/openbot:${expectedTag}`);
+});
+
+test("the production image gives fresh attachment volumes to the API user", () => {
+  const dockerfile = readFileSync(
+    join(import.meta.dir, "..", "Dockerfile"),
+    "utf8",
+  );
+
+  expect(dockerfile).toContain("/var/lib/openbot/attachments");
+  expect(dockerfile).toMatch(
+    /chown[^\n]*pwuser:pwuser[^\n]*\/var\/lib\/openbot\/attachments/,
+  );
+  expect(dockerfile).toMatch(
+    /chmod[^\n]*0700[^\n]*\/var\/lib\/openbot\/attachments/,
+  );
+});
+
+test("raw Docker deployment keeps the computer outside the API container", () => {
+  const deployment = readFileSync(
+    join(import.meta.dir, "..", "docs", "deployment.md"),
+    "utf8",
+  );
+
+  expect(deployment).toContain("-e EMBEDDED_COMPUTER=off");
+  expect(deployment).toContain(
+    "-e AGENT_COMPUTER_URL=http://openbot-computer:4100",
+  );
+  expect(deployment).toContain("--name openbot-computer");
+  expect(deployment).toContain("agent-computer/src/index.ts");
 });

@@ -195,11 +195,12 @@ ENV AGENT_COMPUTER_URL=http://127.0.0.1:4100
 # support its sandbox, and with that flag the process user IS the boundary, so root would mean a
 # page exploit lands as root.
 #
-# The two directories the browser writes are its workspace and its profile, the second being what
-# keeps a Bot signed in between turns. Owned here, because a non-root process cannot create them at
-# the root of the filesystem and the failure surfaces as EACCES on the first navigation.
-RUN mkdir -p /workspace /profiles \
-  && chown -R pwuser:pwuser /workspace /profiles
+# The browser writes its workspace and profile; the API writes attachment bytes. Ownership is set in
+# the image so Docker can seed a fresh named volume for any of these paths before the non-root
+# process starts. Attachment bytes are private to the API even when the image is shared.
+RUN mkdir -p /workspace /profiles /var/lib/openbot/attachments \
+  && chown -R pwuser:pwuser /workspace /profiles /var/lib/openbot/attachments \
+  && chmod 0700 /var/lib/openbot/attachments
 
 # Where the embedded database answers, when there is one. Overridden by whatever you set, so an
 # external database needs no special case: set DATABASE_URL and EMBEDDED_POSTGRES stays off.

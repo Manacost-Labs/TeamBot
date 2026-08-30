@@ -1,5 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { configuredAuthProviders, loadConfig } from "../src/config";
 
 // Intelligence is part of the MINIMUM contract, so it belongs in the base environment every other
@@ -563,6 +564,98 @@ describe("deployment configuration", () => {
         [urlName]: "not a URL",
       }),
     ).toThrow(`${urlName} must be a valid URL`);
+  });
+});
+
+describe("attachment storage configuration", () => {
+  test("uses a normalized local directory and a 25 MiB limit by default", () => {
+    const config = loadConfig(baseEnvironment);
+
+    expect(config.attachments).toEqual({
+      storageDirectory: resolve(
+        import.meta.dir,
+        "..",
+        ".openbot",
+        "attachments",
+      ),
+      maxBytes: 26_214_400,
+    });
+  });
+
+  test("uses the durable container path by default in production", () => {
+    expect(loadConfig(productionEnvironment).attachments.storageDirectory).toBe(
+      "/var/lib/openbot/attachments",
+    );
+  });
+
+  test("normalizes an explicitly configured local directory to an absolute path", () => {
+    const config = loadConfig({
+      ...baseEnvironment,
+      ATTACHMENT_STORAGE_DIR: " ./attachment-data/../attachment-blobs ",
+    });
+
+    expect(config.attachments.storageDirectory).toBe(
+      resolve("attachment-blobs"),
+    );
+  });
+
+  test("accepts a custom positive whole-byte limit", () => {
+    expect(
+      loadConfig({
+        ...baseEnvironment,
+        ATTACHMENT_MAX_BYTES: "52428800",
+      }).attachments.maxBytes,
+    ).toBe(52_428_800);
+  });
+
+  test("refuses an empty storage directory instead of silently using a different one", () => {
+    expect(() =>
+      loadConfig({ ...baseEnvironment, ATTACHMENT_STORAGE_DIR: "   " }),
+    ).toThrow("ATTACHMENT_STORAGE_DIR");
+  });
+
+  test("refuses a relative storage directory in production", () => {
+    expect(() =>
+      loadConfig({
+        ...productionEnvironment,
+        ATTACHMENT_STORAGE_DIR: "./attachment-blobs",
+      }),
+    ).toThrow(/ATTACHMENT_STORAGE_DIR.*absolute/i);
+  });
+
+  test.each([
+    "/",
+    "/workspace",
+    "/profiles",
+    "/etc",
+    "/root",
+    "/mnt/other-attachments",
+  ])(
+    "refuses production attachment storage outside the dedicated path: %s",
+    (storageDirectory) => {
+      expect(() =>
+        loadConfig({
+          ...productionEnvironment,
+          ATTACHMENT_STORAGE_DIR: storageDirectory,
+        }),
+      ).toThrow(
+        "ATTACHMENT_STORAGE_DIR must be exactly /var/lib/openbot/attachments in production",
+      );
+    },
+  );
+
+  test.each([
+    "",
+    "0",
+    "-1",
+    "1.5",
+    "twenty-five-megabytes",
+    "1073741825",
+    "9007199254740992",
+  ])("refuses ATTACHMENT_MAX_BYTES=%p", (value) => {
+    expect(() =>
+      loadConfig({ ...baseEnvironment, ATTACHMENT_MAX_BYTES: value }),
+    ).toThrow("ATTACHMENT_MAX_BYTES");
   });
 });
 

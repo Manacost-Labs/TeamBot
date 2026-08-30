@@ -1,24 +1,56 @@
 # Deployment
 
-OpenBot ships as one container. It carries the app, the API that serves it, and the browser the Bots
-drive, and it can carry its own PostgreSQL as well. It does what it does on a laptop.
+OpenBot ships one image containing the app, API, computer runtime and optional PostgreSQL. In a
+production-style raw Docker deployment, run the computer as a second container from that same image:
+its browser and shell must not share the API process or attachment volume.
 
 ```sh
 docker build -t openbot .
+docker network create openbot-runtime
+docker volume create openbot-workspace
+docker volume create openbot-profiles
+docker volume create openbot-attachments
+export COMPUTER_TOKEN="$(openssl rand -hex 32)"
 
-# A database you already run.
-docker run -p 3001:3001 --env-file .env openbot
+# The computer gets only its caller token, workspace and browser profile.
+docker run -d --name openbot-computer --network openbot-runtime \
+  --user pwuser:pwuser \
+  -e PORT=4100 -e COMPUTER_TOKEN \
+  -v openbot-workspace:/workspace \
+  -v openbot-profiles:/profiles \
+  --health-cmd="bun -e \"const r=await fetch('http://127.0.0.1:4100/health');process.exit(r.ok?0:1)\"" \
+  --health-interval=10s --health-timeout=5s --health-retries=5 \
+  --entrypoint /usr/local/bin/bun openbot agent-computer/src/index.ts
 
-# Or one inside the container. Nothing else to provision.
-docker run -p 3001:3001 --env-file .env \
-  -e EMBEDDED_POSTGRES=on -v openbot-data:/var/lib/postgresql openbot
+# The API uses a database from .env and is the only attachment-volume consumer.
+docker run --name openbot-api --network openbot-runtime -p 3001:3001 --env-file .env \
+  -e COMPUTER_TOKEN \
+  -e EMBEDDED_COMPUTER=off \
+  -e AGENT_COMPUTER_URL=http://openbot-computer:4100 \
+  -e ATTACHMENT_STORAGE_DIR=/var/lib/openbot/attachments \
+  -v openbot-attachments:/var/lib/openbot/attachments openbot
+
+# To use the image's PostgreSQL instead, add these flags to the API command:
+docker run --name openbot-api --network openbot-runtime -p 3001:3001 --env-file .env \
+  -e COMPUTER_TOKEN \
+  -e EMBEDDED_COMPUTER=off \
+  -e AGENT_COMPUTER_URL=http://openbot-computer:4100 \
+  -e EMBEDDED_POSTGRES=on \
+  -e ATTACHMENT_STORAGE_DIR=/var/lib/openbot/attachments \
+  -v openbot-data:/var/lib/postgresql \
+  -v openbot-attachments:/var/lib/openbot/attachments openbot
 ```
+
+A fresh Docker named volume inherits the image's private attachment directory, owned by `pwuser`
+with mode `0700`, before the API drops privileges. For a host bind mount, create the directory with
+equivalent ownership and permissions yourself. Never mount it into `openbot-computer`.
 
 ## What is in the image, and what is not
 
-**In it:** the built app, the API, and Chromium. One port, 3001. The browser listens on 4100 inside
-the container and is deliberately not published: it holds real logins and its only caller is the
-process beside it.
+**In it:** the built app, API and Chromium. The API publishes port 3001. The separate computer
+listens on 4100 only inside the Docker network: it holds real logins and accepts calls authenticated
+with `COMPUTER_TOKEN`. `EMBEDDED_COMPUTER=off` ensures the API container does not also start a
+co-resident browser process.
 
 **PostgreSQL, if you ask for it.** `EMBEDDED_POSTGRES=on` starts one inside the container, creates
 the database and the `vector` extension the first time, and runs the migrations on every start. It
@@ -37,6 +69,12 @@ works either way; a platform volume does not. Platforms that offer no persistent
 point at a managed database instead: set `DATABASE_URL` and leave `EMBEDDED_POSTGRES` off. The
 `vector` extension must be enabled there; RDS, Cloud SQL and Azure Database all support it, none
 enable it for you.
+
+**Attachment bytes need their own durable volume.** Metadata is in PostgreSQL; the file itself is
+under `ATTACHMENT_STORAGE_DIR`, `/var/lib/openbot/attachments` in the container examples and the
+production Compose file. Mount that directory only into the API container. The routines worker,
+Bots, and Bot computers receive attachments through authenticated server routes and must not receive
+the storage volume directly.
 
 **Not in it:**
 
@@ -122,14 +160,20 @@ docker run --rm --env-file .env openbot \
 
 ## Replicas
 
-The page snapshot a Bot resolves element references against lives in Postgres, so a second replica
-can answer a click the first one snapshotted. Run more than one if the platform wants it. The
-supervisor is still not in this image, so every replica shares the one browser inside it.
+The attachment backend currently writes to one local filesystem. Run exactly one API replica while
+using it: two replicas can accept metadata for the same deployment while seeing different files, and
+a `ReadWriteOnce` volume cannot safely make that filesystem horizontal. Object storage is required
+before scaling the API horizontally; it needs a shared key namespace and coordinated deletion rather
+than a filesystem path mounted into every replica.
+
+Page snapshots and the rest of the application state already live in PostgreSQL. Attachment bytes
+are the remaining local state that prevents horizontal replicas.
 
 ## Platform notes
 
-**Google Cloud Run.** Set memory to at least 2 GB. More than one instance is fine (see Replicas
-above); each instance has its own browser, so a Bot's logins stay on whichever instance served them.
+**Google Cloud Run.** Set memory to at least 2 GB and cap the service at one instance while using the
+local attachment backend (see Replicas above). Each instance has its own browser, so a Bot's logins
+stay on whichever instance served them.
 Cloud Run runs every
 container under gVisor, which Chromium is sensitive to; test a navigation before trusting it.
 `gcloud run compose up` will also deploy the whole compose file if you want a throwaway database
@@ -142,7 +186,8 @@ No shared-memory configuration is needed or possible.
 
 **Kubernetes.** Everything above describes one container run by hand. A cluster is the other shape,
 and it is the only one that gives a Bot a computer of its own, runs the routines schedule without
-something outside the container, and scales the API past a single replica. That is the Helm chart:
+something outside the container, and provisions a persistent attachment volume for the singleton
+API. That is the Helm chart:
 [charts/openbot/README.md](../charts/openbot/README.md), which covers EKS, GKE, AKS and a plain
 self-hosted cluster from the same templates.
 

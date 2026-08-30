@@ -19,6 +19,8 @@ __pycache__/
 **/dist/
 app/src/lib/generated/application-config.ts
 .logs/
+# Local filesystem attachment backend. These are customer file bytes, never source artifacts.
+server/.openbot/
 .demo-logs/
 **/.impeccable
 .wave-state.md

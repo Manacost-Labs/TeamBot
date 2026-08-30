@@ -15,7 +15,7 @@ node pool being the wrong shape is the last thing anybody checks. Either run amd
 architecture you have and push it somewhere the cluster can reach. Check before assuming:
 
 ```sh
-docker manifest inspect ghcr.io/copilotkit/openbot:v0.0.4 | grep architecture
+docker manifest inspect ghcr.io/copilotkit/openbot:v0.0.5 | grep architecture
 ```
 
 **Intelligence credentials.** OpenBot requires CopilotKit Intelligence and the chart refuses to
@@ -128,13 +128,31 @@ a plain Kubernetes Secret, an Ingress. There is no cloud branching anywhere in t
 there should never be. A deployment on a managed cluster turns things on; a self-hosted one changes
 nothing and still works.
 
-Two replicas by default, because horizontal is the point. Everything that has to survive a replica is
-in PostgreSQL, and one replica hides every bug that is not.
+One API replica while attachment bytes use the local filesystem backend. The chart creates a 20 GiB
+`ReadWriteOnce` PVC and mounts it only into the server at `/var/lib/openbot/attachments`; migration
+and routine jobs and every Bot computer receive no direct file access. Use an existing claim with
+`server.attachments.persistence.existingClaim`, or choose a StorageClass and size under
+`server.attachments.persistence`.
 
-**No browser in the API pod.** The image runs a Bot's computer beside the API so that one container
-works on its own. A replica must not carry one: a browser is a few hundred megabytes holding one
-Bot's logins, so scaling the API would scale those with it. `server.embeddedComputer` is off here,
-and asking for it with more than one replica is refused at install time.
+The local backend fixes `server.attachments.storageDirectory` to
+`/var/lib/openbot/attachments` and requires `server.embeddedComputer=false`. Helm refuses other
+paths or a computer process inside the API pod, because either would let browser/shell work share a
+process boundary or mount with customer attachment bytes.
+
+The chart marks the attachment PVC `helm.sh/resource-policy: keep`, so uninstalling a release leaves
+the claim and its customer files in place. Back it up with the database and delete the retained claim
+manually only after those files are no longer needed.
+
+Persistence does not make a local filesystem horizontal. The chart refuses `replicaCount > 1`, HPA,
+or disabled attachment persistence rather than running replicas that can write metadata for files
+they cannot all read. A future object-storage backend with a shared key namespace and coordinated
+deletion is required before horizontal API scaling can be turned back on.
+
+**No browser in the API pod.** The image can run a Bot's computer beside the API for local use, but
+the chart's local attachment backend always separates it. A browser is a few hundred megabytes
+holding one Bot's logins and an interactive shell, so it must not share the pod that mounts private
+attachment bytes. `server.embeddedComputer` is off here, and asking for it is refused at install
+time.
 
 ## Your own database, which is what a real deployment uses
 
@@ -169,7 +187,7 @@ about that cluster:
 | File | What it shows |
 | --- | --- |
 | `self-hosted-values.yaml` | Nothing turned on. If this file needs to grow, a default is wrong. |
-| `eks-values.yaml` | IRSA, Secrets Manager, ALB, zone spread, autoscaling. |
+| `eks-values.yaml` | IRSA, Secrets Manager, ALB and zone spread. |
 | `eks-sandbox-values.yaml` | The same, with a computer each rather than one shared browser. `shared` and `sandbox` render a different Deployment, different RBAC and a different pod template, so a target that renders only one checks half the chart. |
 | `gke-values.yaml` | Workload Identity, Secret Manager, Gateway API instead of an Ingress. |
 | `aks-values.yaml` | Workload identity, Key Vault, the AKS web app routing class. |
@@ -204,9 +222,10 @@ you:
 kubectl get sc
 ```
 
-Either create a default class backed by `ebs.csi.aws.com`, or set `computers.persistence.storageClass`
-and `postgresql.primary.persistence.storageClass` to one that exists. `ci/eks-values.yaml` does the
-second.
+Either create a default class backed by `ebs.csi.aws.com`, or set
+`server.attachments.persistence.storageClass`, `computers.persistence.storageClass`, and
+`postgresql.primary.persistence.storageClass` to one that exists. `ci/eks-values.yaml` names `gp3`
+for every volume that target creates.
 
 `volumeBindingMode: WaitForFirstConsumer` matters on every cloud: without it the volume is created in
 a zone chosen before the pod is scheduled, and pods stick unschedulable with a node-affinity conflict.
@@ -214,11 +233,12 @@ That only happens in multi-zone clusters, so it passes every single-zone test.
 
 ### Storage has gravity
 
-The API tier holds nothing on disk. When per-Bot computers arrive they will, and the ordinary block
-volume on all three clouds is **zonal**: once provisioned, every pod referencing it is scheduled into
-that zone, so a Bot's computer is pinned to a zone for as long as its profile exists. That is
-acceptable and worth stating rather than discovering. `storageClass` stays empty by default, meaning
-the cluster's default class, because naming `gp3` or `pd-balanced` here is how a chart stops
+The singleton API holds attachment bytes on its PVC, and per-Bot computers hold profiles on theirs.
+The ordinary block volume on all three clouds is **zonal**: once provisioned, every pod referencing
+it is scheduled into that zone. The API and each Bot's computer are therefore pinned to their
+volume's zone for as long as that data exists. This is acceptable and worth stating rather than
+discovering during a reschedule. StorageClass values stay empty by default, meaning the cluster's
+default class, because naming `gp3` or `pd-balanced` in the portable values is how a chart stops
 installing on somebody's bare-metal cluster.
 
 ## Refused at install, not in a crash loop
