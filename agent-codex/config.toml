@@ -44,3 +44,18 @@ extends = ":read-only"
 
 [permissions.data-control-agent.network]
 enabled = false
+
+[permissions.heartpulse-control-agent]
+description = "Workspace-scoped end-to-end repair runtime for the HeartPulse maintainer."
+extends = ":read-only"
+
+[permissions.heartpulse-control-agent.filesystem]
+":minimal" = "read"
+":workspace_roots" = "write"
+"/workspace/.git" = "write"
+"/workspace-heartpulse" = "write"
+"/workspace-heartpulse/.git" = "write"
+"~/.codex" = "deny"
+
+[permissions.heartpulse-control-agent.network]
+enabled = false

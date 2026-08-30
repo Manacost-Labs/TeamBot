@@ -3,6 +3,7 @@ import type { RunAgentInput } from "@ag-ui/core";
 import {
   deploymentToolNames,
   instructionsFor,
+  isHeartPulseControlRun,
   permissionProfileFor,
   transcriptFor,
 } from "../src/history";
@@ -37,9 +38,7 @@ describe("Codex prompt translation", () => {
     expect(instructionsFor(dataControl)).toContain(
       "unexpected_selected_params",
     );
-    expect(instructionsFor(dataControl)).toContain(
-      "URL query constants",
-    );
+    expect(instructionsFor(dataControl)).toContain("URL query constants");
     expect(instructionsFor(dataControl)).toContain(
       "Follow diagnose_source.triage",
     );
@@ -54,6 +53,19 @@ describe("Codex prompt translation", () => {
       ],
     } as unknown as RunAgentInput;
     expect(permissionProfileFor(detectedByTool)).toBe("data-control-agent");
+  });
+
+  test("gives the HeartPulse control agent its own repair profile and prompt", () => {
+    const heartpulse = {
+      ...input,
+      agentId: "heartpulse-control",
+    } as RunAgentInput;
+    expect(isHeartPulseControlRun(heartpulse)).toBe(true);
+    expect(permissionProfileFor(heartpulse)).toBe("heartpulse-control-agent");
+    expect(instructionsFor(heartpulse)).toContain("audit_strategy_data");
+    expect(instructionsFor(heartpulse)).toContain(
+      "HSReplay all-D without metrics",
+    );
   });
 
   test("keeps higher-priority instructions out of the quoted transcript", () => {

@@ -514,7 +514,9 @@ const signRunForActor =
       Date.now(),
       // Parser repairs legitimately run full validation and a production verification cycle.
       // Keep ordinary Bots at the shorter default while covering this Bot's 30-minute turn budget.
-      botId === "data-control" ? 35 * 60_000 : undefined,
+      botId === "data-control" || botId === "heartpulse-control"
+        ? 35 * 60_000
+        : undefined,
     );
 
 /*
@@ -707,7 +709,10 @@ const routineRunner = createRoutineRunner({
     intelligence: routineIntelligence,
     runner: routineAgentRunner,
     buildAgentFor,
-    turnTimeoutMsForAgent: { "data-control": 30 * 60_000 },
+    turnTimeoutMsForAgent: {
+      "data-control": 30 * 60_000,
+      "heartpulse-control": 30 * 60_000,
+    },
   }),
 });
 

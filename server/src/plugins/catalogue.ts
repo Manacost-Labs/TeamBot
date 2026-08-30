@@ -302,6 +302,20 @@ export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
     docsUrl:
       "https://github.com/Manacost-Labs/api.kolodahearthstone.com/blob/main/docs/PARSER_CONTROL_API.md",
   },
+  {
+    key: "heartpulse-ops",
+    title: "HeartPulse Ops",
+    vendor: "Manacost Labs",
+    summary:
+      "Governed end-to-end Battlegrounds data and rendering audits with isolated HeartPulse repairs and rollback-capable publication.",
+    host: "builtin://heartpulse-ops",
+    path: "/",
+    transport: "builtin-heartpulse-ops",
+    auth: Object.freeze({ kind: "builtin" }),
+    writeTools: Object.freeze(["publish_and_verify"]),
+    docsUrl:
+      "https://github.com/Manacost-Labs/HeartPulse/blob/main/docs/specs/heartpulse-control-agent.md",
+  },
 ]);
 
 const BY_KEY = new Map(CATALOGUE.map((entry) => [entry.key, entry]));

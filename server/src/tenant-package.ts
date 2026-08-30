@@ -11,10 +11,14 @@ import {
   channelAgents,
   channels as channelTable,
   deploymentPackages,
+  mcpServers,
+  mcpTools,
   pluginGrants,
   skills as skillTable,
   skillTools,
 } from "./db/schema";
+import { catalogueEntry } from "./plugins/catalogue";
+import { transportFor } from "./plugins/transport";
 
 const approvedThemeVariables = new Set([
   "--background",
@@ -382,6 +386,9 @@ export function validateTenantPackage(files: PackageFiles): TenantPackage {
                 }
               : {
                   endpoint: requiredString(agent.endpoint, "agent.endpoint"),
+                  ...(agent.model === undefined
+                    ? {}
+                    : { model: requiredString(agent.model, "agent.model") }),
                 },
           skills:
             agent.skills === undefined || agent.skills === null
@@ -722,6 +729,59 @@ export async function synchronizeTenantPackage(
     }
 
     /*
+     * First-party builtin tools have no vendor to add through the Plugins screen.  Seed their
+     * reviewed server/tool rows here so a package skill can grant them on the first boot, exactly
+     * like the remote server rows that an administrator would otherwise have to refresh manually.
+     * The transport only returns static tool metadata at this point; no host call or credential is
+     * made during database synchronisation.
+     */
+    const packageBuiltinToolRefs = new Set<string>();
+    for (const serverId of ["parser-ops", "heartpulse-ops"]) {
+      const entry = catalogueEntry(serverId);
+      if (entry?.auth.kind !== "builtin") continue;
+      await transaction
+        .insert(mcpServers)
+        .values({
+          id: entry.key,
+          title: entry.title,
+          vendor: entry.vendor,
+          url: entry.host ?? `builtin://${entry.key}`,
+          provenance: "first-party",
+          credentialId: null,
+          addedBy: "tenant-package",
+        })
+        .onConflictDoUpdate({
+          target: mcpServers.id,
+          set: {
+            title: entry.title,
+            vendor: entry.vendor,
+            url: entry.host ?? `builtin://${entry.key}`,
+            provenance: "first-party",
+            updatedAt: new Date(),
+          },
+        });
+      const tools = await transportFor(entry).listTools({
+        url: entry.host ?? `builtin://${entry.key}`,
+      });
+      await transaction
+        .delete(mcpTools)
+        .where(eq(mcpTools.serverId, entry.key));
+      if (tools.length > 0) {
+        await transaction.insert(mcpTools).values(
+          tools.map((tool) => {
+            packageBuiltinToolRefs.add(`${entry.key}/${tool.name}`);
+            return {
+              serverId: entry.key,
+              name: tool.name,
+              description: tool.description,
+              inputSchema: tool.inputSchema,
+            };
+          }),
+        );
+      }
+    }
+
+    /*
      * The skills the package ships, and what each one declares it needs.
      *
      * A DEPLOYMENT SKILL, not a person's: `owner_user_id` is null, so everybody sees it in their `/`
@@ -752,7 +812,7 @@ export async function synchronizeTenantPackage(
       .delete(pluginGrants)
       .where(
         and(
-          eq(pluginGrants.kind, "skill"),
+          inArray(pluginGrants.kind, ["skill", "mcp"]),
           eq(pluginGrants.grantedBy, PACKAGE_GRANT),
         ),
       );
@@ -842,6 +902,28 @@ export async function synchronizeTenantPackage(
             target: [pluginGrants.kind, pluginGrants.ref, pluginGrants.agentId],
             // An administrator who granted this by hand keeps the credit; the package only ever
             // adds what was missing, and the delete above already took back what it owned.
+            set: { updatedAt: new Date() },
+          });
+      }
+
+      const builtinRefs = skill.tools.filter((ref) =>
+        packageBuiltinToolRefs.has(ref),
+      );
+      if (builtinRefs.length > 0 && agentIds.length > 0) {
+        await transaction
+          .insert(pluginGrants)
+          .values(
+            agentIds.flatMap((agentId) =>
+              builtinRefs.map((ref) => ({
+                kind: "mcp" as const,
+                ref,
+                agentId,
+                grantedBy: PACKAGE_GRANT,
+              })),
+            ),
+          )
+          .onConflictDoUpdate({
+            target: [pluginGrants.kind, pluginGrants.ref, pluginGrants.agentId],
             set: { updatedAt: new Date() },
           });
       }

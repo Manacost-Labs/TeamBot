@@ -296,6 +296,19 @@ describe("Parser Ops", () => {
   });
 });
 
+describe("HeartPulse Ops", () => {
+  const entry = catalogueEntry("heartpulse-ops");
+
+  test("is a pinned first-party transport with an explicit publication boundary", () => {
+    expect(resolveServerUrl("heartpulse-ops")?.url).toBe(
+      "builtin://heartpulse-ops",
+    );
+    expect(entry?.auth.kind).toBe("builtin");
+    expect(entry?.transport).toBe("builtin-heartpulse-ops");
+    expect(entry?.writeTools).toEqual(["publish_and_verify"]);
+  });
+});
+
 describe("what a tool does", () => {
   const drive = catalogueEntry("google-drive")!;
 

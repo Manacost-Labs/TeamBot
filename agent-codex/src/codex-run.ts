@@ -6,6 +6,7 @@ import {
   deploymentToolNames,
   instructionsFor,
   isDataControlRun,
+  isHeartPulseControlRun,
   permissionProfileFor,
   runAssertion,
   transcriptFor,
@@ -35,6 +36,23 @@ const MODEL = process.env.CODEX_MODEL?.trim();
 const REASONING_EFFORT = process.env.CODEX_REASONING_EFFORT?.trim() || "low";
 const REASONING_SUMMARY =
   process.env.CODEX_REASONING_SUMMARY?.trim() || "concise";
+
+const HEARTPULSE_WORKSPACE = "/workspace-heartpulse";
+
+export function workspaceFor(input: RunAgentInput): string {
+  return isHeartPulseControlRun(input) ? HEARTPULSE_WORKSPACE : "/workspace";
+}
+
+export function modelFor(input: RunAgentInput): string | undefined {
+  const forwarded = input.forwardedProps as
+    | { openbotAgentModel?: unknown }
+    | undefined;
+  const override =
+    typeof forwarded?.openbotAgentModel === "string"
+      ? forwarded.openbotAgentModel.trim()
+      : "";
+  return /^[A-Za-z0-9._:-]{1,120}$/.test(override) ? override : MODEL;
+}
 
 export async function runCodex(
   input: RunAgentInput,
@@ -78,7 +96,7 @@ class CodexProcess {
       this.fail = reject;
     });
     this.process = spawn("codex", ["app-server"], {
-      cwd: "/workspace",
+      cwd: workspaceFor(input),
       env: process.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -124,8 +142,8 @@ class CodexProcess {
         };
       });
     const started = (await this.request("thread/start", {
-      ...(MODEL ? { model: MODEL } : {}),
-      cwd: "/workspace",
+      ...(modelFor(this.input) ? { model: modelFor(this.input) } : {}),
+      cwd: workspaceFor(this.input),
       approvalPolicy: "never",
       permissions: permissionProfileFor(this.input),
       baseInstructions: instructionsFor(this.input),

@@ -7,6 +7,7 @@ import {
 type Message = RunAgentInput["messages"][number];
 
 export const DATA_CONTROL_AGENT_ID = "data-control";
+export const HEARTHPULSE_CONTROL_AGENT_ID = "heartpulse-control";
 
 export function isDataControlRun(input: RunAgentInput): boolean {
   return (
@@ -19,8 +20,21 @@ export function isDataControlRun(input: RunAgentInput): boolean {
   );
 }
 
+export function isHeartPulseControlRun(input: RunAgentInput): boolean {
+  return (
+    input.agentId === HEARTHPULSE_CONTROL_AGENT_ID ||
+    input.tools.some(
+      (tool) =>
+        tool.name.includes("heartpulse-ops") &&
+        tool.name.endsWith("audit_strategy_data"),
+    )
+  );
+}
+
 export function permissionProfileFor(input: RunAgentInput): string {
-  return isDataControlRun(input) ? "data-control-agent" : "openbot-agent";
+  if (isDataControlRun(input)) return "data-control-agent";
+  if (isHeartPulseControlRun(input)) return "heartpulse-control-agent";
+  return "openbot-agent";
 }
 
 export function instructionsFor(input: RunAgentInput): string {
@@ -45,10 +59,19 @@ export function instructionsFor(input: RunAgentInput): string {
         "For unexpected_selected_params, compare the filters our configured upstream request actually asks for (including URL query constants) with the validator's accepted coherent profiles. Add the exact requested coherent profile and a regression test; never guess an unrelated profile or broadly accept arbitrary parameters.",
         "Do not finish with a problem merely diagnosed unless triage proves upstream_pending, upstream_regression, or operationally_disabled. For retry_transient perform one bounded retry and diagnose the result; for inspect_adapter or investigate_implementation inspect the code and repair a confirmed local defect, then validate, publish, and verify fresh_published.",
       ]
-    : [
-        "You are the assistant inside a private OpenBot deployment. Answer the person directly and concisely.",
-        "Use only the OpenBot tools supplied as dynamic tools. Never use built-in shell, filesystem, patch, web, app, MCP, skill, or delegation tools. The OpenBot tools are the governed boundary for every action.",
-      ];
+    : isHeartPulseControlRun(input)
+      ? [
+          "You are Контроль HearthPulse, the dedicated end-to-end maintainer of Battlegrounds data shown on hearthpulse.net.",
+          "Your writable workspace is a dedicated HeartPulse clone. Use only the governed heartpulse-ops tools for live API/render audits, CodeGraph, validation, publication and rollback-capable verification.",
+          "Never read .env files, credentials, cookies, tokens, private keys, production databases, dumps, or runtime copies. Never use sudo, Docker, systemctl, network tools, git push, or edit production paths.",
+          "Start every cycle with audit_strategy_data, then diagnose_rendering. HTTP 200 alone is not success: verify count, fetchedAt, tier distribution, card coverage and metrics. Treat HSReplay all-D without metrics as invalid.",
+          "Before reading implementation code, read AGENTS.md and call codegraph_explore. Preserve unrelated changes, work in the isolated branch, add a regression test, then run targeted, full and security validation before publish_and_verify.",
+          "If the audit proves the parser/API is the cause, hand off exact evidence to Контроль данных rather than guessing at a HeartPulse UI change. Only a verified post-publish end-to-end result is complete.",
+        ]
+      : [
+          "You are the assistant inside a private OpenBot deployment. Answer the person directly and concisely.",
+          "Use only the OpenBot tools supplied as dynamic tools. Never use built-in shell, filesystem, patch, web, app, MCP, skill, or delegation tools. The OpenBot tools are the governed boundary for every action.",
+        ];
 
   return [
     ...runtimeInstructions,
@@ -68,7 +91,9 @@ export function transcriptFor(input: RunAgentInput): string {
       message.role !== "reasoning",
   );
   const lines = (
-    isDataControlRun(input) ? compactDataControlHistory(messages) : messages
+    isDataControlRun(input) || isHeartPulseControlRun(input)
+      ? compactDataControlHistory(messages)
+      : messages
   ).flatMap(formatMessage);
 
   return [

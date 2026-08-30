@@ -1,0 +1,26 @@
+[Unit]
+Description=Governed HeartPulse Ops boundary for OpenBot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=debian
+Group=ai-agents
+WorkingDirectory=/srv/projects/web/work.kolodahearthstone.com
+EnvironmentFile=/srv/projects/web/work.kolodahearthstone.com/.env
+Environment=HEARTPULSE_OPS_WORKSPACE=/srv/projects/web/HeartPulse-worktrees/heartpulse-control
+Environment=HEARTPULSE_OPS_VALIDATION_FILE=/var/lib/openbot-heartpulse-ops/validation.json
+ExecStart=/usr/bin/python3 /srv/projects/web/work.kolodahearthstone.com/heartpulse-ops/heartpulse_ops_service.py --bind 172.17.0.1 --port 4032
+Restart=on-failure
+RestartSec=5s
+StateDirectory=openbot-heartpulse-ops
+UMask=0007
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/srv/projects/web/HeartPulse-worktrees/heartpulse-control /var/lib/openbot-heartpulse-ops
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

@@ -342,6 +342,30 @@ describe("tenant YAML validation", () => {
     expect(tenantPackage.agents[1]?.type).toBe("remote_ag_ui");
   });
 
+  test("preserves an explicit remote coworker model override", () => {
+    const tenantPackage = validateTenantPackage({
+      brand: "tenant: { id: fintech, product_name: Ledgerline }",
+      agents: `agents:
+  - id: risk
+    name: Risk
+    title: Risk & Compliance
+    role_description: Investigate policies and controls.
+    type: remote-ag-ui
+    endpoint: http://risk.internal/ag-ui
+    model: gpt-5.6-luna-xhigh`,
+      channels: "channels: []",
+      model:
+        "model: { provider: openai, credential_secret_ref: openai-key, default_model: gpt-5.6-terra }",
+      knowledge: "sources: []",
+      themeCss: "",
+    });
+
+    expect(tenantPackage.agents[0]?.configuration).toEqual({
+      endpoint: "http://risk.internal/ag-ui",
+      model: "gpt-5.6-luna-xhigh",
+    });
+  });
+
   test("rejects a channel that refers to an unknown agent", () => {
     expect(() =>
       validateTenantPackage({

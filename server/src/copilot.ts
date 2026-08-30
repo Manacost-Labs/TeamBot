@@ -57,6 +57,8 @@ type RegisteredRemoteAgent = {
   name: string;
   type: "remote_ag_ui";
   endpoint: string;
+  /** Optional per-coworker model override, forwarded only to the managed runtime. */
+  model?: string;
   standingMessage: StandingRoleMessage;
   /** The key this agent sits behind, resolved from the vault at load time. Never logged. */
   headers?: Record<string, string>;
@@ -163,6 +165,10 @@ export function registeredAgentFromRow(
         name: row.name,
         type: "remote_ag_ui",
         endpoint,
+        ...(typeof configuration.model === "string" &&
+        /^[A-Za-z0-9._:-]{1,120}$/.test(configuration.model.trim())
+          ? { model: configuration.model.trim() }
+          : {}),
         standingMessage: standingRoleMessage(row),
       }
     : null;
@@ -619,6 +625,7 @@ function remoteAgentWithStandingRole(
       forwardedProps: {
         ...(input.forwardedProps ?? {}),
         openbotBotId: agent.id,
+        ...(agent.model ? { openbotAgentModel: agent.model } : {}),
         /*
          * Which of those tools this deployment runs, as opposed to the surface.
          *

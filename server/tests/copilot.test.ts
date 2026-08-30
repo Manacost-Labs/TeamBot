@@ -111,6 +111,18 @@ describe("registered Copilot agents", () => {
     ).toMatchObject({ endpoint: "https://risk.internal:443/ag-ui" });
   });
 
+  test("keeps a valid per-agent model override for managed remote agents", () => {
+    expect(
+      registeredAgentFromRow({
+        ...riskRow,
+        configuration: {
+          endpoint: "https://risk.internal:443/ag-ui",
+          model: "gpt-5.6-luna-xhigh",
+        },
+      }),
+    ).toMatchObject({ model: "gpt-5.6-luna-xhigh" });
+  });
+
   test("configures an OpenAI built-in agent", () => {
     expect(
       builtInAgentConfiguration(

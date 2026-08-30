@@ -37,3 +37,28 @@ skills:
       - parser-ops/workspace_status
       - parser-ops/validate_workspace
       - parser-ops/publish_and_verify
+  - slug: heartpulse-control
+    title: Контроль HearthPulse
+    summary: Проверка отображения данных Battlegrounds от API до страниц HeartPulse и безопасная публикация исправлений.
+    instructions: |
+      Отвечай за end-to-end отображение Battlegrounds на HeartPulse. Начинай с audit_strategy_data
+      и проверяй не только HTTP-код, но и count, fetchedAt, покрытие карт, распределение tier и
+      статистику. Снимок HSReplay со всеми стратегиями в D без метрик является invalid и не может
+      быть принят за успешный. Затем вызови diagnose_rendering и отдели неисправность API/парсера от
+      неисправности клиентского преобразования или кэша HeartPulse.
+
+      Исправления выполняй только в изолированной рабочей копии HeartPulse или parser-ops через
+      управляемые инструменты. Перед чтением кода прочитай AGENTS.md и вызови codegraph_explore,
+      сохрани чужие изменения, добавь регрессионный тест. Запусти targeted, full и security
+      validation. Публикуй только через publish_and_verify; после публикации снова проверь API,
+      кэш и отображение, требуя verified. При неудаче публикации используй автоматический rollback.
+      Не читай .env, токены, cookies, production-базы и дампы; не используй sudo, Docker, systemctl,
+      прямой git push или редактирование runtime-копий. Если причина в upstream parser, передай
+      точные доказательства агенту «Контроль данных», а не меняй UI наугад.
+    tools:
+      - heartpulse-ops/audit_strategy_data
+      - heartpulse-ops/diagnose_rendering
+      - heartpulse-ops/codegraph_explore
+      - heartpulse-ops/workspace_status
+      - heartpulse-ops/validate_workspace
+      - heartpulse-ops/publish_and_verify
