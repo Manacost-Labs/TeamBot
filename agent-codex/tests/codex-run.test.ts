@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   codexToolName,
   modelFor,
+  reasoningEffortFor,
   toolCallNames,
   workspaceFor,
 } from "../src/codex-run";
@@ -37,10 +38,20 @@ describe("Codex dynamic tool names", () => {
   it("uses the managed coworker's model and workspace override", () => {
     const input = {
       agentId: "heartpulse-control",
-      forwardedProps: { openbotAgentModel: "gpt-5.6-luna-xhigh" },
+      forwardedProps: { openbotAgentModel: "gpt-5.6-luna" },
     } as never;
-    expect(modelFor(input)).toBe("gpt-5.6-luna-xhigh");
+    expect(modelFor(input)).toBe("gpt-5.6-luna");
+    expect(reasoningEffortFor(input)).toBe("xhigh");
     expect(workspaceFor(input)).toBe("/workspace-heartpulse");
+  });
+
+  it("uses the research model, xhigh effort and isolated report workspace", () => {
+    const input = {
+      agentId: process.env.RESEARCH_AGENT_ID?.trim() || "research-analyst",
+    } as never;
+    expect(modelFor(input)).toBe("gpt-5.6-luna");
+    expect(reasoningEffortFor(input)).toBe("xhigh");
+    expect(workspaceFor(input)).toBe("/research-runs");
   });
 
   it("ignores unsafe model overrides", () => {
@@ -48,5 +59,19 @@ describe("Codex dynamic tool names", () => {
       forwardedProps: { openbotAgentModel: "gpt-5.6-luna-xhigh;rm" },
     } as never;
     expect(modelFor(input)).not.toBe("gpt-5.6-luna-xhigh;rm");
+  });
+
+  it("accepts only a known reasoning effort override", () => {
+    const input = {
+      forwardedProps: { openbotAgentReasoningEffort: "xhigh" },
+    } as never;
+    expect(reasoningEffortFor(input)).toBe("xhigh");
+  });
+
+  it("falls back for an unsafe reasoning effort override", () => {
+    const input = {
+      forwardedProps: { openbotAgentReasoningEffort: "xhigh;rm" },
+    } as never;
+    expect(reasoningEffortFor(input)).toBe("low");
   });
 });

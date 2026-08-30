@@ -7,6 +7,7 @@ import {
   instructionsFor,
   isDataControlRun,
   isHeartPulseControlRun,
+  isResearchRun,
   permissionProfileFor,
   runAssertion,
   transcriptFor,
@@ -36,14 +37,31 @@ const MODEL = process.env.CODEX_MODEL?.trim();
 const REASONING_EFFORT = process.env.CODEX_REASONING_EFFORT?.trim() || "low";
 const REASONING_SUMMARY =
   process.env.CODEX_REASONING_SUMMARY?.trim() || "concise";
+const REASONING_EFFORTS = new Set([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+const RESEARCH_MODEL = process.env.RESEARCH_MODEL?.trim() || "gpt-5.6-luna";
+const RESEARCH_REASONING_EFFORT =
+  process.env.RESEARCH_REASONING_EFFORT?.trim() || "xhigh";
 
 const HEARTPULSE_WORKSPACE = "/workspace-heartpulse";
+const RESEARCH_WORKSPACE = "/research-runs";
 
 export function workspaceFor(input: RunAgentInput): string {
+  if (isResearchRun(input)) return RESEARCH_WORKSPACE;
   return isHeartPulseControlRun(input) ? HEARTPULSE_WORKSPACE : "/workspace";
 }
 
 export function modelFor(input: RunAgentInput): string | undefined {
+  if (isResearchRun(input) && /^[A-Za-z0-9._:-]{1,120}$/.test(RESEARCH_MODEL)) {
+    return RESEARCH_MODEL;
+  }
   const forwarded = input.forwardedProps as
     | { openbotAgentModel?: unknown }
     | undefined;
@@ -52,6 +70,32 @@ export function modelFor(input: RunAgentInput): string | undefined {
       ? forwarded.openbotAgentModel.trim()
       : "";
   return /^[A-Za-z0-9._:-]{1,120}$/.test(override) ? override : MODEL;
+}
+
+export function reasoningEffortFor(input: RunAgentInput): string {
+  if (isResearchRun(input) && REASONING_EFFORTS.has(RESEARCH_REASONING_EFFORT)) {
+    return RESEARCH_REASONING_EFFORT;
+  }
+  const forwarded = input.forwardedProps as
+    | { openbotAgentReasoningEffort?: unknown }
+    | undefined;
+  const override =
+    typeof forwarded?.openbotAgentReasoningEffort === "string"
+      ? forwarded.openbotAgentReasoningEffort.trim()
+      : "";
+  if (REASONING_EFFORTS.has(override)) return override;
+
+  // Control agents use the affordable Luna model with the deeper effort needed for
+  // parser/UI repairs. The model id and effort are independent Codex settings;
+  // keeping this fallback here prevents the invalid `gpt-5.6-luna-xhigh` model name.
+  if (
+    (isDataControlRun(input) || isHeartPulseControlRun(input)) &&
+    modelFor(input) === "gpt-5.6-luna"
+  ) {
+    return "xhigh";
+  }
+
+  return REASONING_EFFORT;
 }
 
 export async function runCodex(
@@ -158,7 +202,7 @@ class CodexProcess {
     await this.request("turn/start", {
       threadId,
       input: [{ type: "text", text: transcriptFor(this.input) }],
-      effort: REASONING_EFFORT,
+      effort: reasoningEffortFor(this.input),
       summary: REASONING_SUMMARY,
     });
     await this.finished;
@@ -246,7 +290,7 @@ class CodexProcess {
           void this.request("turn/start", {
             threadId: this.threadId,
             input: [{ type: "text", text: correction }],
-            effort: REASONING_EFFORT,
+            effort: reasoningEffortFor(this.input),
             summary: REASONING_SUMMARY,
           }).catch(this.fail);
         } else if (correction) {
