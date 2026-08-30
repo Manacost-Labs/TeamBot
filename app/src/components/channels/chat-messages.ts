@@ -1,4 +1,9 @@
 import type { Message, ToolCall } from "@ag-ui/core";
+import {
+  agentRunStatusLabel,
+  isAgentRunActive,
+  type AgentRunState,
+} from "@/lib/copilot/run-state";
 
 /**
  * Transcript projection that pairs assistant tool calls with later tool-result messages.
@@ -19,6 +24,233 @@ export type VisibleChatWindow = {
   items: readonly VisibleChatItem[];
   hidden: number;
 };
+
+export type ActivityStep = {
+  id: string;
+  label: string;
+  state: "active" | "done" | "warning";
+};
+
+export type ActivitySnapshot = {
+  label: string;
+  status: "done" | "idle" | "incomplete" | "stopped" | "working";
+  statusLabel: string;
+  steps: readonly ActivityStep[];
+  toolCount: number;
+  runStatus?: AgentRunState["status"];
+  elapsedMs: number;
+};
+
+/** Choose a plain-language phase for the small live activity indicator. */
+function toolActivityLabel(
+  tool: Extract<VisibleChatItem, { kind: "tool" }>,
+): string {
+  const hint =
+    `${tool.toolCall.function.name} ${tool.toolCall.function.arguments}`.toLowerCase();
+  if (/(fetch|read|open|inspect|verify)/.test(hint))
+    return "Проверяет источник";
+  if (/(search|reddit|x-search|tinyfish)/.test(hint)) return "Ищет источники";
+  if (/(write|save|report|markdown)/.test(hint)) return "Сохраняет отчёт";
+  return "Выполняет шаг исследования";
+}
+
+/** Choose a plain-language phase for the small live activity indicator. */
+export function activityLabelFor(items: readonly VisibleChatItem[]): string {
+  const activeTool = [...items]
+    .reverse()
+    .find((item) => item.kind === "tool" && item.result === undefined);
+  if (activeTool?.kind === "tool") {
+    return toolActivityLabel(activeTool);
+  }
+
+  const lastItem = items.at(-1);
+  if (lastItem?.kind === "text" && lastItem.role === "assistant") {
+    return "Анализирует найденные данные";
+  }
+  return "Аналитик работает";
+}
+
+function activityStepLabel(
+  item: Extract<VisibleChatItem, { kind: "tool" }>,
+): string {
+  switch (toolActivityLabel(item)) {
+    case "Ищет источники":
+      return "Поиск источников";
+    case "Проверяет источник":
+      return "Проверка источников";
+    case "Сохраняет отчёт":
+      return "Сохранение отчёта";
+    default:
+      return "Выполнение инструментов";
+  }
+}
+
+/** Progress notes are not a user-facing result, even when they are long and confidently worded. */
+function isProgressNote(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return [
+    "начинаю исследование",
+    "план зафиксирован",
+    "первый проход",
+    "сбор углублён",
+    "сбор углублен",
+    "итоговый проход",
+    "starting research",
+    "plan locked",
+    "first pass",
+    "deepened collection",
+    "final pass",
+  ].some((marker) => normalized.includes(marker));
+}
+
+/** Project a transcript into the compact activity menu shown above every chat. */
+export function activitySnapshotFor(
+  items: readonly VisibleChatItem[],
+  busy: boolean,
+  stopped?: string,
+  run?: AgentRunState,
+): ActivitySnapshot {
+  const lastUserIndex = items.findLastIndex(
+    (item) => item.kind === "text" && item.role === "user",
+  );
+  const turnItems = lastUserIndex < 0 ? items : items.slice(lastUserIndex);
+  const tools = turnItems.filter(
+    (item): item is Extract<VisibleChatItem, { kind: "tool" }> =>
+      item.kind === "tool",
+  );
+  const activeTool = [...tools]
+    .reverse()
+    .find((item) => item.result === undefined);
+  const hasReasoning = turnItems.some((item) => item.kind === "reasoning");
+  const assistantTexts = turnItems
+    .filter(
+      (item): item is Extract<VisibleChatItem, { kind: "text" }> =>
+        item.kind === "text" && item.role === "assistant",
+    )
+    .map((item) => item.text);
+  const hasAnswer = assistantTexts.some((text) => !isProgressNote(text));
+  const hasOutput = assistantTexts.length > 0 || tools.length > 0;
+  const hasIncompleteResult = hasOutput && !hasAnswer;
+  const label = busy
+    ? activeTool
+      ? activityLabelFor([activeTool])
+      : items.length === 0
+        ? "Принимает задачу"
+        : activityLabelFor(turnItems)
+    : stopped
+      ? "Остановлено"
+      : hasAnswer
+        ? "Последний запрос завершён"
+        : hasIncompleteResult
+          ? "Результат не подтверждён"
+          : "Готов к работе";
+
+  const steps: ActivityStep[] = [];
+  if (turnItems.length > 0) {
+    steps.push({ id: "request", label: "Запрос принят", state: "done" });
+  }
+  if (hasReasoning) {
+    steps.push({
+      id: "plan",
+      label: busy && tools.length === 0 ? "Планирование" : "План составлен",
+      state: busy && tools.length === 0 ? "active" : "done",
+    });
+  }
+
+  const seenTools = new Set<string>();
+  for (const tool of tools) {
+    const toolLabel = activityStepLabel(tool);
+    if (seenTools.has(toolLabel)) continue;
+    seenTools.add(toolLabel);
+    steps.push({
+      id: toolLabel,
+      label: toolLabel,
+      state: tool.result === undefined ? "active" : "done",
+    });
+  }
+
+  if (hasAnswer) {
+    steps.push({
+      id: "answer",
+      label: busy ? "Ответ формируется" : "Ответ готов",
+      state: busy ? "active" : "done",
+    });
+  }
+  if (!busy && hasIncompleteResult) {
+    steps.push({
+      id: "incomplete-result",
+      label: "Результат не подтверждён",
+      state: "warning",
+    });
+  }
+  if (busy && steps.every((step) => step.state !== "active")) {
+    steps.push({ id: "current", label, state: "active" });
+  }
+
+  const base: ActivitySnapshot = {
+    label,
+    status: stopped
+      ? "stopped"
+      : busy
+        ? "working"
+        : hasAnswer
+          ? "done"
+          : hasIncompleteResult
+            ? "incomplete"
+            : "idle",
+    statusLabel: stopped
+      ? "Остановлено"
+      : busy
+        ? "В работе"
+        : hasAnswer
+          ? "Готово"
+          : hasIncompleteResult
+            ? "Нет результата"
+            : "Ожидает",
+    steps: steps.slice(-5),
+    toolCount: tools.length,
+    elapsedMs: run?.elapsedMs ?? 0,
+  };
+
+  // The transcript is still the source of truth for the answer, while the explicit run state is
+  // the source of truth for what is happening between messages. This prevents a long tool call or a
+  // reconnect gap from looking idle just because no new message has arrived yet.
+  if (!run || (run.status === "completed" && run.startedAt === null)) return base;
+
+  const active = busy || isAgentRunActive(run.status);
+  const explicitLabel = agentRunStatusLabel(run.status);
+  const explicitStatus = active
+    ? "working"
+    : run.status === "failed" || run.status === "cancelled"
+      ? "stopped"
+      : hasAnswer
+        ? "done"
+        : "incomplete";
+  const explicitStatusLabel = active
+    ? "В работе"
+    : run.status === "failed"
+      ? "Ошибка"
+      : run.status === "cancelled"
+        ? "Остановлено"
+        : hasAnswer
+          ? "Готово"
+          : "Нет результата";
+  const explicitSteps = active
+    ? [
+        ...base.steps.filter((step) => step.state !== "active"),
+        { id: "run-phase", label: explicitLabel, state: "active" as const },
+      ]
+    : base.steps;
+
+  return {
+    ...base,
+    label: active ? explicitLabel : base.label,
+    status: explicitStatus,
+    statusLabel: explicitStatusLabel,
+    steps: explicitSteps.slice(-5),
+    runStatus: run.status,
+  };
+}
 
 /**
  * Keep the live edge cheap without throwing conversation history away.

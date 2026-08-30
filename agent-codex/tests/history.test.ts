@@ -4,9 +4,11 @@ import {
   deploymentToolNames,
   instructionsFor,
   isHeartPulseControlRun,
+  isResearchRun,
   permissionProfileFor,
   transcriptFor,
 } from "../src/history";
+import { shouldExposeReasoning } from "../src/reasoning-visibility";
 
 const input = {
   threadId: "thread",
@@ -67,6 +69,24 @@ describe("Codex prompt translation", () => {
     expect(instructionsFor(heartpulse)).toContain(
       "HSReplay all-D without metrics",
     );
+  });
+
+  test("gives the research agent an isolated report workspace and source workflow", () => {
+    const research = {
+      ...input,
+      agentId: process.env.RESEARCH_AGENT_ID?.trim() || "research-analyst",
+    } as RunAgentInput;
+    expect(isResearchRun(research)).toBe(true);
+    expect(permissionProfileFor(research)).toBe("research-agent");
+    expect(instructionsFor(research)).toContain(
+      "research-source tinyfish-fetch",
+    );
+    expect(instructionsFor(research)).toContain("hsreplay_archetypes");
+    expect(instructionsFor(research)).toContain("hsguru_meta_standard_legend");
+    expect(instructionsFor(research)).toContain("failed Fetch");
+    expect(instructionsFor(research)).toContain("private chain-of-thought");
+    expect(shouldExposeReasoning(research)).toBe(false);
+    expect(shouldExposeReasoning(input)).toBe(true);
   });
 
   test("keeps higher-priority instructions out of the quoted transcript", () => {

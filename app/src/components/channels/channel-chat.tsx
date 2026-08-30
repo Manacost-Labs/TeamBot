@@ -20,8 +20,14 @@ import { useActiveBot } from "@/lib/copilot/active-bot";
 import { ConversationProvider } from "@/lib/copilot/conversation";
 import { afterMs, joinWithin } from "@/lib/copilot/join-thread";
 import { repairUnansweredToolCalls } from "@/lib/copilot/repair-history";
+import { setAgentRunActivity } from "@/lib/copilot/run-activity-store";
+import { isAgentRunActive } from "@/lib/copilot/run-state";
 import { stoppedReason } from "@/lib/copilot/stopped-turn";
-import { readThreadMessages } from "@/lib/copilot/thread-messages";
+import {
+  invalidateThreadMessagesCache,
+  readThreadMessages,
+} from "@/lib/copilot/thread-messages";
+import { useAgentRun } from "@/lib/copilot/use-agent-run";
 import { useSkillCommands } from "@/lib/plugins/skill-commands";
 import { newId } from "../../lib/new-id";
 
@@ -37,6 +43,34 @@ const JOIN_DEADLINE_MS = 1500;
  * Backstop for a message typed before the runtime agent exists; it must not be discarded.
  */
 const SEND_WITHOUT_RUNTIME_AFTER_MS = 1500;
+
+function hasAssistantOutputAfter(
+  messages: readonly Message[],
+  userMessageId: string,
+): boolean {
+  const userIndex = messages.findIndex((message) => message.id === userMessageId);
+  return messages.slice(userIndex + 1).some((message) => {
+    if (message.role !== "assistant") return false;
+    return typeof message.content === "string" && message.content.trim().length > 0;
+  });
+}
+
+/** Keep streamed local messages and append durable messages not seen by this tab. */
+function mergeThreadMessages(
+  local: readonly Message[],
+  stored: readonly Message[],
+): Message[] {
+  const ids = new Set(local.map((message) => message.id));
+  return [...local, ...stored.filter((message) => !ids.has(message.id))];
+}
+
+function isTransportFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/abort|cancel|signal is aborted/i.test(message)) return false;
+  return /network|fetch|socket|websocket|gateway|connection|timeout|timed out|econn|502|503|504/i.test(
+    message,
+  );
+}
 
 /**
  * One channel's conversation with one coworker.
@@ -108,6 +142,25 @@ export function ChannelChat({
    */
   const agentRef = useRef(agent);
   agentRef.current = agent;
+
+  /**
+   * One logical request may contain several protocol runs when a browser tool is involved. The
+   * hook follows the visible phases, while this screen calls `finish` only after the whole
+   * `runAgent` promise has settled.
+   */
+  const runActivity = useAgentRun(agent, {
+    finishOnRunFinished: false,
+    // The delivery catch performs the bounded reconnect. Do not turn a transport error into a
+    // terminal state before that recovery window has had a chance to attach again.
+    onRunFailed: () => {},
+  });
+
+  useEffect(() => {
+    setAgentRunActivity(channel.id, runActivity.state);
+  }, [channel.id, runActivity.state]);
+
+  /** A message is drawn immediately, before readiness and thread join have completed. */
+  const [optimisticMessages, setOptimisticMessages] = useState<readonly Message[]>([]);
 
   /**
    * History has been asked for and has not arrived. True for a channel opened from the roster, where
@@ -208,6 +261,10 @@ export function ChannelChat({
   // Run failures arrive as events and are reported only for turns started in this mount.
   const [runError, setRunError] = useState<string | null>(null);
   const awaitingReply = useRef(false);
+  const lastRequest = useRef<{
+    text: string;
+    skillInstructions: string[];
+  } | null>(null);
 
   /*
    * TWO DIFFERENT FACTS ABOUT ONE TURN, AND NEITHER OF THEM IS `agent.isRunning`.
@@ -253,11 +310,71 @@ export function ChannelChat({
   const reportRef = useRef(report);
   reportRef.current = report;
 
+  const reconcileThread = async (
+    target: typeof agent,
+    userMessageId: string,
+  ): Promise<boolean> => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const stored = await readThreadMessages(
+        channel.threadId,
+        runtimeAgentId,
+        { fresh: true },
+      );
+      const merged = mergeThreadMessages(target.messages, stored.messages);
+      if (merged.length !== target.messages.length) {
+        target.setMessages(merged as typeof target.messages);
+      }
+      if (hasAssistantOutputAfter(merged, userMessageId)) {
+        runActivity.reconcile(true);
+        return true;
+      }
+      if (attempt === 0) await afterMs(250);
+    }
+    const hasAnswer = hasAssistantOutputAfter(target.messages, userMessageId);
+    runActivity.reconcile(hasAnswer);
+    return hasAnswer;
+  };
+
+  const recoverTransport = async (
+    target: typeof agent,
+    error: unknown,
+    userMessageId: string,
+  ): Promise<boolean> => {
+    if (!awaitingReply.current || !isTransportFailure(error)) return false;
+    runActivity.reconnecting();
+    await afterMs(400);
+    try {
+      // Intelligence resumes the current thread from its last event cursor. This is bounded to one
+      // attempt so a dead gateway cannot leave the composer locked forever.
+      await copilotkit.connectAgent({ agent: target });
+      if (!awaitingReply.current) return false;
+      const recovered = await reconcileThread(target, userMessageId);
+      if (recovered) {
+        awaitingReply.current = false;
+        runActivity.finish();
+        const reply = [...target.messages]
+          .reverse()
+          .find((message) => message.role === "assistant");
+        const content = typeof reply?.content === "string" ? reply.content : "";
+        if (content) reportRef.current(content, runtimeAgentId);
+        return true;
+      }
+      runActivity.reconnected();
+    } catch {
+      // The caller presents the original transport reason below.
+    }
+    return false;
+  };
+
   /**
    * Everything `say` does once it has something worth sending, split out so the counter it is
    * wrapped in covers every way out of here, a throw included.
    */
-  const deliver = async (trimmed: string, skillInstructions: string[]) => {
+  const deliver = async (
+    trimmed: string,
+    skillInstructions: string[],
+    userMessageId: string,
+  ) => {
     // Wait briefly for the runtime agent instance before adding the message.
     if (!isReadyRef.current) {
       await Promise.race([
@@ -305,9 +422,10 @@ export function ChannelChat({
 
     target.addMessage({
       content: trimmed,
-      id: newId(),
+      id: userMessageId,
       role: "user",
     });
+    invalidateThreadMessagesCache(channel.threadId, runtimeAgentId);
     report(trimmed, null);
 
     // Providers reject later turns if prior tool calls have no result; repair before sending.
@@ -316,9 +434,43 @@ export function ChannelChat({
       target.setMessages(repaired as typeof target.messages);
     }
 
+    runActivity.accept();
     setRunsInFlight((count) => count + 1);
     try {
       await copilotkit.runAgent({ agent: target });
+      if (!awaitingReply.current) return;
+
+      /*
+       * The final event and durable persistence are intentionally reconciled separately. If the
+       * browser missed RUN_FINISHED, the platform history still gives us the answer; if both are
+       * missing, this request is not allowed to masquerade as completed.
+       */
+      const hasAnswer = await reconcileThread(target, userMessageId);
+      if (!hasAnswer) {
+        const reason = "Сотрудник завершил работу без результата.";
+        awaitingReply.current = false;
+        runActivity.fail(reason);
+        setRunError(reason);
+        throw new Error(reason);
+      }
+
+      awaitingReply.current = false;
+      runActivity.finish();
+      const reply = [...target.messages]
+        .reverse()
+        .find((message) => message.role === "assistant");
+      const content = typeof reply?.content === "string" ? reply.content : "";
+      if (content) reportRef.current(content, runtimeAgentId);
+    } catch (error) {
+      const recovered = await recoverTransport(target, error, userMessageId);
+      if (recovered) return;
+      if (awaitingReply.current) {
+        awaitingReply.current = false;
+        const reason = stoppedReason(error);
+        runActivity.fail(reason);
+        setRunError(reason);
+      }
+      throw error;
     } finally {
       setRunsInFlight((count) => count - 1);
     }
@@ -332,13 +484,25 @@ export function ChannelChat({
    * keeping here rather than in the view: the view sees only the turns it started itself, and a
    * queue that drains on the wrong one of those posts a correction into the middle of an answer.
    */
-  const say = async (text: string, skillInstructions: string[] = []) => {
+  const say = async (
+    text: string,
+    skillInstructions: string[] = [],
+    suppliedMessageId?: string,
+  ) => {
     const trimmed = text.trim();
     if (!trimmed) return;
 
+    lastRequest.current = { text: trimmed, skillInstructions };
+    setRunError(null);
+    const userMessageId = suppliedMessageId ?? newId();
+    setOptimisticMessages((messages) => [
+      ...messages.filter((message) => message.id !== userMessageId),
+      { content: trimmed, id: userMessageId, role: "user" },
+    ]);
+    runActivity.begin();
     setTurnsInFlight((count) => count + 1);
     try {
-      await deliver(trimmed, skillInstructions);
+      await deliver(trimmed, skillInstructions, userMessageId);
     } finally {
       setTurnsInFlight((count) => count - 1);
     }
@@ -354,25 +518,35 @@ export function ChannelChat({
       // Both surfaces fall back to the same sentence, from the same place, so a person who uses
       // both is not told two different things about the same silence.
       onRunErrorEvent: ({ event }) => fail(stoppedReason(event?.message)),
-      onRunFailed: ({ error }) => fail(stoppedReason(error)),
-      onRunFinishedEvent: () => {
-        const wasOurs = awaitingReply.current;
-        awaitingReply.current = false;
-        if (!wasOurs) return;
-
-        const reply = [...agent.messages]
-          .reverse()
-          .find((message) => message.role === "assistant");
-        const content = typeof reply?.content === "string" ? reply.content : "";
-        if (content) reportRef.current(content, runtimeAgentId);
-      },
+      // A finished protocol run is not necessarily the finished logical request: frontend tools can
+      // start a follow-up run with their result. `deliver` owns the final transition.
+      onRunFinishedEvent: () => {},
     });
     return () => subscription?.unsubscribe();
-  }, [agent, runtimeAgentId]);
+  }, [agent]);
+
+  /** Keep the visible optimistic bubble until the server has echoed the same message id. */
+  const messageCount = agent.messages.length;
+  // AG-UI mutates this message array in place; the count is the change signal for this cleanup.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: messageCount tracks the mutable AG-UI array.
+  useEffect(() => {
+    const ids = new Set(agent.messages.map((message) => message.id));
+    if (ids.size === 0) return;
+    setOptimisticMessages((messages) => {
+      const next = messages.filter((message) => !ids.has(message.id));
+      return next.length === messages.length ? messages : next;
+    });
+  }, [agent, messageCount]);
 
   /** Stable reference for effects and component callbacks. */
   const sayRef = useRef(say);
   sayRef.current = say;
+
+  const retryLast = useCallback(() => {
+    const request = lastRequest.current;
+    if (!request || awaitingReply.current) return;
+    void sayRef.current(request.text, request.skillInstructions);
+  }, []);
 
   /**
    * Component buttons speak as user turns without forcing every transcript card to re-render.
@@ -392,6 +566,8 @@ export function ChannelChat({
 
     void sayRef.current(
       typeof pending.content === "string" ? pending.content : "",
+      [],
+      pending.id,
     );
 
     // Keep `seed` in state; transcriptMessages gives it up once the agent holds a user turn.
@@ -406,15 +582,25 @@ export function ChannelChat({
          * and `agent.isRunning` alone leaves that gap unmarked — which is the one moment the
          * "Thinking" line exists for. Same value as `pending`, deliberately.
          */
-        busy={agent.isRunning || turnsInFlight > 0}
+        busy={
+          agent.isRunning ||
+          turnsInFlight > 0 ||
+          (runActivity.state.startedAt !== null &&
+            isAgentRunActive(runActivity.state.status))
+        }
         // The `/` menu exposes only skills granted to this Bot.
         commands={skillCommands}
         // Readiness is handled by `say`; deletion is the only disabled-chat state.
         disabled={!channel.active}
-        messages={transcriptMessages(
-          agent.messages.length > 0 ? agent.messages : historyPreview,
-          seed,
-        )}
+        messages={(() => {
+          const currentMessages =
+            agent.messages.length > 0 ? agent.messages : historyPreview;
+          const ids = new Set(currentMessages.map((message) => message.id));
+          const pending = optimisticMessages.filter(
+            (message) => !ids.has(message.id),
+          );
+          return transcriptMessages([...currentMessages, ...pending], seed);
+        })()}
         notice={
           /*
            * Two things can be worth saying at once — a deleted coworker and a history with holes in
@@ -457,14 +643,18 @@ export function ChannelChat({
 
           await say(draft.text, skillInstructions);
         }}
+        run={runActivity.state}
         /**
          * Stop through the core so the abort signal reaches frontend tools; `say` repairs any
          * unanswered tool call before the next turn.
          */
         onStop={() => {
           awaitingReply.current = false;
+          runActivity.cancel();
           copilotkit.stopAgent({ agent });
         }}
+        onQueued={runActivity.queue}
+        onRetry={retryLast}
         /*
          * The turn, not the run. A browser action ends one run and starts another, and telling the
          * conversation it is idle in between is what would drain a parked correction into the

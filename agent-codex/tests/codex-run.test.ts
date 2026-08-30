@@ -3,6 +3,7 @@ import {
   codexToolName,
   modelFor,
   reasoningEffortFor,
+  researchFinalisationIssue,
   toolCallNames,
   workspaceFor,
 } from "../src/codex-run";
@@ -52,6 +53,30 @@ describe("Codex dynamic tool names", () => {
     expect(modelFor(input)).toBe("gpt-5.6-luna");
     expect(reasoningEffortFor(input)).toBe("xhigh");
     expect(workspaceFor(input)).toBe("/research-runs");
+  });
+
+  it("requests finalisation when research ends as progress-only text", () => {
+    expect(
+      researchFinalisationIssue(
+        "Начинаю исследование. План зафиксирован. Первый проход завершён.",
+      ),
+    ).toContain("progress");
+    expect(
+      researchFinalisationIssue("## Результат\nWin rate: 54%."),
+    ).toBeNull();
+  });
+
+  it("does not accept an HSReplay/HSGuru access failure without the first-party API", () => {
+    expect(
+      researchFinalisationIssue(
+        "HSReplay и HSGuru не открылись, поэтому данных нет.",
+      ),
+    ).toContain("first-party API");
+    expect(
+      researchFinalisationIssue(
+        "HSReplay HTML недоступен, но stats-api вернул dataset из api.kolodahearthstone.com.",
+      ),
+    ).toBeNull();
   });
 
   it("ignores unsafe model overrides", () => {

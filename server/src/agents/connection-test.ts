@@ -14,8 +14,20 @@ import {
  * `HttpAgent` is `{ url, headers?, fetch? }`). The test is a real run with a trivial message.
  */
 
-/** How long an endpoint gets to answer. Short: this is a person waiting on a form. */
-const TEST_TIMEOUT_MS = 15_000;
+/** How long an endpoint gets to answer. Short by default: this is a person waiting on a form. */
+const DEFAULT_TEST_TIMEOUT_MS = 15_000;
+const MAX_TEST_TIMEOUT_MS = 120_000;
+
+function configuredTestTimeoutMs(): number {
+  const configured = Number.parseInt(
+    process.env.AGENT_CONNECTION_TEST_TIMEOUT_MS ?? "",
+    10,
+  );
+  if (!Number.isFinite(configured) || configured <= 0) {
+    return DEFAULT_TEST_TIMEOUT_MS;
+  }
+  return Math.min(configured, MAX_TEST_TIMEOUT_MS);
+}
 
 /** Enough of the stream to prove it is an agent. Reading it all could mean reading a whole reply. */
 const MAX_BYTES = 8_000;
@@ -122,7 +134,9 @@ export async function testAgentConnection(
         ...options.headers,
       },
       body: JSON.stringify(probeBody()),
-      signal: AbortSignal.timeout(options.timeoutMs ?? TEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(
+        options.timeoutMs ?? configuredTestTimeoutMs(),
+      ),
     });
   } catch (error) {
     // An address this deployment will not dial is a specific thing that happened, and the person

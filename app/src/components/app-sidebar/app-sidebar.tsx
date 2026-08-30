@@ -22,7 +22,7 @@ import {
 } from "@tanstack/react-router";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type * as React from "react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -214,7 +214,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   useChannelEvents();
   const [search, setSearch] = useState("");
   const searching = search.trim().length > 0;
-  const visibleChannels = pinnedFirst(matchingChannels(channels.data, search));
+  const visibleChannels = useMemo(
+    () => pinnedFirst(matchingChannels(channels.data, search)),
+    [channels.data, search],
+  );
   /*
    * FILTERING DOES NOT ANIMATE. Rows exit and relayout on every keystroke otherwise, which is a
    * list thrashing under somebody who is still typing — and the moving target is the very thing

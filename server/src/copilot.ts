@@ -999,6 +999,27 @@ class IntelligenceKnowingANewThread extends CopilotKitIntelligence {
  */
 const THREAD_LOCK_TTL_SECONDS = 120;
 
+type RuntimeRequestTrace = { id: string; startedAt: number };
+const runtimeRequestTraces = new WeakMap<Request, RuntimeRequestTrace>();
+
+/** Structured, content-free timing for the runtime boundary. Message bodies and credentials never enter this log. */
+function logRuntimePhase(
+  phase: string,
+  route: string,
+  trace: RuntimeRequestTrace | undefined,
+  status?: number,
+): void {
+  console.info(
+    JSON.stringify({
+      type: "agent-runtime-phase",
+      phase,
+      route,
+      ...(trace ? { requestId: trace.id, elapsedMs: Date.now() - trace.startedAt } : {}),
+      ...(status === undefined ? {} : { status }),
+    }),
+  );
+}
+
 /**
  * The private deployment has no CopilotKit Inspector surface, so advertising it makes every chat
  * open schedule an optional metadata request that can take longer than the useful API calls.
@@ -1150,10 +1171,50 @@ export function mountCopilotRuntime(
       runtime,
       basePath,
       hooks: {
-        onResponse: ({ response, route }) =>
-          route.method === "info"
-            ? disableInspectorMetadata(response)
-            : undefined,
+        onRequest: ({ request, path }) => {
+          if (!/\/agent\/(?:[^/]+)\/(?:run|connect)$/.test(path)) return;
+          const trace = { id: crypto.randomUUID(), startedAt: Date.now() };
+          runtimeRequestTraces.set(request, trace);
+          logRuntimePhase("request_received", path, trace);
+        },
+        onBeforeHandler: ({ request, route }) => {
+          if (route.method !== "agent/run" && route.method !== "agent/connect") return;
+          logRuntimePhase(
+            "request_accepted",
+            `${route.method}:${route.agentId}`,
+            runtimeRequestTraces.get(request),
+          );
+        },
+        onResponse: ({ response, route, request }) => {
+          if (route.method === "info") return disableInspectorMetadata(response);
+          if (route.method !== "agent/run" && route.method !== "agent/connect") {
+            return undefined;
+          }
+          logRuntimePhase(
+            route.method === "agent/run" ? "submit_ack" : route.method,
+            `${route.method}:${route.agentId}`,
+            runtimeRequestTraces.get(request),
+            response.status,
+          );
+          return undefined;
+        },
+        onError: ({ error, route, request }) => {
+          if (!route || (route.method !== "agent/run" && route.method !== "agent/connect")) {
+            return;
+          }
+          logRuntimePhase(
+            "request_error",
+            `${route.method}:${route.agentId}`,
+            runtimeRequestTraces.get(request),
+          );
+          console.warn(
+            JSON.stringify({
+              type: "agent-runtime-error",
+              route: `${route.method}:${route.agentId}`,
+              errorType: error instanceof Error ? error.name : "unknown",
+            }),
+          );
+        },
       },
     }),
     /**

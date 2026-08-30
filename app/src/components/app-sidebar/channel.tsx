@@ -27,6 +27,12 @@ import {
   deleteChannelMutationOptions,
   setChannelPinnedMutationOptions,
 } from "@/lib/channels/mutations";
+import { channelQueryOptions } from "@/lib/channels/queries";
+import { useAgentRunActivity } from "@/lib/copilot/run-activity-store";
+import {
+  agentRunStatusLabel,
+  isAgentRunActive,
+} from "@/lib/copilot/run-state";
 
 /**
  * Memoized roster row. `use-channel-events` preserves unchanged row identity, and
@@ -73,6 +79,13 @@ export const Channel = memo(function Channel({
    * the next attempt.
    */
   const [pinProblem, setPinProblem] = useState<string | null>(null);
+  const runActivity = useAgentRunActivity(channelId);
+  const isWorking =
+    runActivity !== null && isAgentRunActive(runActivity.status);
+
+  const prefetchChannel = () => {
+    void queryClient.prefetchQuery(channelQueryOptions(channelId));
+  };
 
   const confirmDelete = async () => {
     /*
@@ -108,6 +121,8 @@ export const Channel = memo(function Channel({
             activeProps={{
               className: "bg-foreground/5",
             }}
+            onFocus={prefetchChannel}
+            onMouseEnter={prefetchChannel}
           >
             <ChannelAvatar participantIds={participantIds} size={32} />
             <div className="flex-col min-w-0 flex-1">
@@ -125,9 +140,20 @@ export const Channel = memo(function Channel({
               </div>
               <div className="mt-px flex h-4 items-center gap-1.5">
                 <span className="min-w-0 flex-1 truncate text-[12px] leading-4 text-muted-foreground">
-                  {lastMessage}
+                  {isWorking
+                    ? agentRunStatusLabel(runActivity.status)
+                    : lastMessage}
                 </span>
-                {unread ? (
+                {isWorking ? (
+                  <span
+                    aria-label="Сотрудник работает"
+                    className="flex shrink-0 items-center gap-1 text-[11px] text-primary"
+                    role="status"
+                  >
+                    <span className="size-1.5 animate-pulse rounded-full bg-primary" />
+                    работает
+                  </span>
+                ) : unread ? (
                   /* State about the message beats state about the row, so it sits first. */
                   <span className="size-2 shrink-0 rounded-full bg-primary" />
                 ) : null}

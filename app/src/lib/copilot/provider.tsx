@@ -23,7 +23,11 @@ import { SandboxedTools } from "./sandboxed-tools";
  */
 export function CopilotProvider({ children }: { children: ReactNode }) {
   return (
-    <CopilotKitProvider runtimeUrl="/api/copilotkit" credentials="include">
+    <CopilotKitProvider
+      defaultThrottleMs={50}
+      runtimeUrl="/api/copilotkit"
+      credentials="include"
+    >
       {/* Computer tools target the Bot declared by the mounted surface. */}
       <ActiveBotProvider>
         <ComputerTools />

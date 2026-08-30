@@ -50,6 +50,76 @@ const RESEARCH_MODEL = process.env.RESEARCH_MODEL?.trim() || "gpt-5.6-luna";
 const RESEARCH_REASONING_EFFORT =
   process.env.RESEARCH_REASONING_EFFORT?.trim() || "xhigh";
 
+const RESEARCH_PROGRESS_MARKERS = [
+  "начинаю исследование",
+  "план зафиксирован",
+  "первый проход",
+  "сбор углублён",
+  "итоговый проход",
+  "starting research",
+  "plan locked",
+  "first pass",
+  "deepened collection",
+  "final pass",
+];
+
+const RESEARCH_RESULT_MARKERS = [
+  "## результат",
+  "## findings",
+  "## result",
+  "## источники",
+  "## sources",
+  "результат исследования",
+  "отчёт сохранён",
+  "отчет сохранен",
+  "report.md",
+];
+
+const RESEARCH_API_ACCESS_MARKERS = [
+  "stats-api",
+  "api.kolodahearthstone.com",
+  "first-party",
+  "набор данных",
+  "датасет",
+  "dataset",
+];
+
+/**
+ * Research progress is useful while a run is live, but it is not a deliverable on its own.
+ * Returning a reason lets the run ask Codex for one bounded finalisation pass instead of showing a
+ * polished status log as if it were an answer.
+ */
+export function researchFinalisationIssue(text: string): string | null {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) {
+    return "The research run ended without an assistant result.";
+  }
+  const progressMarkers = RESEARCH_PROGRESS_MARKERS.filter((marker) =>
+    normalized.includes(marker),
+  );
+  const hasResultMarker = RESEARCH_RESULT_MARKERS.some((marker) =>
+    normalized.includes(marker),
+  );
+  if (progressMarkers.length >= 2 && !hasResultMarker) {
+    return "The previous response only described research progress and did not deliver a result.";
+  }
+
+  const namesWebsite = /hsreplay|hsguru/.test(normalized);
+  const saysWebsiteBlocked =
+    /нет доступ|нет данных|не откр|не удалось|не отда[её]т|blocked|unavailable|could not access/.test(
+      normalized,
+    );
+  const mentionsFirstPartyApi = RESEARCH_API_ACCESS_MARKERS.some((marker) =>
+    normalized.includes(marker),
+  );
+  return namesWebsite && saysWebsiteBlocked && !mentionsFirstPartyApi
+    ? "The previous response treated an inaccessible HSReplay/HSGuru page as if the first-party API data were unavailable."
+    : null;
+}
+
+const RESEARCH_FINALISATION_PROMPT =
+  "Finalise the research now. The previous response was only a progress log, not a result. Do not repeat the plan. Use the available first-party `research-source stats-api` for HSReplay/HSGuru data before claiming access is unavailable. Return a Markdown answer with `## Результат`, verified findings or an explicit `Результат не получен` explanation, freshness/limitations, and `## Источники`. For a substantial run, ensure a validated `/research-runs/.../report.md` exists and include its exact path.";
+
 const HEARTPULSE_WORKSPACE = "/workspace-heartpulse";
 const RESEARCH_WORKSPACE = "/research-runs";
 
@@ -73,7 +143,10 @@ export function modelFor(input: RunAgentInput): string | undefined {
 }
 
 export function reasoningEffortFor(input: RunAgentInput): string {
-  if (isResearchRun(input) && REASONING_EFFORTS.has(RESEARCH_REASONING_EFFORT)) {
+  if (
+    isResearchRun(input) &&
+    REASONING_EFFORTS.has(RESEARCH_REASONING_EFFORT)
+  ) {
     return RESEARCH_REASONING_EFFORT;
   }
   const forwarded = input.forwardedProps as
@@ -127,6 +200,8 @@ class CodexProcess {
   private readonly dataControlWorkflow: DataControlWorkflow | undefined;
   private threadId: string | undefined;
   private correctionTurns = 0;
+  private researchCorrectionTurns = 0;
+  private researchText = "";
 
   constructor(
     private readonly input: RunAgentInput,
@@ -258,6 +333,9 @@ class CodexProcess {
       const delta = message.params?.delta;
       const itemId = message.params?.itemId;
       if (typeof delta === "string" && typeof itemId === "string") {
+        if (isResearchRun(this.input)) {
+          this.researchText = `${this.researchText}${delta}`.slice(-24_000);
+        }
         this.callbacks.onText(delta, itemId);
       }
       return;
@@ -300,6 +378,25 @@ class CodexProcess {
             ),
           );
         } else {
+          const researchIssue = isResearchRun(this.input)
+            ? researchFinalisationIssue(this.researchText)
+            : null;
+          if (researchIssue && this.researchCorrectionTurns < 1) {
+            this.researchCorrectionTurns += 1;
+            void this.request("turn/start", {
+              threadId: this.threadId,
+              input: [{ type: "text", text: RESEARCH_FINALISATION_PROMPT }],
+              effort: reasoningEffortFor(this.input),
+              summary: REASONING_SUMMARY,
+            }).catch(this.fail);
+            return;
+          }
+          if (researchIssue) {
+            this.fail(
+              new Error(`${researchIssue} The run was not marked complete.`),
+            );
+            return;
+          }
           this.turnCompleted = true;
           this.finish();
         }

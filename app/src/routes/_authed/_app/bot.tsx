@@ -1,14 +1,23 @@
-import { CopilotChat } from "@copilotkit/react-core/v2";
+import {
+  CopilotChat,
+  UseAgentUpdate,
+  useAgent,
+} from "@copilotkit/react-core/v2";
 import { IconPlus } from "@tabler/icons-react";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
+import { useCallback } from "react";
+import { ActivityMenu } from "@/components/channels/activity-menu";
+import { toVisibleChatItems } from "@/components/channels/chat-messages";
 import { PageLoading } from "@/components/layout/page-loading";
 import { Button } from "@/components/ui/button";
 import { agentListQueryOptions } from "@/lib/agents/queries";
 import { useActiveBot } from "@/lib/copilot/active-bot";
 import { useBotThread } from "@/lib/copilot/bot-thread";
 import { CopilotProvider } from "@/lib/copilot/provider";
+import { isAgentRunActive } from "@/lib/copilot/run-state";
 import { useStoppedTurn } from "@/lib/copilot/stopped-turn";
+import { useAgentRun } from "@/lib/copilot/use-agent-run";
 
 export const Route = createFileRoute("/_authed/_app/bot")({
   component: BotRoute,
@@ -142,23 +151,75 @@ function BotChat({ agentId, name }: { agentId: string; name: string }) {
           {stopped}
         </p>
       ) : null}
+      {threadId ? (
+        <BotChatSurface
+          agentId={agentId}
+          stopped={stopped}
+          threadId={threadId}
+        />
+      ) : (
+        <div className="min-h-0 flex-1">
+          <ActivityMenu items={[]} />
+          <PageLoading label="Подготовка диалога…" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The packaged chat shares the same persistent activity surface as channel conversations. */
+function BotChatSurface({
+  agentId,
+  stopped,
+  threadId,
+}: {
+  agentId: string;
+  stopped: string | null;
+  threadId: string;
+}) {
+  const { agent } = useAgent({
+    agentId,
+    runtimeAgentId: agentId,
+    threadId,
+    updates: [
+      UseAgentUpdate.OnMessagesChanged,
+      UseAgentUpdate.OnRunStatusChanged,
+    ],
+  });
+  const runActivity = useAgentRun(agent);
+  const retryLast = useCallback(() => {
+    if (agent.isRunning) return;
+    void agent.runAgent();
+  }, [agent]);
+  const items = toVisibleChatItems(agent.messages);
+  const busy =
+    agent.isRunning ||
+    (runActivity.state.startedAt !== null &&
+      isAgentRunActive(runActivity.state.status));
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <ActivityMenu
+        busy={busy}
+        items={items}
+        onRetry={retryLast}
+        run={runActivity.state}
+        {...(stopped ? { stopped } : {})}
+      />
       <div className="min-h-0 flex-1">
         {/*
          * Keyed on the thread as well as the agent. Switching agents was already handled by
          * `agentId`, but `startNew` changes only the thread while the agent stays put, and the
          * packaged chat's own `startNewThread`/`setActiveThreadId` are proven no-ops once
-         * `threadId` is a controlled prop (node_modules/@copilotkit/react-core/dist/copilotkit-
-         * C4RqjAba.mjs:226-254): asking it to start over does nothing while it still holds the
-         * old id. A key that omits the thread would leave the previous conversation on screen
-         * under a composer that silently posts to the new one.
+         * `threadId` is a controlled prop: a key that omits the thread would leave the previous
+         * conversation on screen under a composer that silently posts to the new one.
          */}
-        {threadId ? (
-          <CopilotChat
-            agentId={agentId}
-            key={`${agentId}:${threadId}`}
-            threadId={threadId}
-          />
-        ) : null}
+        <CopilotChat
+          agentId={agentId}
+          key={`${agentId}:${threadId}`}
+          threadId={threadId}
+          throttleMs={50}
+        />
       </div>
     </div>
   );

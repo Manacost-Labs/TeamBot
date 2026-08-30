@@ -3,6 +3,7 @@ import { EventEncoder } from "@ag-ui/encoder";
 import { serve } from "bun";
 import { hasManagedAgentToken } from "../../shared/agent-authorisation";
 import { runCodex } from "./codex-run";
+import { shouldExposeReasoning } from "./reasoning-visibility";
 import { SafeStreamWriter } from "./safe-stream";
 
 const PORT = Number.parseInt(process.env.PORT ?? "4202", 10);
@@ -11,6 +12,21 @@ if (!MANAGED_AGENT_TOKEN) throw new Error("MANAGED_AGENT_TOKEN is required.");
 
 async function runAgent(input: RunAgentInput): Promise<Response> {
   const encoder = new EventEncoder();
+  const startedAt = Date.now();
+  let reasoningReported = false;
+  let textReported = false;
+  const logPhase = (phase: string, extra: Record<string, unknown> = {}) => {
+    console.info(
+      JSON.stringify({
+        type: "agent-run-phase",
+        phase,
+        runId: input.runId,
+        threadId: input.threadId,
+        elapsedMs: Date.now() - startedAt,
+        ...extra,
+      }),
+    );
+  };
   let writer: SafeStreamWriter | undefined;
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -48,10 +64,15 @@ async function runAgent(input: RunAgentInput): Promise<Response> {
         threadId: input.threadId,
         runId: input.runId,
       } as BaseEvent);
+      logPhase("run_started");
       try {
         await runCodex(input, {
           onText(delta, itemId) {
             closeReasoning();
+            if (!textReported) {
+              textReported = true;
+              logPhase("text_started");
+            }
             if (openMessage !== itemId) {
               closeMessage();
               openMessage = itemId;
@@ -68,6 +89,13 @@ async function runAgent(input: RunAgentInput): Promise<Response> {
             } as BaseEvent);
           },
           onReasoning(delta, itemId, summaryIndex) {
+            // Research runs may show safe progress in their answer and tool events, but must not
+            // stream model reasoning summaries to the user as if they were an audit trail.
+            if (!shouldExposeReasoning(input)) return;
+            if (!reasoningReported) {
+              reasoningReported = true;
+              logPhase("reasoning_started");
+            }
             closeMessage();
             const reasoningId = `reasoning:${itemId}:${summaryIndex}`;
             if (openReasoning !== reasoningId) {
@@ -92,6 +120,7 @@ async function runAgent(input: RunAgentInput): Promise<Response> {
           onToolStart(callId, name, args) {
             closeMessage();
             closeReasoning();
+            logPhase("tool_started", { tool: name });
             send({
               type: "TOOL_CALL_START",
               toolCallId: callId,
@@ -105,6 +134,7 @@ async function runAgent(input: RunAgentInput): Promise<Response> {
             send({ type: "TOOL_CALL_END", toolCallId: callId } as BaseEvent);
           },
           onToolResult(callId, result) {
+            logPhase("tool_finished");
             send({
               type: "TOOL_CALL_RESULT",
               messageId: `${callId}-result`,
@@ -121,6 +151,7 @@ async function runAgent(input: RunAgentInput): Promise<Response> {
           threadId: input.threadId,
           runId: input.runId,
         } as BaseEvent);
+        logPhase("run_finished", { hasText: textReported });
       } catch (error) {
         closeMessage();
         closeReasoning();
@@ -129,6 +160,9 @@ async function runAgent(input: RunAgentInput): Promise<Response> {
           message:
             error instanceof Error ? error.message : "Codex could not answer.",
         } as BaseEvent);
+        logPhase("run_error", {
+          errorType: error instanceof Error ? error.name : "unknown",
+        });
       } finally {
         clearInterval(keepAlive);
         output.close();

@@ -48,6 +48,56 @@ export type StoredThread = {
 const NOTHING: StoredThread = { messages: [], unreadable: 0 };
 
 /**
+ * A small session cache makes returning to a recently opened chat instant. It is intentionally
+ * short-lived and bounded: the runtime remains the source of truth, while the cache only avoids
+ * repeating the same history request during quick navigation between chats.
+ */
+const HISTORY_CACHE_TTL_MS = 15_000;
+const HISTORY_CACHE_MAX_ENTRIES = 12;
+const historyCache = new Map<
+  string,
+  { value: StoredThread; expiresAt: number }
+>();
+
+function historyCacheKey(threadId: string, agentId: string): string {
+  return `${agentId}:${threadId}`;
+}
+
+function readCachedHistory(key: string): StoredThread | undefined {
+  const cached = historyCache.get(key);
+  if (!cached) return undefined;
+  if (cached.expiresAt <= Date.now()) {
+    historyCache.delete(key);
+    return undefined;
+  }
+  // Refresh insertion order so the least-recently-used entry is evicted first.
+  historyCache.delete(key);
+  historyCache.set(key, cached);
+  return cached.value;
+}
+
+function cacheHistory(key: string, value: StoredThread): void {
+  historyCache.delete(key);
+  historyCache.set(key, {
+    value,
+    expiresAt: Date.now() + HISTORY_CACHE_TTL_MS,
+  });
+  while (historyCache.size > HISTORY_CACHE_MAX_ENTRIES) {
+    const oldest = historyCache.keys().next().value;
+    if (oldest === undefined) break;
+    historyCache.delete(oldest);
+  }
+}
+
+/** Drop a cached snapshot as soon as this tab starts writing to the same thread. */
+export function invalidateThreadMessagesCache(
+  threadId: string,
+  agentId: string,
+): void {
+  historyCache.delete(historyCacheKey(threadId, agentId));
+}
+
+/**
  * The turns that parse, kept in order, and a count of the ones that did not.
  *
  * Exported so it can be tested against real stored shapes without a server. Takes `unknown[]`
@@ -162,14 +212,23 @@ function argumentsOf(args: unknown): string {
 export async function readThreadMessages(
   threadId: string,
   agentId: string,
+  options: { fresh?: boolean } = {},
 ): Promise<StoredThread> {
+  const key = historyCacheKey(threadId, agentId);
+  if (!options.fresh) {
+    const cached = readCachedHistory(key);
+    if (cached) return cached;
+  }
+
   try {
     const response = await tryClient(
       `/api/copilotkit/threads/${encodeURIComponent(threadId)}/messages?agentId=${encodeURIComponent(agentId)}`,
     );
     if (!response.ok) return NOTHING;
     const stored = (await response.json())?.messages;
-    return Array.isArray(stored) ? readableTurns(stored) : NOTHING;
+    const result = Array.isArray(stored) ? readableTurns(stored) : NOTHING;
+    cacheHistory(key, result);
+    return result;
   } catch {
     return NOTHING;
   }

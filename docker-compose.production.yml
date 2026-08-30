@@ -16,7 +16,8 @@ services:
       OPENBOT_APP_URL: https://work-origin.kolodahearthstone.com
       TRUSTED_ORIGINS: https://work-origin.kolodahearthstone.com
       MANAGED_AGENT_AG_UI_URL: http://agent-codex:4202/ag-ui
-      AGENT_ENDPOINT_ALLOWED_HOSTS: agent-codex:4202
+      AGENT_ENDPOINT_ALLOWED_HOSTS: "agent-codex:4202,editor-gateway:8080"
+      AGENT_CONNECTION_TEST_TIMEOUT_MS: "45000"
       AGENT_COMPUTER_URL: http://127.0.0.1:4100
       PARSER_OPS_URL: http://host.docker.internal:4031
       HEARTPULSE_OPS_URL: http://host.docker.internal:4032
@@ -30,6 +31,8 @@ services:
       - ./docker/s6/scripts/migrate.sh:/etc/s6-overlay/scripts/migrate.sh:ro
     depends_on:
       agent-codex:
+        condition: service_healthy
+      editor-gateway:
         condition: service_healthy
     networks:
       - app
@@ -73,11 +76,18 @@ services:
       # progress card; private reasoning tokens never leave the model.
       CODEX_REASONING_EFFORT: ${CODEX_REASONING_EFFORT:-low}
       CODEX_REASONING_SUMMARY: ${CODEX_REASONING_SUMMARY:-concise}
+      RESEARCH_AGENT_ID: ${RESEARCH_AGENT_ID:-research-analyst}
+      RESEARCH_MODEL: gpt-5.6-luna
+      RESEARCH_REASONING_EFFORT: xhigh
+      RESEARCH_SOURCES_URL: http://research-sources:8777
+      RESEARCH_SOURCE_GATEWAY_TOKEN: ${AGENT_TOOL_TOKEN}
       OPENBOT_TOOL_URL: http://openbot:3001/api/agent-tools/call
     volumes:
       - /home/debian/.codex/auth.json:/home/bun/.codex/auth.json
       - /srv/projects/agents/control-data/api:/workspace
       - /srv/projects/web/HeartPulse-worktrees/heartpulse-control:/workspace-heartpulse
+      - ../ResearchTeam:/workspace-research:ro
+      - research-runs:/research-runs
     security_opt:
       # Codex creates its own bwrap namespace. Docker's default seccomp profile blocks that setup;
       # opening it here preserves the inner workspace-only profile and credential deny rule.
@@ -91,6 +101,57 @@ services:
       - SETUID
       - SETGID
       - SYS_PTRACE
+    depends_on:
+      research-sources:
+        condition: service_healthy
+    networks:
+      - app
+
+  research-sources:
+    build:
+      context: ../ResearchTeam
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      SOURCE_GATEWAY_TOKEN: ${AGENT_TOOL_TOKEN}
+      HEARTHSTONE_STATS_API_URL: https://api.kolodahearthstone.com/v1
+      REDDITAPIS_KEY: ${RESEARCH_REDDITAPIS_KEY:?RESEARCH_REDDITAPIS_KEY is required}
+      GETXAPI_KEY: ${RESEARCH_GETXAPI_KEY:?RESEARCH_GETXAPI_KEY is required}
+      TINYFISH_API_KEY: ${RESEARCH_TINYFISH_API_KEY:?RESEARCH_TINYFISH_API_KEY is required}
+    networks:
+      - app
+
+  editor-analyzer:
+    build:
+      context: ../EditorTeam
+      dockerfile: Dockerfile
+      target: analyzer
+    restart: unless-stopped
+    networks:
+      - app
+
+  editor-gateway:
+    build:
+      context: ../EditorTeam
+      dockerfile: Dockerfile
+      target: gateway
+    restart: unless-stopped
+    environment:
+      EDITOR_ADDR: ":8080"
+      EDITOR_ANALYZER_URL: http://editor-analyzer:8731
+      EDITOR_PROVIDER: agui
+      EDITOR_AGUI_URL: http://agent-codex:4202/ag-ui
+      EDITOR_AGUI_TOKEN: ${MANAGED_AGENT_TOKEN}
+      EDITOR_MODEL: gpt-5.6-luna
+      EDITOR_REASONING_EFFORT: xhigh
+      EDITOR_MAX_ATTEMPTS: "3"
+      EDITOR_TIMEOUT_SEC: "240"
+      EDITOR_MAX_TEXT_BYTES: "524288"
+    depends_on:
+      agent-codex:
+        condition: service_healthy
+      editor-analyzer:
+        condition: service_healthy
     networks:
       - app
 
@@ -111,6 +172,7 @@ volumes:
   openbot-postgres:
   openbot-workspace:
   openbot-profiles:
+  research-runs:
 
 networks:
   app:

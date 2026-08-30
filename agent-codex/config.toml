@@ -59,3 +59,17 @@ extends = ":read-only"
 
 [permissions.heartpulse-control-agent.network]
 enabled = false
+
+[permissions.research-agent]
+description = "Read-only evidence research runtime with isolated report output."
+extends = ":read-only"
+
+[permissions.research-agent.filesystem]
+":minimal" = "read"
+":workspace_roots" = "read"
+"/workspace-research" = "read"
+"/research-runs" = "write"
+"~/.codex" = "deny"
+
+[permissions.research-agent.network]
+enabled = true

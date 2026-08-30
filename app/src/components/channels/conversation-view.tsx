@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import { ChatTranscript } from "@/components/channels/chat-transcript";
+import type { AgentRunState } from "@/lib/copilot/run-state";
 import {
   type AgentOption,
   type CommandOption,
@@ -31,8 +32,11 @@ export function ConversationView({
   stoppable,
   queueWhileBusy = false,
   restoring = false,
+  run,
   onSubmit,
   onStop,
+  onQueued,
+  onRetry,
 }: {
   messages: readonly Message[];
   busy?: boolean;
@@ -79,9 +83,15 @@ export function ConversationView({
   queueWhileBusy?: boolean;
   /** History has been asked for and has not arrived. Drawn as placeholder rows; see `ChatTranscript`. */
   restoring?: boolean;
+  /** Explicit lifecycle state shared with the activity panel. */
+  run?: AgentRunState;
   onSubmit: (draft: ComposerDraft) => void | Promise<void>;
   /** Stop the Bot mid-answer; forwarded to turn the send button into a stop button. */
   onStop?: () => void;
+  /** Mark a correction as queued before it is placed behind the active turn. */
+  onQueued?: () => void;
+  /** Re-send the last failed request. */
+  onRetry?: () => void;
 }) {
   /*
    * THE QUEUE LIVES HERE BECAUSE BOTH HALVES OF IT DO.
@@ -220,6 +230,8 @@ export function ConversationView({
           }}
           queued={queued}
           restoring={restoring}
+          {...(onRetry ? { onRetry } : {})}
+          {...(run ? { run } : {})}
           {...(stopped ? { stopped } : {})}
         />
       </div>
@@ -235,6 +247,7 @@ export function ConversationView({
           onQueue={
             queueWhileBusy
               ? (draft) => {
+                  onQueued?.();
                   submit(draft, true);
                 }
               : undefined

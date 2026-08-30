@@ -29,10 +29,12 @@ import { markdownComponents } from "@/lib/markdown";
 import { EASE_OUT, ENTRANCE_SECONDS } from "@/lib/motion";
 import { readToolName } from "@/lib/plugins/tool-name";
 import { asText, forDisplay, REFUSAL_MARKER } from "@/lib/plugins/tool-result";
+import { ActivityMenu } from "./activity-menu";
 import { newestVisibleChatItems, toVisibleChatItems } from "./chat-messages";
 import type { QueuedMessage } from "./composer";
 import { ToolRenderBoundary } from "./tool-boundary";
 import { ToolLine } from "./tool-line";
+import type { AgentRunState } from "@/lib/copilot/run-state";
 
 type ChatTranscriptProps = {
   busy?: boolean;
@@ -48,6 +50,10 @@ type ChatTranscriptProps = {
   onRemoveQueued?: (id: string) => void;
   /** History has been asked for and has not arrived. Drawn only when there is nothing else to draw. */
   restoring?: boolean;
+  /** Explicit lifecycle state; transcript inference remains a fallback. */
+  run?: AgentRunState;
+  /** Re-send the last failed request without making a duplicate while another turn is active. */
+  onRetry?: () => void;
   /**
    * Why the last turn ended without an answer, if it did.
    *
@@ -123,30 +129,6 @@ function RestoringTranscript() {
 }
 
 /**
- * The Bot has the turn and has produced nothing yet.
- *
- * THE GAP THIS FILLS IS THE WORST ONE IN THE CONVERSATION. Between pressing send and the first token
- * there was `aria-busy` and nothing else: announced to a screen reader, invisible to everybody else.
- * A person who has just asked something watches their own message sit there, and a Bot that is
- * thinking is indistinguishable from a Bot that failed silently — which this app has shipped before.
- *
- * It borrows the shimmer a running tool line uses, so "working on it" reads the same whether the
- * work is a tool call or a model that has not spoken yet.
- */
-function Thinking() {
-  return (
-    <p
-      className="tool-line-running text-muted-foreground text-sm"
-      // `status` rather than `alert`: this is progress, not something that interrupts what somebody
-      // is doing. The text says it, so a screen reader is told the same thing the shimmer implies.
-      role="status"
-    >
-      Думает…
-    </p>
-  );
-}
-
-/**
  * The turn ended and no answer came.
  *
  * In the same slot as `Thinking`, and for the same reason it is there: the person is looking at the
@@ -159,15 +141,30 @@ function Thinking() {
  * and the conversation is sent back to the model on the next turn, so the Bot would then read its
  * own obituary as something it had written.
  */
-function Stopped({ reason }: { reason: string }) {
+function Stopped({
+  reason,
+  onRetry,
+}: {
+  reason: string;
+  onRetry?: () => void;
+}) {
   return (
-    <p
-      className="text-destructive text-sm"
+    <div
+      className="flex items-center justify-between gap-3 text-destructive text-sm"
       data-testid="transcript-stopped"
       role="alert"
     >
-      {reason}
-    </p>
+      <span>{reason}</span>
+      {onRetry ? (
+        <button
+          className="shrink-0 rounded-md border border-destructive/40 px-2 py-1 text-xs transition-colors hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+          onClick={onRetry}
+          type="button"
+        >
+          Повторить
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -641,7 +638,9 @@ export function ChatTranscript({
   onRemoveQueued,
   queued = EMPTY_QUEUE,
   restoring = false,
+  run,
   stopped,
+  onRetry,
 }: ChatTranscriptProps) {
   /*
    * NOT MEMOISED, AND THAT IS DELIBERATE. `useMemo` keyed on `messages` looks obviously right and
@@ -656,18 +655,6 @@ export function ChatTranscript({
   const items = toVisibleChatItems(messages);
   const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE_SIZE);
   const visible = newestVisibleChatItems(items, historyLimit);
-
-  /*
-   * ONLY WHILE THERE IS NOTHING ELSE TO LOOK AT. Once a reply starts streaming, or a tool line
-   * appears, the transcript is already saying the Bot is working — a second indicator under a
-   * half-written answer would claim it had stopped and started again.
-   *
-   * So: the turn is in flight AND the last thing in the conversation is still the person's own
-   * message. A tool call that is running shimmers on its own line and needs nothing from here.
-   */
-  const lastItem = items.at(-1);
-  const waitingOnFirstToken =
-    busy && lastItem?.kind === "text" && lastItem.role === "user";
 
   /*
    * One decider per mounted transcript, so opening a different channel starts the cascade over and
@@ -695,114 +682,115 @@ export function ChatTranscript({
 
   return (
     <MessageScrollerProvider autoScroll>
-      <MessageScroller>
-        <MessageScrollerViewport>
-          <MessageScrollerContent
-            aria-busy={busy}
-            className="mx-auto w-full max-w-2xl px-4 py-6"
-          >
-            {/*
-             * The memo boundary is INSIDE the scroller item, not around it. `MessageScrollerItem`
-             * reads the scroller's context, so it re-renders whenever the scroll state moves and
-             * memoising it would achieve nothing. Its child is what costs — markdown parsing and
-             * chart SVGs — and that is what is skipped.
-             */}
-            {/* Instead of the rows, never alongside them: one real message and this is a lie. */}
-            {items.length === 0 && restoring ? <RestoringTranscript /> : null}
-            {visible.hidden > 0 ? (
-              <div className="flex justify-center pb-6">
-                <button
-                  className="rounded-full border border-border bg-background px-4 py-2 text-muted-foreground text-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-                  onClick={() =>
-                    setHistoryLimit((limit) => limit + HISTORY_PAGE_SIZE)
-                  }
-                  type="button"
-                >
-                  Показать предыдущие сообщения ({visible.hidden})
-                </button>
-              </div>
-            ) : null}
-            {visible.items.map((item, index) =>
-              item.kind === "tool" ? (
-                <MessageScrollerItem key={item.id} messageId={item.id}>
-                  <TranscriptToolCall
-                    args={item.toolCall.function.arguments}
-                    delay={delays.delayFor(
-                      item.id,
-                      index,
-                      visible.items.length,
-                    )}
-                    name={item.toolCall.function.name}
-                    result={item.result}
-                    toolCallId={item.toolCall.id}
-                  />
-                </MessageScrollerItem>
-              ) : item.kind === "reasoning" ? (
-                <MessageScrollerItem key={item.id} messageId={item.id}>
-                  <ReasoningProgress
-                    delay={delays.delayFor(
-                      item.id,
-                      index,
-                      visible.items.length,
-                    )}
-                    streaming={busy && index === visible.items.length - 1}
-                    text={item.text}
-                  />
-                </MessageScrollerItem>
-              ) : (
-                <MessageScrollerItem key={item.id} messageId={item.id}>
-                  <TranscriptMessage
-                    commandNames={commandNames}
-                    delay={delays.delayFor(
-                      item.id,
-                      index,
-                      visible.items.length,
-                    )}
-                    role={item.role}
-                    streaming={
-                      busy &&
-                      item.role === "assistant" &&
-                      index === visible.items.length - 1
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <ActivityMenu items={items} busy={busy} run={run} stopped={stopped} />
+        <MessageScroller className="min-h-0 flex-1">
+          <MessageScrollerViewport>
+            <MessageScrollerContent
+              aria-busy={busy}
+              className="mx-auto w-full max-w-2xl px-4 py-6"
+            >
+              {/*
+               * The memo boundary is INSIDE the scroller item, not around it. `MessageScrollerItem`
+               * reads the scroller's context, so it re-renders whenever the scroll state moves and
+               * memoising it would achieve nothing. Its child is what costs — markdown parsing and
+               * chart SVGs — and that is what is skipped.
+               */}
+              {/* Instead of the rows, never alongside them: one real message and this is a lie. */}
+              {items.length === 0 && restoring ? <RestoringTranscript /> : null}
+              {visible.hidden > 0 ? (
+                <div className="flex justify-center pb-6">
+                  <button
+                    className="rounded-full border border-border bg-background px-4 py-2 text-muted-foreground text-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                    onClick={() =>
+                      setHistoryLimit((limit) => limit + HISTORY_PAGE_SIZE)
                     }
-                    text={item.text}
-                  />
-                </MessageScrollerItem>
-              ),
-            )}
-            {/*
-             * Outside the item list, so neither of these is a message. Each has no id, is never
-             * anchored, and is gone by the next turn — giving one a `MessageScrollerItem` would ask
-             * the scroller to measure and anchor something that exists for a second and a half.
-             *
-             * One or the other, never both: a turn that ended has stopped being in flight, and a
-             * shimmering "Thinking" under a line saying the Bot stopped would contradict it.
-             */}
-            {stopped ? (
-              <Stopped reason={stopped} />
-            ) : waitingOnFirstToken ? (
-              <Thinking />
-            ) : null}
-            {/*
-             * Below the thinking line, and outside the item list for the same reason it is: these
-             * are not yet turns. They have ids of their own, but they are this tab's ids and not the
-             * thread's, so handing them to the scroller would ask it to anchor on something that is
-             * about to be replaced by a message with a different id — and the replacement is the
-             * one worth scrolling to.
-             */}
-            {queued.map((message) => (
-              <Queued
-                key={message.id}
-                onRemove={
-                  onRemoveQueued ? () => onRemoveQueued(message.id) : undefined
-                }
-                text={message.text}
-              />
-            ))}
-          </MessageScrollerContent>
-        </MessageScrollerViewport>
-        <MessageScrollerButton />
-        <ScrollNewestQueuedIntoView newest={queued.at(-1)?.id ?? null} />
-      </MessageScroller>
+                    type="button"
+                  >
+                    Показать предыдущие сообщения ({visible.hidden})
+                  </button>
+                </div>
+              ) : null}
+              {visible.items.map((item, index) =>
+                item.kind === "tool" ? (
+                  <MessageScrollerItem key={item.id} messageId={item.id}>
+                    <TranscriptToolCall
+                      args={item.toolCall.function.arguments}
+                      delay={delays.delayFor(
+                        item.id,
+                        index,
+                        visible.items.length,
+                      )}
+                      name={item.toolCall.function.name}
+                      result={item.result}
+                      toolCallId={item.toolCall.id}
+                    />
+                  </MessageScrollerItem>
+                ) : item.kind === "reasoning" ? (
+                  <MessageScrollerItem key={item.id} messageId={item.id}>
+                    <ReasoningProgress
+                      delay={delays.delayFor(
+                        item.id,
+                        index,
+                        visible.items.length,
+                      )}
+                      streaming={busy && index === visible.items.length - 1}
+                      text={item.text}
+                    />
+                  </MessageScrollerItem>
+                ) : (
+                  <MessageScrollerItem key={item.id} messageId={item.id}>
+                    <TranscriptMessage
+                      commandNames={commandNames}
+                      delay={delays.delayFor(
+                        item.id,
+                        index,
+                        visible.items.length,
+                      )}
+                      role={item.role}
+                      streaming={
+                        busy &&
+                        item.role === "assistant" &&
+                        index === visible.items.length - 1
+                      }
+                      text={item.text}
+                    />
+                  </MessageScrollerItem>
+                ),
+              )}
+              {/*
+               * Outside the item list, so neither of these is a message. Each has no id, is never
+               * anchored, and is gone by the next turn — giving one a `MessageScrollerItem` would ask
+               * the scroller to measure and anchor something that exists for a second and a half.
+               *
+               * One or the other, never both: a turn that ended has stopped being in flight, and a
+               * animated activity under a line saying the Bot stopped would contradict it.
+               */}
+              {stopped ? <Stopped onRetry={onRetry} reason={stopped} /> : null}
+              {/*
+               * Below the thinking line, and outside the item list for the same reason it is: these
+               * are not yet turns. They have ids of their own, but they are this tab's ids and not the
+               * thread's, so handing them to the scroller would ask it to anchor on something that is
+               * about to be replaced by a message with a different id — and the replacement is the
+               * one worth scrolling to.
+               */}
+              {queued.map((message) => (
+                <Queued
+                  key={message.id}
+                  onRemove={
+                    onRemoveQueued
+                      ? () => onRemoveQueued(message.id)
+                      : undefined
+                  }
+                  text={message.text}
+                />
+              ))}
+            </MessageScrollerContent>
+          </MessageScrollerViewport>
+          <MessageScrollerButton />
+          <ScrollNewestQueuedIntoView newest={queued.at(-1)?.id ?? null} />
+        </MessageScroller>
+      </div>
     </MessageScrollerProvider>
   );
 }
