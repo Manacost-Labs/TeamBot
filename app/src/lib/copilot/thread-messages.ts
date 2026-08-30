@@ -1,5 +1,5 @@
 import { type Message, MessageSchema } from "@ag-ui/core";
-import { tryClient } from "@/lib/client";
+import { client } from "@/lib/client";
 
 /**
  * The messages a thread already holds, for restoring a conversation somebody comes back to.
@@ -47,54 +47,154 @@ export type StoredThread = {
 
 const NOTHING: StoredThread = { messages: [], unreadable: 0 };
 
-/**
- * A small session cache makes returning to a recently opened chat instant. It is intentionally
- * short-lived and bounded: the runtime remains the source of truth, while the cache only avoids
- * repeating the same history request during quick navigation between chats.
- */
-const HISTORY_CACHE_TTL_MS = 15_000;
+export type CachedStoredThread = StoredThread & {
+  /** Cache is a paint-first snapshot; every channel open revalidates it against the server. */
+  stale: true;
+  cachedAt: number;
+};
+
+type ThreadHistoryCacheOptions = {
+  maxEntries?: number;
+  maxMessagesPerEntry?: number;
+  now?: () => number;
+};
+
 const HISTORY_CACHE_MAX_ENTRIES = 12;
-const historyCache = new Map<
-  string,
-  { value: StoredThread; expiresAt: number }
->();
+const HISTORY_CACHE_MAX_MESSAGES = 500;
+const PREFETCH_DEDUP_MS = 5_000;
 
-function historyCacheKey(threadId: string, agentId: string): string {
-  return `${agentId}:${threadId}`;
+function historyCacheKey(
+  sessionScope: string,
+  threadId: string,
+  agentId: string,
+): string {
+  return `${encodeURIComponent(sessionScope)}:${encodeURIComponent(agentId)}:${encodeURIComponent(threadId)}`;
 }
 
-function readCachedHistory(key: string): StoredThread | undefined {
-  const cached = historyCache.get(key);
-  if (!cached) return undefined;
-  if (cached.expiresAt <= Date.now()) {
-    historyCache.delete(key);
-    return undefined;
+/** Bounded, authenticated-session-scoped history used only for instant paint before revalidation. */
+export class ThreadHistoryCache {
+  private readonly entries = new Map<string, CachedStoredThread>();
+  private readonly maxEntries: number;
+  private readonly maxMessagesPerEntry: number;
+  private readonly now: () => number;
+
+  constructor(options: ThreadHistoryCacheOptions = {}) {
+    this.maxEntries = Math.max(
+      1,
+      options.maxEntries ?? HISTORY_CACHE_MAX_ENTRIES,
+    );
+    this.maxMessagesPerEntry = Math.max(
+      1,
+      options.maxMessagesPerEntry ?? HISTORY_CACHE_MAX_MESSAGES,
+    );
+    this.now = options.now ?? Date.now;
   }
-  // Refresh insertion order so the least-recently-used entry is evicted first.
-  historyCache.delete(key);
-  historyCache.set(key, cached);
-  return cached.value;
+
+  peek(
+    sessionScope: string,
+    threadId: string,
+    agentId: string,
+  ): CachedStoredThread | null {
+    const key = historyCacheKey(sessionScope, threadId, agentId);
+    const cached = this.entries.get(key);
+    if (!cached) return null;
+    this.entries.delete(key);
+    this.entries.set(key, cached);
+    return cached;
+  }
+
+  set(
+    sessionScope: string,
+    threadId: string,
+    agentId: string,
+    value: StoredThread,
+  ): CachedStoredThread {
+    const key = historyCacheKey(sessionScope, threadId, agentId);
+    const cached: CachedStoredThread = {
+      messages: value.messages.slice(-this.maxMessagesPerEntry),
+      unreadable: value.unreadable,
+      cachedAt: this.now(),
+      stale: true,
+    };
+    this.entries.delete(key);
+    this.entries.set(key, cached);
+    while (this.entries.size > this.maxEntries) {
+      const oldest = this.entries.keys().next().value;
+      if (oldest === undefined) break;
+      this.entries.delete(oldest);
+    }
+    return cached;
+  }
+
+  invalidate(sessionScope: string, threadId: string, agentId: string): void {
+    this.entries.delete(historyCacheKey(sessionScope, threadId, agentId));
+  }
+
+  clearScope(sessionScope: string): void {
+    const prefix = `${encodeURIComponent(sessionScope)}:`;
+    for (const key of this.entries.keys()) {
+      if (key.startsWith(prefix)) this.entries.delete(key);
+    }
+  }
 }
 
-function cacheHistory(key: string, value: StoredThread): void {
-  historyCache.delete(key);
-  historyCache.set(key, {
-    value,
-    expiresAt: Date.now() + HISTORY_CACHE_TTL_MS,
-  });
-  while (historyCache.size > HISTORY_CACHE_MAX_ENTRIES) {
-    const oldest = historyCache.keys().next().value;
-    if (oldest === undefined) break;
-    historyCache.delete(oldest);
-  }
+export function createThreadHistoryCache(
+  options: ThreadHistoryCacheOptions = {},
+): ThreadHistoryCache {
+  return new ThreadHistoryCache(options);
+}
+
+const threadHistoryCache = createThreadHistoryCache();
+const prefetches = new Map<string, Promise<StoredThread>>();
+
+export function cachedThreadMessages(
+  sessionScope: string,
+  threadId: string,
+  agentId: string,
+): CachedStoredThread | null {
+  return threadHistoryCache.peek(sessionScope, threadId, agentId);
 }
 
 /** Drop a cached snapshot as soon as this tab starts writing to the same thread. */
 export function invalidateThreadMessagesCache(
+  sessionScope: string,
   threadId: string,
   agentId: string,
 ): void {
-  historyCache.delete(historyCacheKey(threadId, agentId));
+  threadHistoryCache.invalidate(sessionScope, threadId, agentId);
+}
+
+export function clearThreadMessagesCache(sessionScope: string): void {
+  threadHistoryCache.clearScope(sessionScope);
+}
+
+/** Server order wins; structurally unchanged rows retain their identity for memoized rendering. */
+export function mergeThreadMessagesById(
+  previous: readonly Message[],
+  fresh: readonly Message[],
+  options: { retainMissing?: boolean } = {},
+): Message[] {
+  const previousById = new Map(
+    previous.map((message) => [message.id, message]),
+  );
+  const freshIds = new Set(fresh.map((message) => message.id));
+  const merged = fresh.map((message) => {
+    const existing = previousById.get(message.id);
+    return existing && sameMessage(existing, message) ? existing : message;
+  });
+  // Local streamed/optimistic messages may not have reached persistence yet.
+  return options.retainMissing === false
+    ? merged
+    : [...merged, ...previous.filter((message) => !freshIds.has(message.id))];
+}
+
+function sameMessage(left: Message, right: Message): boolean {
+  if (left === right) return true;
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -212,24 +312,65 @@ function argumentsOf(args: unknown): string {
 export async function readThreadMessages(
   threadId: string,
   agentId: string,
-  options: { fresh?: boolean } = {},
+  options: { fresh?: boolean; sessionScope?: string } = {},
 ): Promise<StoredThread> {
-  const key = historyCacheKey(threadId, agentId);
+  const sessionScope = options.sessionScope ?? "legacy-tab";
   if (!options.fresh) {
-    const cached = readCachedHistory(key);
+    const cached = threadHistoryCache.peek(sessionScope, threadId, agentId);
     if (cached) return cached;
   }
 
   try {
-    const response = await tryClient(
-      `/api/copilotkit/threads/${encodeURIComponent(threadId)}/messages?agentId=${encodeURIComponent(agentId)}`,
-    );
-    if (!response.ok) return NOTHING;
-    const stored = (await response.json())?.messages;
-    const result = Array.isArray(stored) ? readableTurns(stored) : NOTHING;
-    cacheHistory(key, result);
-    return result;
+    return await refreshThreadMessages(sessionScope, threadId, agentId);
   } catch {
     return NOTHING;
+  }
+}
+
+/** Always asks the authenticated server; callers decide how an explicit refresh failure is shown. */
+export async function refreshThreadMessages(
+  sessionScope: string,
+  threadId: string,
+  agentId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<StoredThread> {
+  const response = await client(
+    `/api/copilotkit/threads/${encodeURIComponent(threadId)}/messages?agentId=${encodeURIComponent(agentId)}`,
+    {
+      fallback: "Не удалось обновить историю диалога",
+      ...(options.signal ? { signal: options.signal } : {}),
+    },
+  );
+  const stored = (await response.json())?.messages;
+  if (!Array.isArray(stored)) {
+    throw new Error("Не удалось прочитать историю диалога.");
+  }
+  const result = readableTurns(stored);
+  threadHistoryCache.set(sessionScope, threadId, agentId, result);
+  return result;
+}
+
+/** Warm a channel from roster hover/focus without producing duplicate requests or hidden errors. */
+export async function prefetchThreadMessages(
+  sessionScope: string,
+  threadId: string,
+  agentId: string,
+): Promise<void> {
+  const cached = threadHistoryCache.peek(sessionScope, threadId, agentId);
+  if (cached && Date.now() - cached.cachedAt < PREFETCH_DEDUP_MS) return;
+  const key = historyCacheKey(sessionScope, threadId, agentId);
+  const pending = prefetches.get(key);
+  if (pending) {
+    await pending.catch(() => {});
+    return;
+  }
+  const refresh = refreshThreadMessages(sessionScope, threadId, agentId);
+  prefetches.set(key, refresh);
+  try {
+    await refresh;
+  } catch {
+    // The opened channel owns the explicit refresh error; hover prefetch has no surface to report it.
+  } finally {
+    prefetches.delete(key);
   }
 }

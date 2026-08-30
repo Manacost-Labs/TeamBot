@@ -19,6 +19,7 @@ import { useNeedsYou } from "@/components/computer/needs-you";
 import { DetailPanel } from "@/components/layout/detail-panel";
 import { PageLoading } from "@/components/layout/page-loading";
 import { Button } from "@/components/ui/button";
+import { currentUserQueryOptions } from "@/lib/auth/queries";
 import { markChannelReadMutationOptions } from "@/lib/channels/mutations";
 import {
   type AgentChannel,
@@ -26,7 +27,8 @@ import {
   channelQueryOptions,
 } from "@/lib/channels/queries";
 import { onComputerActivity } from "@/lib/copilot/computer-activity";
-import { CopilotProvider } from "@/lib/copilot/provider";
+import { useAgentRunActivity } from "@/lib/copilot/run-activity-store";
+import { agentRunStatusLabel } from "@/lib/copilot/run-state";
 
 const chatSearchSchema = z.object({
   settings: z.boolean().optional(),
@@ -44,16 +46,8 @@ const SCREEN_PANEL_WIDTH = 400;
 
 export const Route = createFileRoute("/_authed/_app/channel/$channelId")({
   validateSearch: chatSearchSchema,
-  component: ChannelRoute,
+  component: RouteComponent,
 });
-
-function ChannelRoute() {
-  return (
-    <CopilotProvider>
-      <RouteComponent />
-    </CopilotProvider>
-  );
-}
 
 /**
  * What the Bot is looking at, and what it is doing.
@@ -89,6 +83,7 @@ function RouteComponent() {
   const { channelId } = Route.useParams();
   const { settings, watch } = Route.useSearch();
   const channel = useQuery(channelQueryOptions(channelId));
+  const { data: currentUser } = useQuery(currentUserQueryOptions());
   const navigate = Route.useNavigate();
   const isSettingsOpen = settings === true;
   const prefersReducedMotion = useReducedMotion();
@@ -202,26 +197,35 @@ function RouteComponent() {
                 size={22}
               />
             </motion.div>
-            <motion.span
-              animate={
-                prefersReducedMotion
-                  ? { opacity: 1 }
-                  : { opacity: 1, transform: "translateY(0px)" }
-              }
-              className="min-w-0 text-sm tracking-tight truncate"
-              initial={
-                prefersReducedMotion
-                  ? { opacity: 0 }
-                  : { opacity: 0, transform: HEADING_ENTRANCE_OFFSET }
-              }
-              key={`name:${channel.data?.name ?? channelId}`}
-              transition={{
-                duration: HEADING_ENTRANCE_SECONDS,
-                ease: EASE_OUT,
-              }}
-            >
-              {channel.data?.name ?? "Диалог"}
-            </motion.span>
+            <div className="flex min-w-0 flex-col">
+              <motion.span
+                animate={
+                  prefersReducedMotion
+                    ? { opacity: 1 }
+                    : { opacity: 1, transform: "translateY(0px)" }
+                }
+                className="min-w-0 text-sm tracking-tight truncate"
+                initial={
+                  prefersReducedMotion
+                    ? { opacity: 0 }
+                    : { opacity: 0, transform: HEADING_ENTRANCE_OFFSET }
+                }
+                key={`name:${channel.data?.name ?? channelId}`}
+                transition={{
+                  duration: HEADING_ENTRANCE_SECONDS,
+                  ease: EASE_OUT,
+                }}
+              >
+                {channel.data?.name ?? "Диалог"}
+              </motion.span>
+              {agentId ? (
+                <ChannelHeaderStatus
+                  agentId={agentId}
+                  channelAvailable={channel.data?.active ?? null}
+                  channelId={channelId}
+                />
+              ) : null}
+            </div>
           </div>
           <div className="flex flex-row gap-1.5">
             <Button
@@ -260,9 +264,35 @@ function RouteComponent() {
       <ChannelBody
         channel={channel.data}
         hasError={Boolean(channel.error)}
+        historyScope={currentUser?.id}
         isPending={channel.isPending}
       />
     </DetailPanel>
+  );
+}
+
+function ChannelHeaderStatus({
+  agentId,
+  channelAvailable,
+  channelId,
+}: {
+  agentId: string;
+  channelAvailable: boolean | null;
+  channelId: string;
+}) {
+  const record = useAgentRunActivity({ channelId, agentId });
+  if (!record || record.state.startedAt === null) {
+    return channelAvailable === false ? (
+      <span className="text-[11px] leading-3 text-muted-foreground">
+        Недоступен
+      </span>
+    ) : null;
+  }
+  return (
+    <span className="truncate text-[11px] leading-3 text-muted-foreground">
+      {agentRunStatusLabel(record.state.status)}
+      {channelAvailable === false ? " · недоступен" : ""}
+    </span>
   );
 }
 
@@ -272,14 +302,17 @@ function RouteComponent() {
  */
 function ChannelBody({
   channel,
+  historyScope,
   isPending,
   hasError,
 }: {
   channel: AgentChannel | undefined;
+  historyScope: string | undefined;
   isPending: boolean;
   hasError: boolean;
 }) {
-  if (isPending) return <PageLoading label="Загрузка диалога…" />;
+  if (isPending || !historyScope)
+    return <PageLoading label="Загрузка диалога…" />;
   if (hasError || !channel) {
     return (
       <p className="p-8 text-sm text-destructive" role="alert">
@@ -302,6 +335,7 @@ function ChannelBody({
   return (
     <ChannelChat
       channel={channel}
+      historyScope={historyScope}
       key={channel.id}
       runtimeAgentId={runtimeAgentId}
     />

@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { readableTurns } from "../src/lib/copilot/thread-messages";
+import {
+  createThreadHistoryCache,
+  mergeThreadMessagesById,
+  readableTurns,
+} from "../src/lib/copilot/thread-messages";
 
 /**
  * Reading back a conversation that used a tool.
@@ -248,5 +252,69 @@ describe("shapes a real thread contains", () => {
     expect(read.map((m) => m.role)).toEqual(["user", "assistant", "assistant"]);
     expect(read[0]?.content).toBe("one");
     expect(read[2]?.content).toBe("three");
+  });
+});
+
+describe("bounded stale-while-revalidate history", () => {
+  test("returns a cached 500-message tail immediately and marks it stale", () => {
+    const cache = createThreadHistoryCache({
+      maxEntries: 2,
+      maxMessagesPerEntry: 500,
+      now: () => 100,
+    });
+    cache.set("user-a", "thread-a", "agent", {
+      messages: Array.from({ length: 600 }, (_, index) => ({
+        id: `message-${index}`,
+        role: "assistant" as const,
+        content: `Answer ${index}`,
+      })),
+      unreadable: 0,
+    });
+
+    const cached = cache.peek("user-a", "thread-a", "agent");
+    expect(cached?.stale).toBe(true);
+    expect(cached?.messages).toHaveLength(500);
+    expect(cached?.messages[0]?.id).toBe("message-100");
+  });
+
+  test("keeps cache content isolated by authenticated user scope", () => {
+    const cache = createThreadHistoryCache();
+    cache.set("user-a", "thread", "agent", {
+      messages: [{ id: "private-a", role: "assistant", content: "A" }],
+      unreadable: 0,
+    });
+
+    expect(cache.peek("user-b", "thread", "agent")).toBeNull();
+    cache.clearScope("user-a");
+    expect(cache.peek("user-a", "thread", "agent")).toBeNull();
+  });
+
+  test("merges refreshed history in server order while retaining equal row identity", () => {
+    const first = { id: "one", role: "user" as const, content: "One" };
+    const second = { id: "two", role: "assistant" as const, content: "Two" };
+    const merged = mergeThreadMessagesById(
+      [first, second],
+      [
+        { id: "one", role: "user", content: "One" },
+        { id: "two", role: "assistant", content: "Two updated" },
+        { id: "three", role: "assistant", content: "Three" },
+      ],
+    );
+
+    expect(merged.map((message) => message.id)).toEqual([
+      "one",
+      "two",
+      "three",
+    ]);
+    expect(merged[0]).toBe(first);
+    expect(merged[1]).not.toBe(second);
+    expect(merged[1]?.content).toBe("Two updated");
+
+    const authoritative = mergeThreadMessagesById(
+      [first, second],
+      [{ id: "one", role: "user", content: "One" }],
+      { retainMissing: false },
+    );
+    expect(authoritative.map((message) => message.id)).toEqual(["one"]);
   });
 });

@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { createThreadReader } from "../src/channels/thread-status";
+import {
+  createThreadExecutionReader,
+  createThreadReader,
+} from "../src/channels/thread-status";
 
 /**
  * Turning Intelligence's answer about a thread into the two states a caller can act on.
@@ -58,5 +61,35 @@ describe("reading whether Intelligence still has a thread", () => {
     });
     await reader("thread-77", "user-99");
     expect(calls).toEqual([{ threadId: "thread-77", userId: "user-99" }]);
+  });
+});
+
+describe("reading active execution from Intelligence", () => {
+  test("uses the authenticated tuple and reports only a real active run id", async () => {
+    const calls: Array<{ threadId: string; userId: string; agentId: string }> =
+      [];
+    const reader = createThreadExecutionReader({
+      ɵconnectThread: async (params) => {
+        calls.push(params);
+        return { runId: "run-7" };
+      },
+    });
+
+    await expect(reader("thread-7", "user-7", "agent-7")).resolves.toBe(true);
+    expect(calls).toEqual([
+      { threadId: "thread-7", userId: "user-7", agentId: "agent-7" },
+    ]);
+  });
+
+  test("a connection without a run lock is inactive", async () => {
+    const withoutRun = createThreadExecutionReader({
+      ɵconnectThread: async () => ({}),
+    });
+    const absent = createThreadExecutionReader({
+      ɵconnectThread: async () => null,
+    });
+
+    await expect(withoutRun("thread", "user", "agent")).resolves.toBe(false);
+    await expect(absent("thread", "user", "agent")).resolves.toBe(false);
   });
 });

@@ -1,11 +1,12 @@
 import type { useAgent as useAgentHook } from "@copilotkit/react-core/v2";
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
-  initialAgentRunState,
-  reduceAgentRun,
-  type AgentRunAction,
-  type AgentRunState,
-} from "./run-state";
+  type AgentRunScope,
+  type AgentRunToken,
+  agentRunActivityStore,
+  useAgentRunActivity,
+} from "./run-activity-store";
+import { type AgentRunAction, initialAgentRunState } from "./run-state";
 
 type AgentLike = ReturnType<typeof useAgentHook>["agent"];
 type AgentRunDispatch = AgentRunAction extends infer Action
@@ -15,105 +16,193 @@ type AgentRunDispatch = AgentRunAction extends infer Action
   : never;
 
 type UseAgentRunOptions = {
+  scope: AgentRunScope;
+  /** Packaged chat has no local send boundary, so its first protocol event explicitly starts a run. */
+  implicitBegin?: boolean;
   /** Channel conversations finish after the logical `runAgent` promise, not every browser-tool run. */
   finishOnRunFinished?: boolean;
   /** Lets a channel try a bounded reconnect before presenting a transport failure. */
   onRunFailed?: (error: Error) => void;
 };
 
-/**
- * Translate AG-UI lifecycle callbacks into one small state stream for the activity panel.
- *
- * `onMessagesChanged` remains responsible for the transcript. This hook only consumes lifecycle and
- * per-event callbacks, so a token changes one memoised message row but does not rebuild the status
- * machine or start another timer.
- */
-export function useAgentRun(
-  agent: AgentLike,
-  options: UseAgentRunOptions = {},
-): {
-  state: AgentRunState;
-  begin: (runId?: string) => void;
-  accept: (runId?: string) => void;
-  queue: () => void;
-  finish: () => void;
-  fail: (error: string) => void;
-  cancel: () => void;
-  reconnecting: () => void;
-  reconnected: () => void;
-  reconcile: (hasAssistantOutput: boolean) => void;
-} {
-  const [state, dispatch] = useReducer(
-    reduceAgentRun,
-    initialAgentRunState,
-  );
+/** Translate AG-UI callbacks into the global generation-aware lifecycle store. */
+export function useAgentRun(agent: AgentLike, options: UseAgentRunOptions) {
+  const { channelId, agentId } = options.scope;
+  const scope = useMemo(() => ({ channelId, agentId }), [channelId, agentId]);
+  const record = useAgentRunActivity(scope);
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
-  const send = useCallback(
-    (action: AgentRunDispatch) => {
-      dispatch({ ...action, at: Date.now() } as AgentRunAction);
+  const transition = useCallback(
+    (
+      action: AgentRunDispatch,
+      token?: AgentRunToken,
+      protocolRunId?: string,
+    ) => {
+      agentRunActivityStore.transition(
+        scope,
+        { ...action, at: Date.now() } as AgentRunAction,
+        {
+          ...(token ? { token } : {}),
+          ...(protocolRunId ? { protocolRunId } : {}),
+        },
+      );
     },
-    [],
+    [scope],
   );
 
   useEffect(() => {
+    const ensureProtocolRun = (
+      protocolRunId: string | undefined,
+      inputMessages: ReadonlyArray<Readonly<{ id: string }>>,
+    ) => {
+      let token =
+        optionsRef.current.implicitBegin === false
+          ? agentRunActivityStore.getCurrentTokenForInput(scope, inputMessages)
+          : agentRunActivityStore.getCurrentToken(scope);
+      const current = agentRunActivityStore.getSnapshot(scope);
+      // Channel runs begin at the user turn. If an older run initializes after a newer send, its
+      // input does not contain the newer logical message id and must never acquire that generation.
+      if (
+        current?.logicalRunId &&
+        isActive(current.state.status) &&
+        optionsRef.current.implicitBegin === false &&
+        token === null
+      ) {
+        return null;
+      }
+      if (
+        (!current ||
+          current.state.startedAt === null ||
+          !isActive(current.state.status)) &&
+        optionsRef.current.implicitBegin !== false
+      ) {
+        token = agentRunActivityStore.begin(scope, {
+          logicalRunId: protocolRunId ?? `protocol:${Date.now()}`,
+        });
+      }
+      return token;
+    };
     const subscription = agent.subscribe?.({
       onRunInitialized: ({ input }) => {
-        send({
-          type: "run_initialized",
-          ...(input.runId ? { runId: input.runId } : {}),
-        });
+        const token = ensureProtocolRun(input.runId, input.messages);
+        if (!token) return;
+        transition(
+          {
+            type: "run_initialized",
+            ...(input.runId ? { runId: input.runId } : {}),
+          },
+          token,
+          input.runId,
+        );
       },
-      onRunStartedEvent: ({ event }) => {
-        send({ type: "run_started", runId: event.runId });
+      onRunStartedEvent: ({ event, input }) => {
+        const token = ensureProtocolRun(event.runId, input.messages);
+        if (!token) return;
+        transition(
+          { type: "run_started", runId: event.runId },
+          token,
+          event.runId,
+        );
       },
-      onReasoningStartEvent: () => send({ type: "reasoning" }),
-      onReasoningMessageStartEvent: () => send({ type: "reasoning" }),
-      onToolCallStartEvent: ({ event }) =>
-        send({ type: "tool_started", name: event.toolCallName }),
-      onToolCallEndEvent: () => send({ type: "tool_finished" }),
-      onToolCallResultEvent: () => send({ type: "tool_finished" }),
-      onTextMessageStartEvent: () => send({ type: "text_started" }),
-      onRunFinishedEvent: () => {
+      onReasoningStartEvent: ({ input }) =>
+        transition({ type: "reasoning" }, undefined, input.runId),
+      onReasoningMessageStartEvent: ({ input }) =>
+        transition({ type: "reasoning" }, undefined, input.runId),
+      onToolCallStartEvent: ({ event, input }) =>
+        transition(
+          { type: "tool_started", name: event.toolCallName },
+          undefined,
+          input.runId,
+        ),
+      onToolCallEndEvent: ({ input }) =>
+        transition({ type: "tool_finished" }, undefined, input.runId),
+      onToolCallResultEvent: ({ input }) =>
+        transition({ type: "tool_finished" }, undefined, input.runId),
+      onTextMessageStartEvent: ({ input }) =>
+        transition({ type: "text_started" }, undefined, input.runId),
+      onRunFinishedEvent: ({ input }) => {
         if (optionsRef.current.finishOnRunFinished !== false) {
-          send({ type: "finished" });
+          transition({ type: "finished" }, undefined, input.runId);
         }
       },
-      onRunErrorEvent: ({ event }) =>
-        send({
-          type: "failed",
-          error: event.message?.trim() || "Сотрудник завершил работу с ошибкой.",
-        }),
-      onRunFailed: ({ error }) => {
+      onRunErrorEvent: ({ event, input }) =>
+        transition(
+          {
+            type: "failed",
+            error:
+              event.message?.trim() || "Сотрудник завершил работу с ошибкой.",
+          },
+          undefined,
+          input.runId,
+        ),
+      onRunFailed: ({ error, input }) => {
         const handler = optionsRef.current.onRunFailed;
         if (handler) handler(error);
-        else send({ type: "failed", error: error.message });
+        else
+          transition(
+            { type: "failed", error: error.message },
+            undefined,
+            input.runId,
+          );
       },
     });
     return () => subscription?.unsubscribe();
-  }, [agent, send]);
+  }, [agent, scope, transition]);
 
   return {
-    state,
+    state: record?.state ?? initialAgentRunState,
+    record,
     begin: useCallback(
-      (runId?: string) => send({ type: "send_started", ...(runId ? { runId } : {}) }),
-      [send],
+      (logicalRunId: string) =>
+        agentRunActivityStore.begin(scope, { logicalRunId }),
+      [scope],
     ),
     accept: useCallback(
-      (runId?: string) => send({ type: "accepted", ...(runId ? { runId } : {}) }),
-      [send],
+      (token?: AgentRunToken) => transition({ type: "accepted" }, token),
+      [transition],
     ),
-    queue: useCallback(() => send({ type: "queued" }), [send]),
-    finish: useCallback(() => send({ type: "finished" }), [send]),
-    fail: useCallback((error: string) => send({ type: "failed", error }), [send]),
-    cancel: useCallback(() => send({ type: "cancelled" }), [send]),
-    reconnecting: useCallback(() => send({ type: "reconnecting" }), [send]),
-    reconnected: useCallback(() => send({ type: "reconnected" }), [send]),
+    queue: useCallback(
+      (token?: AgentRunToken) => transition({ type: "queued" }, token),
+      [transition],
+    ),
+    finish: useCallback(
+      (token?: AgentRunToken) => transition({ type: "finished" }, token),
+      [transition],
+    ),
+    fail: useCallback(
+      (error: string, token?: AgentRunToken) =>
+        transition({ type: "failed", error }, token),
+      [transition],
+    ),
+    cancel: useCallback(
+      (token?: AgentRunToken) => transition({ type: "cancelled" }, token),
+      [transition],
+    ),
+    reconnecting: useCallback(
+      (token?: AgentRunToken) => transition({ type: "reconnecting" }, token),
+      [transition],
+    ),
+    reconnected: useCallback(
+      (token?: AgentRunToken) => transition({ type: "reconnected" }, token),
+      [transition],
+    ),
     reconcile: useCallback(
-      (hasAssistantOutput: boolean) =>
-        send({ type: "reconciled", hasAssistantOutput }),
-      [send],
+      (
+        hasAssistantOutput: boolean,
+        runtimeActive: boolean,
+        token?: AgentRunToken,
+      ) =>
+        agentRunActivityStore.reconcile(scope, {
+          hasAssistantOutput,
+          runtimeActive,
+          ...(token ? { token } : {}),
+        }),
+      [scope],
     ),
   };
+}
+
+function isActive(status: string): boolean {
+  return !["completed", "failed", "cancelled"].includes(status);
 }

@@ -29,10 +29,8 @@ import {
 } from "@/lib/channels/mutations";
 import { channelQueryOptions } from "@/lib/channels/queries";
 import { useAgentRunActivity } from "@/lib/copilot/run-activity-store";
-import {
-  agentRunStatusLabel,
-  isAgentRunActive,
-} from "@/lib/copilot/run-state";
+import { agentRunStatusLabel, isAgentRunActive } from "@/lib/copilot/run-state";
+import { prefetchThreadMessages } from "@/lib/copilot/thread-messages";
 
 /**
  * Memoized roster row. `use-channel-events` preserves unchanged row identity, and
@@ -47,7 +45,9 @@ export const Channel = memo(function Channel({
   name,
   lastMessage,
   lastMessageAt,
+  historyScope,
   pinned,
+  threadId,
   unread,
 }: {
   channelId: string;
@@ -55,7 +55,9 @@ export const Channel = memo(function Channel({
   name: string;
   lastMessage?: string;
   lastMessageAt?: string;
+  historyScope?: string;
   pinned: boolean;
+  threadId: string;
   unread: boolean;
 }) {
   const queryClient = useQueryClient();
@@ -79,12 +81,19 @@ export const Channel = memo(function Channel({
    * the next attempt.
    */
   const [pinProblem, setPinProblem] = useState<string | null>(null);
-  const runActivity = useAgentRunActivity(channelId);
+  const runtimeAgentId = participantIds[0] ?? "";
+  const runActivity = useAgentRunActivity({
+    channelId,
+    agentId: runtimeAgentId,
+  });
   const isWorking =
-    runActivity !== null && isAgentRunActive(runActivity.status);
+    runActivity !== null && isAgentRunActive(runActivity.state.status);
 
   const prefetchChannel = () => {
     void queryClient.prefetchQuery(channelQueryOptions(channelId));
+    if (historyScope && runtimeAgentId) {
+      void prefetchThreadMessages(historyScope, threadId, runtimeAgentId);
+    }
   };
 
   const confirmDelete = async () => {
@@ -141,7 +150,7 @@ export const Channel = memo(function Channel({
               <div className="mt-px flex h-4 items-center gap-1.5">
                 <span className="min-w-0 flex-1 truncate text-[12px] leading-4 text-muted-foreground">
                   {isWorking
-                    ? agentRunStatusLabel(runActivity.status)
+                    ? agentRunStatusLabel(runActivity.state.status)
                     : lastMessage}
                 </span>
                 {isWorking ? (

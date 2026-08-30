@@ -7,7 +7,6 @@ import {
   useState,
 } from "react";
 import { ChatTranscript } from "@/components/channels/chat-transcript";
-import type { AgentRunState } from "@/lib/copilot/run-state";
 import {
   type AgentOption,
   type CommandOption,
@@ -17,6 +16,7 @@ import {
   type QueuedMessage,
   reduceQueue,
 } from "@/components/channels/composer";
+import type { AgentRunState } from "@/lib/copilot/run-state";
 import { newId } from "../../lib/new-id";
 
 export function ConversationView({
@@ -25,6 +25,7 @@ export function ConversationView({
   notice,
   agents = [],
   commands,
+  conversationKey,
   disabled = false,
   pending = false,
   autoFocus = false,
@@ -47,6 +48,8 @@ export function ConversationView({
    * The `/` menu for this Bot's granted skills, supplied by the route that owns grant loading.
    */
   commands?: readonly CommandOption[];
+  /** Channel id used for bounded draft, scroll and transcript-window restoration. */
+  conversationKey?: string;
   disabled?: boolean;
   /**
    * A turn is in flight: the Bot has been asked something and has not come back yet.
@@ -225,6 +228,7 @@ export function ConversationView({
             .map((command) => command.name)
             .join(",")}
           messages={messages}
+          {...(conversationKey ? { conversationKey } : {})}
           onRemoveQueued={(id) => {
             apply({ id, type: "remove" });
           }}
@@ -243,6 +247,7 @@ export function ConversationView({
           {...(commands ? { commands } : {})}
           className="w-full mt-auto"
           compact
+          {...(conversationKey ? { conversationKey } : {})}
           disabled={disabled}
           onQueue={
             queueWhileBusy

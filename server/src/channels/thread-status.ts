@@ -1,4 +1,4 @@
-import type { ThreadReader } from "./thread-routes";
+import type { ThreadExecutionReader, ThreadReader } from "./thread-routes";
 
 /**
  * Build a {@link ThreadReader} from Intelligence's own thread lookup.
@@ -33,5 +33,23 @@ export function createThreadReader(intelligence: {
       }
       throw error;
     }
+  };
+}
+
+/** Read the active lock from Intelligence without deriving lifecycle from browser connectivity. */
+export function createThreadExecutionReader(intelligence: {
+  ɵconnectThread: (params: {
+    threadId: string;
+    userId: string;
+    agentId: string;
+  }) => Promise<{ runId?: string } | null>;
+}): ThreadExecutionReader {
+  return async (threadId, userId, agentId) => {
+    const connection = await intelligence.ɵconnectThread({
+      threadId,
+      userId,
+      agentId,
+    });
+    return typeof connection?.runId === "string" && connection.runId.length > 0;
   };
 }

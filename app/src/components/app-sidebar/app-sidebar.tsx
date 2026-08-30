@@ -22,7 +22,7 @@ import {
 } from "@tanstack/react-router";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type * as React from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -47,11 +47,26 @@ import {
 } from "@/components/ui/sidebar";
 import { signOutMutationOptions } from "@/lib/auth/mutations";
 import { currentUserQueryOptions } from "@/lib/auth/queries";
+import { conversationStateCache } from "@/lib/channels/conversation-state";
 import {
   type ChannelSummary,
   channelListQueryOptions,
 } from "@/lib/channels/queries";
 import { useChannelEvents } from "@/lib/channels/use-channel-events";
+import {
+  agentRunActivityStore,
+  clearAgentRunSessionScope,
+  setAgentRunSessionScope,
+} from "@/lib/copilot/run-activity-store";
+import {
+  monitorRunEvidenceOnce,
+  readThreadExecution,
+} from "@/lib/copilot/run-reconciliation";
+import { isAgentRunActive } from "@/lib/copilot/run-state";
+import {
+  clearThreadMessagesCache,
+  refreshThreadMessages,
+} from "@/lib/copilot/thread-messages";
 import { appConfig } from "@/lib/generated/application-config";
 import { EASE_OUT, ENTRANCE_SECONDS } from "@/lib/motion";
 import { relativeTime } from "@/lib/relative-time";
@@ -164,9 +179,11 @@ export function isUnread(
 function ChannelRow({
   channel,
   animateOrder,
+  historyScope,
 }: {
   channel: ChannelSummary;
   animateOrder: boolean;
+  historyScope?: string;
 }) {
   const shouldReduceMotion = useReducedMotion();
   // Whether this row is unread, as a boolean, for the same reason `Channel` computes `isOpen`
@@ -189,6 +206,7 @@ function ChannelRow({
     >
       <Channel
         channelId={channel.id}
+        historyScope={historyScope}
         participantIds={channel.agentIds}
         name={channel.name}
         lastMessage={channel.lastMessage ?? undefined}
@@ -198,6 +216,7 @@ function ChannelRow({
             : undefined
         }
         pinned={channel.pinned}
+        threadId={channel.threadId}
         unread={unread}
       />
     </motion.div>
@@ -218,6 +237,59 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     () => pinnedFirst(matchingChannels(channels.data, search)),
     [channels.data, search],
   );
+  const currentUserId = currentUser?.id;
+  useEffect(() => {
+    if (!currentUserId || !channels.data) return;
+    // Establish the scope here as well as in the shell: child effects can run before parent effects.
+    setAgentRunSessionScope(currentUserId);
+    const channelsById = new Map(
+      channels.data.map((channel) => [channel.id, channel]),
+    );
+    for (const record of agentRunActivityStore.getRecordsNeedingReconciliation()) {
+      const channel = channelsById.get(record.channelId);
+      const token = agentRunActivityStore.getCurrentToken(record);
+      if (!channel || !record.logicalRunId || !token) continue;
+      const scope = { channelId: record.channelId, agentId: record.agentId };
+      const reconciliationKey = [
+        currentUserId,
+        record.channelId,
+        record.agentId,
+        record.generation,
+      ].join(":");
+      void monitorRunEvidenceOnce(reconciliationKey, {
+        logicalRunId: record.logicalRunId,
+        readExecution: () =>
+          readThreadExecution(channel.id, channel.threadId, record.agentId),
+        readHistory: async () =>
+          (
+            await refreshThreadMessages(
+              currentUserId,
+              channel.threadId,
+              record.agentId,
+            )
+          ).messages,
+        onEvidence: (evidence) => {
+          agentRunActivityStore.reconcile(scope, { ...evidence, token });
+        },
+        onUnavailable: () => {
+          agentRunActivityStore.markReconciliationPending(scope, token);
+        },
+        stillCurrent: () => {
+          const current = agentRunActivityStore.getSnapshot(scope);
+          return Boolean(
+            current?.needsReconciliation &&
+              current.generation === token.generation &&
+              current.logicalRunId === token.logicalRunId &&
+              isAgentRunActive(current.state.status),
+          );
+        },
+      }).catch(() => {
+        // Callback failures are not an authority answer; leave the generation recoverable so a
+        // later shell revision can start a fresh monitor instead of silently declaring it failed.
+        agentRunActivityStore.markReconciliationPending(scope, token);
+      });
+    }
+  }, [channels.data, currentUserId]);
   /*
    * FILTERING DOES NOT ANIMATE. Rows exit and relayout on every keystroke otherwise, which is a
    * list thrashing under somebody who is still typing — and the moving target is the very thing
@@ -229,6 +301,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
   const handleSignOut = async () => {
     await signOut.mutateAsync();
+    if (currentUser) {
+      clearAgentRunSessionScope(currentUser.id);
+      clearThreadMessagesCache(currentUser.id);
+    }
+    conversationStateCache.clear();
     await navigate({ to: "/sign" });
   };
 
@@ -317,6 +394,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                   key={channel.id}
                   animateOrder={animateOrder}
                   channel={channel}
+                  historyScope={currentUser?.id}
                 />
               ))}
             </AnimatePresence>

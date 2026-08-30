@@ -1,38 +1,20 @@
-import {
-  CopilotChat,
-  UseAgentUpdate,
-  useAgent,
-} from "@copilotkit/react-core/v2";
+import { CopilotChat } from "@copilotkit/react-core/v2";
 import { IconPlus } from "@tabler/icons-react";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback } from "react";
-import { ActivityMenu } from "@/components/channels/activity-menu";
-import { toVisibleChatItems } from "@/components/channels/chat-messages";
 import { PageLoading } from "@/components/layout/page-loading";
 import { Button } from "@/components/ui/button";
 import { agentListQueryOptions } from "@/lib/agents/queries";
 import { useActiveBot } from "@/lib/copilot/active-bot";
 import { useBotThread } from "@/lib/copilot/bot-thread";
-import { CopilotProvider } from "@/lib/copilot/provider";
-import { isAgentRunActive } from "@/lib/copilot/run-state";
 import { useStoppedTurn } from "@/lib/copilot/stopped-turn";
-import { useAgentRun } from "@/lib/copilot/use-agent-run";
 
 export const Route = createFileRoute("/_authed/_app/bot")({
-  component: BotRoute,
+  component: RouteComponent,
   validateSearch: (search: Record<string, unknown>): { agent?: string } => ({
     ...(typeof search.agent === "string" ? { agent: search.agent } : {}),
   }),
 });
-
-function BotRoute() {
-  return (
-    <CopilotProvider>
-      <RouteComponent />
-    </CopilotProvider>
-  );
-}
 
 /**
  * Which Bot this screen is for.
@@ -152,14 +134,9 @@ function BotChat({ agentId, name }: { agentId: string; name: string }) {
         </p>
       ) : null}
       {threadId ? (
-        <BotChatSurface
-          agentId={agentId}
-          stopped={stopped}
-          threadId={threadId}
-        />
+        <BotChatSurface agentId={agentId} threadId={threadId} />
       ) : (
         <div className="min-h-0 flex-1">
-          <ActivityMenu items={[]} />
           <PageLoading label="Подготовка диалога…" />
         </div>
       )}
@@ -167,45 +144,16 @@ function BotChat({ agentId, name }: { agentId: string; name: string }) {
   );
 }
 
-/** The packaged chat shares the same persistent activity surface as channel conversations. */
+/** Packaged direct chat; the app-level provider remains mounted across routes. */
 function BotChatSurface({
   agentId,
-  stopped,
   threadId,
 }: {
   agentId: string;
-  stopped: string | null;
   threadId: string;
 }) {
-  const { agent } = useAgent({
-    agentId,
-    runtimeAgentId: agentId,
-    threadId,
-    updates: [
-      UseAgentUpdate.OnMessagesChanged,
-      UseAgentUpdate.OnRunStatusChanged,
-    ],
-  });
-  const runActivity = useAgentRun(agent);
-  const retryLast = useCallback(() => {
-    if (agent.isRunning) return;
-    void agent.runAgent();
-  }, [agent]);
-  const items = toVisibleChatItems(agent.messages);
-  const busy =
-    agent.isRunning ||
-    (runActivity.state.startedAt !== null &&
-      isAgentRunActive(runActivity.state.status));
-
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <ActivityMenu
-        busy={busy}
-        items={items}
-        onRetry={retryLast}
-        run={runActivity.state}
-        {...(stopped ? { stopped } : {})}
-      />
       <div className="min-h-0 flex-1">
         {/*
          * Keyed on the thread as well as the agent. Switching agents was already handled by

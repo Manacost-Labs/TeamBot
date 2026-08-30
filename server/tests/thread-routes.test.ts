@@ -3,7 +3,11 @@ import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
 import type { AppVariables } from "../src/auth/guards";
 import { createThreadIdentity } from "../src/channels/thread-identity";
-import type { ThreadReader } from "../src/channels/thread-routes";
+import type {
+  ThreadExecutionAuthorizer,
+  ThreadExecutionReader,
+  ThreadReader,
+} from "../src/channels/thread-routes";
 import { createThreadRoutes } from "../src/channels/thread-routes";
 
 /**
@@ -19,15 +23,27 @@ const asSignedIn: MiddlewareHandler<{ Variables: AppVariables }> = async (
   context,
   next,
 ) => {
-  context.set("actor", { id: "u1", email: "someone@openbot.test" });
+  context.set("actor", {
+    id: "u1",
+    email: "someone@openbot.test",
+    role: "user",
+  });
   return next();
 };
 
-function app(reader?: ThreadReader) {
+function app(
+  reader?: ThreadReader,
+  execution?: ThreadExecutionReader,
+  authorize: ThreadExecutionAuthorizer = async () => true,
+) {
   return new Hono().route(
     "/threads",
-    createThreadRoutes(identity, asSignedIn, reader),
+    createThreadRoutes(identity, asSignedIn, reader, execution, authorize),
   );
+}
+
+function channelId() {
+  return `channel_${crypto.randomUUID()}`;
 }
 
 async function mint() {
@@ -57,6 +73,92 @@ describe("minting a thread", () => {
       .route("/threads", createThreadRoutes(identity, refusing))
       .request("http://openbot.local/threads/mint", { method: "POST" });
     expect(response.status).toBe(401);
+  });
+});
+
+describe("checking active thread execution", () => {
+  test("uses the session user and validated agent id", async () => {
+    const calls: Array<{ threadId: string; userId: string; agentId: string }> =
+      [];
+    const threadId = identity.mint();
+    const ownedChannelId = channelId();
+    const response = await app(undefined, async (id, userId, agentId) => {
+      calls.push({ threadId: id, userId, agentId });
+      return true;
+    }).request(
+      `http://openbot.local/threads/${threadId}/execution?channelId=${ownedChannelId}&agentId=editor`,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ active: true });
+    expect(calls).toEqual([{ threadId, userId: "u1", agentId: "editor" }]);
+  });
+
+  test("rejects an invalid agent id before calling Intelligence", async () => {
+    let called = false;
+    const response = await app(undefined, async () => {
+      called = true;
+      return false;
+    }).request(
+      `http://openbot.local/threads/${identity.mint()}/execution?channelId=${channelId()}&agentId=bad%20agent`,
+    );
+
+    expect(response.status).toBe(400);
+    expect(called).toBe(false);
+  });
+
+  test("returns a safe 502 when the authority cannot answer", async () => {
+    const response = await app(undefined, async () => {
+      throw new Error("private upstream detail");
+    }).request(
+      `http://openbot.local/threads/${identity.mint()}/execution?channelId=${channelId()}&agentId=editor`,
+    );
+
+    expect(response.status).toBe(502);
+    expect(JSON.stringify(await response.json())).not.toContain(
+      "private upstream detail",
+    );
+  });
+
+  test("rejects an untrusted channel/thread/agent tuple before Intelligence", async () => {
+    let executionCalled = false;
+    const authorisationCalls: Array<{
+      threadId: string;
+      actorId: string;
+      agentId: string;
+      channelId: string;
+    }> = [];
+    const threadId = identity.mint();
+    const requestedChannelId = channelId();
+    const response = await app(
+      undefined,
+      async () => {
+        executionCalled = true;
+        return true;
+      },
+      async (candidateThread, actor, agentId, candidateChannel) => {
+        authorisationCalls.push({
+          threadId: candidateThread,
+          actorId: actor.id,
+          agentId,
+          channelId: candidateChannel,
+        });
+        return false;
+      },
+    ).request(
+      `http://openbot.local/threads/${threadId}/execution?channelId=${requestedChannelId}&agentId=editor`,
+    );
+
+    expect(response.status).toBe(404);
+    expect(executionCalled).toBe(false);
+    expect(authorisationCalls).toEqual([
+      {
+        threadId,
+        actorId: "u1",
+        agentId: "editor",
+        channelId: requestedChannelId,
+      },
+    ]);
   });
 });
 

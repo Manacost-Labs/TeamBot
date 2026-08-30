@@ -20,12 +20,21 @@ import { useActiveBot } from "@/lib/copilot/active-bot";
 import { ConversationProvider } from "@/lib/copilot/conversation";
 import { afterMs, joinWithin } from "@/lib/copilot/join-thread";
 import { repairUnansweredToolCalls } from "@/lib/copilot/repair-history";
-import { setAgentRunActivity } from "@/lib/copilot/run-activity-store";
+import {
+  type AgentRunToken,
+  agentRunActivityStore,
+} from "@/lib/copilot/run-activity-store";
+import {
+  hasAssistantOutputAfter,
+  RECONCILIATION_DELAYS_MS,
+} from "@/lib/copilot/run-reconciliation";
 import { isAgentRunActive } from "@/lib/copilot/run-state";
 import { stoppedReason } from "@/lib/copilot/stopped-turn";
 import {
+  cachedThreadMessages,
   invalidateThreadMessagesCache,
-  readThreadMessages,
+  mergeThreadMessagesById,
+  refreshThreadMessages,
 } from "@/lib/copilot/thread-messages";
 import { useAgentRun } from "@/lib/copilot/use-agent-run";
 import { useSkillCommands } from "@/lib/plugins/skill-commands";
@@ -44,25 +53,8 @@ const JOIN_DEADLINE_MS = 1500;
  */
 const SEND_WITHOUT_RUNTIME_AFTER_MS = 1500;
 
-function hasAssistantOutputAfter(
-  messages: readonly Message[],
-  userMessageId: string,
-): boolean {
-  const userIndex = messages.findIndex((message) => message.id === userMessageId);
-  return messages.slice(userIndex + 1).some((message) => {
-    if (message.role !== "assistant") return false;
-    return typeof message.content === "string" && message.content.trim().length > 0;
-  });
-}
-
-/** Keep streamed local messages and append durable messages not seen by this tab. */
-function mergeThreadMessages(
-  local: readonly Message[],
-  stored: readonly Message[],
-): Message[] {
-  const ids = new Set(local.map((message) => message.id));
-  return [...local, ...stored.filter((message) => !ids.has(message.id))];
-}
+/** A history request must not hold the first send gate indefinitely. */
+const HISTORY_REFRESH_DEADLINE_MS = 4_000;
 
 function isTransportFailure(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -80,11 +72,21 @@ function isTransportFailure(error: unknown): boolean {
  */
 export function ChannelChat({
   channel,
+  historyScope,
   runtimeAgentId,
 }: {
   channel: AgentChannel;
+  /** Authenticated user id; transcript cache entries never cross this scope. */
+  historyScope: string;
   runtimeAgentId: string;
 }) {
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   // The core attaches the frontend tool registry; direct agent runs do not.
   const { copilotkit } = useCopilotKit();
   // Mentions are scoped to the channel's permitted agents.
@@ -149,6 +151,8 @@ export function ChannelChat({
    * `runAgent` promise has settled.
    */
   const runActivity = useAgentRun(agent, {
+    scope: { channelId: channel.id, agentId: runtimeAgentId },
+    implicitBegin: false,
     finishOnRunFinished: false,
     // The delivery catch performs the bounded reconnect. Do not turn a transport error into a
     // terminal state before that recovery window has had a chance to attach again.
@@ -156,18 +160,37 @@ export function ChannelChat({
   });
 
   useEffect(() => {
-    setAgentRunActivity(channel.id, runActivity.state);
-  }, [channel.id, runActivity.state]);
+    agentRunActivityStore.setAvailability(
+      { channelId: channel.id, agentId: runtimeAgentId },
+      { channelAvailable: channel.active, runtimeReady: isReady },
+    );
+  }, [channel.active, channel.id, isReady, runtimeAgentId]);
+  useEffect(
+    () => () => {
+      agentRunActivityStore.setAvailability(
+        { channelId: channel.id, agentId: runtimeAgentId },
+        { channelAvailable: channel.active, runtimeReady: false },
+      );
+    },
+    [channel.active, channel.id, runtimeAgentId],
+  );
 
   /** A message is drawn immediately, before readiness and thread join have completed. */
-  const [optimisticMessages, setOptimisticMessages] = useState<readonly Message[]>([]);
+  const [optimisticMessages, setOptimisticMessages] = useState<
+    readonly Message[]
+  >([]);
 
   /**
    * History has been asked for and has not arrived. True for a channel opened from the roster, where
    * an empty transcript is also a real answer; false for one started from the compose screen, which
    * already has the message that started it.
    */
-  const [restoring, setRestoring] = useState(seed === null);
+  const initialHistoryRef = useRef(
+    cachedThreadMessages(historyScope, channel.threadId, runtimeAgentId),
+  );
+  const [restoring, setRestoring] = useState(
+    seed === null && initialHistoryRef.current === null,
+  );
   /**
    * History shown while the runtime join is still settling.
    *
@@ -175,7 +198,11 @@ export function ChannelChat({
    * `agent.messages`. Drawing this read-only preview removes that wait from first paint without
    * reopening the race that used to erase a message sent during a join.
    */
-  const [historyPreview, setHistoryPreview] = useState<Message[]>([]);
+  const [historyPreview, setHistoryPreview] = useState<Message[]>(
+    initialHistoryRef.current?.messages ?? [],
+  );
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [joined, setJoined] = useState(false);
   /**
    * How many stored turns this app could not read.
    *
@@ -183,75 +210,101 @@ export function ChannelChat({
    * over: `agent.messages` is what was restored, and what was dropped on the way in is not
    * recoverable from it.
    */
-  const [unreadable, setUnreadable] = useState(0);
+  const [unreadable, setUnreadable] = useState(
+    initialHistoryRef.current?.unreadable ?? 0,
+  );
   useEffect(() => {
     if (isReady) openReadyGate.current();
   }, [isReady]);
 
-  // Join the gateway socket, restore durable history, then release the first-message gate.
+  const historyAttempt = useRef(0);
+  const joinAttempt = useRef(0);
+
+  // Paint cached history immediately, then revalidate before the runtime connection is required.
   useEffect(() => {
-    if (!isReady) return;
+    const attempt = historyAttempt.current + 1;
+    historyAttempt.current = attempt;
     let current = true;
+    const controller = new AbortController();
+    const deadline = window.setTimeout(
+      () => controller.abort(),
+      HISTORY_REFRESH_DEADLINE_MS,
+    );
+    setHistoryError(null);
 
     void (async () => {
-      // Independent of the socket join, so do both network waits together. The preview can be drawn
-      // as soon as this lands even though handing the same history to the agent must wait for join.
-      const storedPromise = readThreadMessages(
-        channel.threadId,
-        runtimeAgentId,
-      );
-      void storedPromise.then((stored) => {
+      try {
+        const stored = await refreshThreadMessages(
+          historyScope,
+          channel.threadId,
+          runtimeAgentId,
+          { signal: controller.signal },
+        );
         if (!current) return;
-        setHistoryPreview(stored.messages);
+        setHistoryPreview((preview) =>
+          mergeThreadMessagesById(preview, stored.messages, {
+            retainMissing: false,
+          }),
+        );
         setUnreadable(stored.unreadable);
-        setRestoring(false);
-      });
-
-      try {
-        // Bounded, and finished when it returns; `join-thread.ts` has why that matters.
-        await joinWithin({
-          connect: copilotkit.connectAgent({ agent }),
-          deadline: afterMs(JOIN_DEADLINE_MS),
-          detach: () => agent.detachActiveRun(),
-        });
-      } catch {
-        /*
-         * A join that throws is a join that is over. It must not take the gate with it: everything
-         * typed afterwards waits on that gate, so a throw here would silence the conversation
-         * rather than degrade it. History is restored below either way.
-         */
-      }
-
-      try {
-        const stored = await storedPromise;
-        // Never overwrite local messages that arrived while history was loading.
-        if (
-          current &&
-          stored.messages.length > 0 &&
-          agent.messages.length === 0
-        ) {
-          agent.setMessages(stored.messages);
+      } catch (error) {
+        if (current) {
+          setHistoryError(
+            error instanceof Error
+              ? error.message
+              : "Не удалось обновить историю диалога.",
+          );
         }
-        /*
-         * Said on screen rather than only counted. A turn the history store holds and this app cannot
-         * parse is left out of the transcript, and a record people read back must not have a hole in
-         * it that nothing accounts for. Set even when nothing was restored: a thread whose every turn
-         * is unreadable is exactly the case where silence would read as "this conversation is empty".
-         */
-        if (current) setUnreadable(stored.unreadable);
       } finally {
-        // Cleared on failure too: placeholders over an empty transcript promise messages that are
-        // never coming.
-        if (current) setRestoring(false);
-        // Release even on join/restore failure; the gate orders messages, not withholds them.
-        openJoinGate.current();
+        window.clearTimeout(deadline);
+        if (attempt === historyAttempt.current) {
+          if (current) setRestoring(false);
+        }
       }
     })();
 
     return () => {
       current = false;
+      controller.abort();
     };
-  }, [copilotkit, agent, isReady, channel.threadId, runtimeAgentId]);
+  }, [channel.threadId, historyScope, runtimeAgentId]);
+
+  // Join independently. History already paints while CopilotKit is still preparing the agent.
+  useEffect(() => {
+    if (!isReady) return;
+    const attempt = joinAttempt.current + 1;
+    joinAttempt.current = attempt;
+    let current = true;
+    void (async () => {
+      try {
+        await joinWithin({
+          connect: copilotkit.connectAgent({ agent }),
+          deadline: afterMs(JOIN_DEADLINE_MS),
+          detach: () => agent.detachActiveRun(),
+        });
+      } finally {
+        if (attempt === joinAttempt.current) {
+          if (current) setJoined(true);
+          openJoinGate.current();
+        }
+      }
+    })();
+    return () => {
+      current = false;
+    };
+  }, [agent, copilotkit, isReady]);
+
+  // Hand each cache/server revision to the joined runtime without dropping local streamed turns.
+  useEffect(() => {
+    if (!joined || historyPreview.length === 0) return;
+    const merged = mergeThreadMessagesById(agent.messages, historyPreview);
+    if (
+      merged.length !== agent.messages.length ||
+      merged.some((message, index) => message !== agent.messages[index])
+    ) {
+      agent.setMessages(merged as typeof agent.messages);
+    }
+  }, [agent, historyPreview, joined]);
 
   // Tool calls from this conversation act on this coworker's own computer.
   useActiveBot(runtimeAgentId);
@@ -260,7 +313,14 @@ export function ChannelChat({
 
   // Run failures arrive as events and are reported only for turns started in this mount.
   const [runError, setRunError] = useState<string | null>(null);
-  const awaitingReply = useRef(false);
+  const awaitingReplies = useRef(new Set<number>());
+  const isAwaiting = (token: AgentRunToken) =>
+    awaitingReplies.current.has(token.generation);
+  const isCurrentRun = (token: AgentRunToken) =>
+    agentRunActivityStore.getCurrentToken({
+      channelId: channel.id,
+      agentId: runtimeAgentId,
+    })?.generation === token.generation;
   const lastRequest = useRef<{
     text: string;
     skillInstructions: string[];
@@ -313,25 +373,44 @@ export function ChannelChat({
   const reconcileThread = async (
     target: typeof agent,
     userMessageId: string,
+    token: AgentRunToken,
   ): Promise<boolean> => {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const stored = await readThreadMessages(
-        channel.threadId,
-        runtimeAgentId,
-        { fresh: true },
-      );
-      const merged = mergeThreadMessages(target.messages, stored.messages);
-      if (merged.length !== target.messages.length) {
-        target.setMessages(merged as typeof target.messages);
+    let refreshFailure: string | null = null;
+    for (const delay of RECONCILIATION_DELAYS_MS) {
+      if (delay > 0) await afterMs(delay);
+      try {
+        const stored = await refreshThreadMessages(
+          historyScope,
+          channel.threadId,
+          runtimeAgentId,
+          { signal: AbortSignal.timeout(HISTORY_REFRESH_DEADLINE_MS) },
+        );
+        refreshFailure = null;
+        const merged = mergeThreadMessagesById(
+          target.messages,
+          stored.messages,
+        );
+        if (
+          merged.length !== target.messages.length ||
+          merged.some((message, index) => message !== target.messages[index])
+        ) {
+          target.setMessages(merged as typeof target.messages);
+        }
+        if (hasAssistantOutputAfter(merged, userMessageId)) {
+          runActivity.reconcile(true, target.isRunning, token);
+          if (mounted.current) setHistoryError(null);
+          return true;
+        }
+      } catch (error) {
+        refreshFailure =
+          error instanceof Error
+            ? error.message
+            : "Не удалось обновить историю диалога.";
       }
-      if (hasAssistantOutputAfter(merged, userMessageId)) {
-        runActivity.reconcile(true);
-        return true;
-      }
-      if (attempt === 0) await afterMs(250);
     }
+    if (refreshFailure && mounted.current) setHistoryError(refreshFailure);
     const hasAnswer = hasAssistantOutputAfter(target.messages, userMessageId);
-    runActivity.reconcile(hasAnswer);
+    runActivity.reconcile(hasAnswer, target.isRunning, token);
     return hasAnswer;
   };
 
@@ -339,19 +418,20 @@ export function ChannelChat({
     target: typeof agent,
     error: unknown,
     userMessageId: string,
+    token: AgentRunToken,
   ): Promise<boolean> => {
-    if (!awaitingReply.current || !isTransportFailure(error)) return false;
-    runActivity.reconnecting();
+    if (!isAwaiting(token) || !isTransportFailure(error)) return false;
+    runActivity.reconnecting(token);
     await afterMs(400);
     try {
       // Intelligence resumes the current thread from its last event cursor. This is bounded to one
       // attempt so a dead gateway cannot leave the composer locked forever.
       await copilotkit.connectAgent({ agent: target });
-      if (!awaitingReply.current) return false;
-      const recovered = await reconcileThread(target, userMessageId);
+      if (!isAwaiting(token)) return false;
+      const recovered = await reconcileThread(target, userMessageId, token);
       if (recovered) {
-        awaitingReply.current = false;
-        runActivity.finish();
+        awaitingReplies.current.delete(token.generation);
+        runActivity.finish(token);
         const reply = [...target.messages]
           .reverse()
           .find((message) => message.role === "assistant");
@@ -359,7 +439,7 @@ export function ChannelChat({
         if (content) reportRef.current(content, runtimeAgentId);
         return true;
       }
-      runActivity.reconnected();
+      runActivity.reconnected(token);
     } catch {
       // The caller presents the original transport reason below.
     }
@@ -374,6 +454,7 @@ export function ChannelChat({
     trimmed: string,
     skillInstructions: string[],
     userMessageId: string,
+    token: AgentRunToken,
   ) => {
     // Wait briefly for the runtime agent instance before adding the message.
     if (!isReadyRef.current) {
@@ -397,8 +478,8 @@ export function ChannelChat({
     // used throughout, so the message, the repair and the run cannot land on two different agents.
     const target = agentRef.current;
 
-    setRunError(null);
-    awaitingReply.current = true;
+    if (isCurrentRun(token)) setRunError(null);
+    awaitingReplies.current.add(token.generation);
 
     /*
      * THE SKILL GOES IN FRONT OF THE MESSAGE, AS A SYSTEM TURN. A `/` chip is one token in the
@@ -425,7 +506,11 @@ export function ChannelChat({
       id: userMessageId,
       role: "user",
     });
-    invalidateThreadMessagesCache(channel.threadId, runtimeAgentId);
+    invalidateThreadMessagesCache(
+      historyScope,
+      channel.threadId,
+      runtimeAgentId,
+    );
     report(trimmed, null);
 
     // Providers reject later turns if prior tool calls have no result; repair before sending.
@@ -434,45 +519,50 @@ export function ChannelChat({
       target.setMessages(repaired as typeof target.messages);
     }
 
-    runActivity.accept();
+    runActivity.accept(token);
     setRunsInFlight((count) => count + 1);
     try {
       await copilotkit.runAgent({ agent: target });
-      if (!awaitingReply.current) return;
+      if (!isAwaiting(token)) return;
 
       /*
        * The final event and durable persistence are intentionally reconciled separately. If the
        * browser missed RUN_FINISHED, the platform history still gives us the answer; if both are
        * missing, this request is not allowed to masquerade as completed.
        */
-      const hasAnswer = await reconcileThread(target, userMessageId);
+      const hasAnswer = await reconcileThread(target, userMessageId, token);
       if (!hasAnswer) {
         const reason = "Сотрудник завершил работу без результата.";
-        awaitingReply.current = false;
-        runActivity.fail(reason);
-        setRunError(reason);
+        awaitingReplies.current.delete(token.generation);
+        runActivity.fail(reason, token);
+        if (mounted.current && isCurrentRun(token)) setRunError(reason);
         throw new Error(reason);
       }
 
-      awaitingReply.current = false;
-      runActivity.finish();
+      awaitingReplies.current.delete(token.generation);
+      runActivity.finish(token);
       const reply = [...target.messages]
         .reverse()
         .find((message) => message.role === "assistant");
       const content = typeof reply?.content === "string" ? reply.content : "";
       if (content) reportRef.current(content, runtimeAgentId);
     } catch (error) {
-      const recovered = await recoverTransport(target, error, userMessageId);
+      const recovered = await recoverTransport(
+        target,
+        error,
+        userMessageId,
+        token,
+      );
       if (recovered) return;
-      if (awaitingReply.current) {
-        awaitingReply.current = false;
+      if (isAwaiting(token)) {
+        awaitingReplies.current.delete(token.generation);
         const reason = stoppedReason(error);
-        runActivity.fail(reason);
-        setRunError(reason);
+        runActivity.fail(reason, token);
+        if (mounted.current && isCurrentRun(token)) setRunError(reason);
       }
-      throw error;
+      return;
     } finally {
-      setRunsInFlight((count) => count - 1);
+      if (mounted.current) setRunsInFlight((count) => count - 1);
     }
   };
 
@@ -495,35 +585,43 @@ export function ChannelChat({
     lastRequest.current = { text: trimmed, skillInstructions };
     setRunError(null);
     const userMessageId = suppliedMessageId ?? newId();
+    const token = runActivity.begin(userMessageId);
     setOptimisticMessages((messages) => [
       ...messages.filter((message) => message.id !== userMessageId),
       { content: trimmed, id: userMessageId, role: "user" },
     ]);
-    runActivity.begin();
     setTurnsInFlight((count) => count + 1);
     try {
-      await deliver(trimmed, skillInstructions, userMessageId);
+      await deliver(trimmed, skillInstructions, userMessageId, token);
     } finally {
-      setTurnsInFlight((count) => count - 1);
+      if (mounted.current) setTurnsInFlight((count) => count - 1);
     }
   };
 
   useEffect(() => {
-    const fail = (message: string) => {
-      if (!awaitingReply.current) return;
-      awaitingReply.current = false;
+    const fail = (
+      message: string,
+      inputMessages: ReadonlyArray<Readonly<{ id: string }>>,
+    ) => {
+      const token = agentRunActivityStore.getCurrentTokenForInput(
+        { channelId: channel.id, agentId: runtimeAgentId },
+        inputMessages,
+      );
+      if (!token || !awaitingReplies.current.has(token.generation)) return;
+      awaitingReplies.current.delete(token.generation);
       setRunError(message);
     };
     const subscription = agent.subscribe?.({
       // Both surfaces fall back to the same sentence, from the same place, so a person who uses
       // both is not told two different things about the same silence.
-      onRunErrorEvent: ({ event }) => fail(stoppedReason(event?.message)),
+      onRunErrorEvent: ({ event, input }) =>
+        fail(stoppedReason(event?.message), input.messages),
       // A finished protocol run is not necessarily the finished logical request: frontend tools can
       // start a follow-up run with their result. `deliver` owns the final transition.
       onRunFinishedEvent: () => {},
     });
     return () => subscription?.unsubscribe();
-  }, [agent]);
+  }, [agent, channel.id, runtimeAgentId]);
 
   /** Keep the visible optimistic bubble until the server has echoed the same message id. */
   const messageCount = agent.messages.length;
@@ -544,7 +642,7 @@ export function ChannelChat({
 
   const retryLast = useCallback(() => {
     const request = lastRequest.current;
-    if (!request || awaitingReply.current) return;
+    if (!request || awaitingReplies.current.size > 0) return;
     void sayRef.current(request.text, request.skillInstructions);
   }, []);
 
@@ -590,6 +688,7 @@ export function ChannelChat({
         }
         // The `/` menu exposes only skills granted to this Bot.
         commands={skillCommands}
+        conversationKey={channel.id}
         // Readiness is handled by `say`; deletion is the only disabled-chat state.
         disabled={!channel.active}
         messages={(() => {
@@ -607,6 +706,11 @@ export function ChannelChat({
            * it — and they are independent, so neither is an `else` for the other.
            */
           <>
+            {historyError ? (
+              <p className="pb-2 text-sm text-destructive" role="alert">
+                Не удалось обновить историю диалога: {historyError}
+              </p>
+            ) : null}
             {unreadable > 0 ? (
               <p className="pb-2 text-sm text-muted-foreground" role="status">
                 {unreadable === 1
@@ -649,8 +753,14 @@ export function ChannelChat({
          * unanswered tool call before the next turn.
          */
         onStop={() => {
-          awaitingReply.current = false;
-          runActivity.cancel();
+          const token = agentRunActivityStore.getCurrentToken({
+            channelId: channel.id,
+            agentId: runtimeAgentId,
+          });
+          if (token) {
+            awaitingReplies.current.delete(token.generation);
+            runActivity.cancel(token);
+          }
           copilotkit.stopAgent({ agent });
         }}
         onQueued={runActivity.queue}

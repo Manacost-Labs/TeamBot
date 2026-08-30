@@ -102,17 +102,17 @@ export function reduceAgentRun(
   state: AgentRunState,
   action: AgentRunAction,
 ): AgentRunState {
-  // A terminal state belongs to the previous request. Start a fresh clock for the next one.
-  const current =
-    [
-      "send_started",
-      "accepted",
-      "queued",
-      "run_initialized",
-      "run_started",
-    ].includes(action.type) && isAgentRunTerminal(state.status)
-      ? initialAgentRunState
-      : state;
+  /*
+   * A new logical request is created explicitly by the external store. Once this reducer has a
+   * terminal fact, neither a second terminal callback nor a late starter is allowed to revive or
+   * rewrite it. The untouched initial value is the only terminal-looking state that has no run.
+   */
+  if (state.startedAt !== null && isAgentRunTerminal(state.status))
+    return state;
+  // All lifecycle timestamps come from the same browser clock. An older callback is a stale fact.
+  if (state.updatedAt !== null && action.at < state.updatedAt) return state;
+
+  const current = state;
   const at = timestamp(current, action.at);
 
   switch (action.type) {
@@ -134,9 +134,16 @@ export function reduceAgentRun(
       const started =
         action.type === "send_started" || action.type === "accepted"
           ? current.startedAt
-            ? { startedAt: current.startedAt, runId: action.runId ?? current.runId }
+            ? {
+                startedAt: current.startedAt,
+                runId: action.runId ?? current.runId,
+              }
             : { startedAt: action.at, runId: action.runId ?? current.runId }
-          : startIfNeeded(current, at, "runId" in action ? action.runId : undefined);
+          : startIfNeeded(
+              current,
+              at,
+              "runId" in action ? action.runId : undefined,
+            );
       return {
         ...current,
         status: phase,
@@ -222,7 +229,8 @@ export function reduceAgentRun(
         status: action.hasAssistantOutput ? "completed" : state.status,
         updatedAt: at,
         finishedAt: action.hasAssistantOutput ? at : state.finishedAt,
-        hasAssistantOutput: state.hasAssistantOutput || action.hasAssistantOutput,
+        hasAssistantOutput:
+          state.hasAssistantOutput || action.hasAssistantOutput,
         elapsedMs: elapsed(state, at),
       };
     case "failed":

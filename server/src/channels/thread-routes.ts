@@ -1,6 +1,6 @@
 import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
-import type { AppVariables } from "../auth/guards";
+import type { AppVariables, AuthenticatedActor } from "../auth/guards";
 import type { ThreadIdentity } from "./thread-identity";
 
 /**
@@ -30,6 +30,21 @@ export type ThreadReader = (
   userId: string,
 ) => Promise<"known" | "unknown">;
 
+/** Server-authoritative answer about an active run lock for one user/thread/agent tuple. */
+export type ThreadExecutionReader = (
+  threadId: string,
+  userId: string,
+  agentId: string,
+) => Promise<boolean>;
+
+/** Prove the authenticated actor owns the channel/thread/agent tuple before touching Intelligence. */
+export type ThreadExecutionAuthorizer = (
+  threadId: string,
+  actor: AuthenticatedActor,
+  agentId: string,
+  channelId: string,
+) => Promise<boolean>;
+
 /**
  * A UUID-shaped string, nothing more. Not the format `thread-identity.ts` mints — this route also
  * has to answer for a thread a *different* deployment minted, or one minted before this deployment
@@ -39,6 +54,9 @@ export type ThreadReader = (
  */
 const PLAUSIBLE_THREAD_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PLAUSIBLE_AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
+const PLAUSIBLE_CHANNEL_ID =
+  /^channel_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function createThreadRoutes(
   identity: ThreadIdentity,
@@ -50,6 +68,8 @@ export function createThreadRoutes(
    * `POST /mint` needs no reader and is unaffected either way.
    */
   readThread?: ThreadReader,
+  readExecution?: ThreadExecutionReader,
+  authorizeExecution?: ThreadExecutionAuthorizer,
 ) {
   const routes = new Hono<{ Variables: AppVariables }>();
 
@@ -88,6 +108,54 @@ export function createThreadRoutes(
           }),
         );
         return context.json({ error: "Could not check thread status." }, 502);
+      }
+    });
+  }
+
+  if (readExecution && authorizeExecution) {
+    routes.get("/:threadId/execution", requireUser, async (context) => {
+      const threadId = context.req.param("threadId");
+      const agentId = context.req.query("agentId") ?? "";
+      const channelId = context.req.query("channelId") ?? "";
+      if (!PLAUSIBLE_THREAD_ID.test(threadId)) {
+        return context.json({ error: "Not a thread id." }, 400);
+      }
+      if (!PLAUSIBLE_AGENT_ID.test(agentId)) {
+        return context.json({ error: "Not an agent id." }, 400);
+      }
+      if (!PLAUSIBLE_CHANNEL_ID.test(channelId)) {
+        return context.json({ error: "Not a channel id." }, 400);
+      }
+
+      try {
+        const authorised = await authorizeExecution(
+          threadId,
+          context.var.actor,
+          agentId,
+          channelId,
+        );
+        if (!authorised) {
+          // Do not reveal which part of the tuple exists. A caller may ask only about the exact
+          // channel/thread/agent relationship already visible through its authenticated roster.
+          return context.json({ error: "Conversation not found." }, 404);
+        }
+        const active = await readExecution(
+          threadId,
+          context.var.actor.id,
+          agentId,
+        );
+        return context.json({ active });
+      } catch {
+        console.error(
+          JSON.stringify({
+            type: "thread-execution-check-failed",
+            note: "Could not determine whether Intelligence has an active run for this thread.",
+          }),
+        );
+        return context.json(
+          { error: "Could not check thread execution." },
+          502,
+        );
       }
     });
   }

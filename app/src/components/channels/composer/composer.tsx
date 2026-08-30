@@ -9,12 +9,14 @@ import { PromptArea, type PromptAreaHandle } from "prompt-area";
 import type { Segment } from "prompt-area/helpers";
 import {
   type FormEvent,
+  type SetStateAction,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import { conversationStateCache } from "@/lib/channels/conversation-state";
 import { cn } from "@/lib/utils";
 import { Button } from "../../ui/button";
 import {
@@ -46,6 +48,8 @@ const COMPACT_MAX_HEIGHT_PX = 96;
 export type ComposerProps = {
   className?: string;
   compact?: boolean;
+  /** Bounded in-memory draft key used when a channel route is remounted. */
+  conversationKey?: string;
   /** Agents that `@` can address. Empty means the mention menu reports an empty channel. */
   agents?: readonly AgentOption[];
   commands?: readonly CommandOption[];
@@ -110,6 +114,7 @@ export type ComposerProps = {
 export function Composer({
   className,
   compact = false,
+  conversationKey,
   agents = [],
   commands = PLACEHOLDER_COMMANDS,
   onSubmit,
@@ -120,7 +125,21 @@ export function Composer({
   autoFocus = false,
   stoppable,
 }: ComposerProps) {
-  const [value, setValue] = useState<Segment[]>([]);
+  const [value, setValueState] = useState<Segment[]>(() =>
+    conversationKey ? conversationStateCache.get(conversationKey).draft : [],
+  );
+  const setValue = useCallback(
+    (next: SetStateAction<Segment[]>) => {
+      setValueState((current) => {
+        const resolved = typeof next === "function" ? next(current) : next;
+        if (conversationKey) {
+          conversationStateCache.setDraft(conversationKey, resolved);
+        }
+        return resolved;
+      });
+    },
+    [conversationKey],
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitInFlight = useRef(false);
   const promptAreaRef = useRef<PromptAreaHandle>(null);
@@ -149,7 +168,7 @@ export function Composer({
         action();
       }
     },
-    [commands],
+    [commands, setValue],
   );
 
   /**
@@ -207,7 +226,7 @@ export function Composer({
         wantsFocus.current = true;
       }
     },
-    [disabled, isBusy, onQueue, onSubmit],
+    [disabled, isBusy, onQueue, onSubmit, setValue],
   );
 
   /**
@@ -246,7 +265,7 @@ export function Composer({
       setValue((current) => appendTrigger(current, trigger));
       requestAnimationFrame(() => promptAreaRef.current?.focus());
     },
-    [],
+    [setValue],
   );
 
   /**

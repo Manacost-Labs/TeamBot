@@ -1,13 +1,14 @@
 import type { Message } from "@ag-ui/core";
 import { useRenderToolCall } from "@copilotkit/react-core/v2";
+import { IconBox } from "@tabler/icons-react";
 import {
-  IconBox,
-  IconBrain,
-  IconCheck,
-  IconLoader2,
-} from "@tabler/icons-react";
-import { motion, useReducedMotion } from "motion/react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Streamdown } from "streamdown";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import {
@@ -25,16 +26,25 @@ import {
   useMessageScroller,
 } from "@/components/ui/message-scroller";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  anchoredScrollTop,
+  conversationStateCache,
+} from "@/lib/channels/conversation-state";
+import {
+  type AgentRunState,
+  agentRunStatusLabel,
+} from "@/lib/copilot/run-state";
 import { markdownComponents } from "@/lib/markdown";
-import { EASE_OUT, ENTRANCE_SECONDS } from "@/lib/motion";
 import { readToolName } from "@/lib/plugins/tool-name";
 import { asText, forDisplay, REFUSAL_MARKER } from "@/lib/plugins/tool-result";
-import { ActivityMenu } from "./activity-menu";
-import { newestVisibleChatItems, toVisibleChatItems } from "./chat-messages";
+import {
+  newestVisibleChatItems,
+  toVisibleChatItems,
+  type VisibleChatItem,
+} from "./chat-messages";
 import type { QueuedMessage } from "./composer";
 import { ToolRenderBoundary } from "./tool-boundary";
 import { ToolLine } from "./tool-line";
-import type { AgentRunState } from "@/lib/copilot/run-state";
 
 type ChatTranscriptProps = {
   busy?: boolean;
@@ -52,6 +62,10 @@ type ChatTranscriptProps = {
   restoring?: boolean;
   /** Explicit lifecycle state; transcript inference remains a fallback. */
   run?: AgentRunState;
+  /** Bounded in-memory UI state key for draft-adjacent transcript position and history window. */
+  conversationKey?: string;
+  /** Deterministic render-count seam used by transcript performance regression tests. */
+  onRowRender?: (id: string) => void;
   /** Re-send the last failed request without making a duplicate while another turn is active. */
   onRetry?: () => void;
   /**
@@ -69,6 +83,7 @@ const EMPTY_QUEUE: readonly QueuedMessage[] = [];
 
 /** Enough context for an opened channel without mounting years of markdown and tool output. */
 const HISTORY_PAGE_SIZE = 60;
+type RenderedChatItem = Exclude<VisibleChatItem, { kind: "reasoning" }>;
 
 /**
  * Split a person's message into the skill they invoked and the rest of what they typed.
@@ -252,122 +267,12 @@ function ScrollNewestQueuedIntoView({ newest }: { newest: string | null }) {
   return null;
 }
 
-/**
- * How many of the newest turns cascade when a channel is opened, and how far apart.
- *
- * The tail rather than the head: opening a channel lands you at the bottom, so these are the ones
- * actually on screen. Staggering from the top of a long history would spend the whole budget on
- * messages nobody can see and leave the visible ones arriving last.
- *
- * Restored history is already gated by a remote history read. Adding a cascade after that response
- * made the conversation look as though it were still loading, so restored rows now enter together;
- * live turns still get their ordinary single-message transition below.
- */
-const FIRST_PAINT_STAGGER_COUNT = 0;
-const FIRST_PAINT_STAGGER_SECONDS = 0.04;
-
-/**
- * Decide, once per message, whether it waits its turn.
- *
- * FROZEN PER ID ON PURPOSE. `delay` is a prop on a memoised component, so a value that changed
- * between renders would break the memo that makes the streaming path cheap — and worse, a message
- * whose delay changed could replay its entrance mid-stream. Each id is decided the first time it is
- * seen and never revisited.
- *
- * `settled` flips after the first render that has any items, which is NOT the first render: history
- * is restored asynchronously, so a channel's transcript is empty for a beat. Anything appearing
- * after that is a live turn and is given no delay at all.
- */
-function createFirstPaintDelays() {
-  const decided = new Map<string, number>();
-  let settled = false;
-
-  return {
-    settle() {
-      settled = true;
-    },
-    delayFor(id: string, index: number, total: number): number {
-      const known = decided.get(id);
-      if (known !== undefined) {
-        return known;
-      }
-      const offset = total - FIRST_PAINT_STAGGER_COUNT;
-      const place = index - Math.max(0, offset);
-      const delay =
-        settled || place < 0 ? 0 : place * FIRST_PAINT_STAGGER_SECONDS;
-      decided.set(id, delay);
-      return delay;
-    },
-  };
-}
-
-/**
- * A turn arriving in the transcript.
- *
- * WHY IT ANIMATES AT ALL: a message currently pops into existence at full opacity, and the eye has
- * nothing to follow from the composer to the transcript. This bridges that, and nothing more — it
- * is not decoration on something the reader is trying to read.
- *
- * IT RUNS ONCE, ON MOUNT. `initial`/`animate` fire when the element mounts, and the memoised parents
- * mean a streaming answer re-renders without remounting — so the fade plays when the message first
- * appears and never again while its text is still arriving. Animating per chunk would strobe.
- *
- * TRANSFORM AND OPACITY ONLY, so the scroller can still measure. `MessageScroller` sizes items and
- * places its anchor and spacer from layout; a transform is composited and changes no layout box, so
- * a message can fade in without moving the thing the scroller just measured.
- *
- * The full transform string rather than motion's `y` shorthand: the shorthand is not hardware
- * accelerated and drops frames exactly when the main thread is busy, which here is while a reply is
- * streaming.
- *
- * STAGGERED ONLY ON THE FIRST PAINT OF A CHANNEL. A turn sent mid-conversation arrives alone and
- * must not wait behind anything, so `delay` is zero for it. Opening a channel is the one moment the
- * whole history mounts at once, and cascading the last few reads as the conversation settling
- * rather than as a page appearing all at once. `createFirstPaintDelays` decides which is which.
- */
-function Arriving({
-  children,
-  delay = 0,
-}: {
-  children: React.ReactNode;
-  delay?: number;
-}) {
-  const shouldReduceMotion = useReducedMotion();
-
+/** Stable layout wrapper. Replayed and live rows never synthesize an entrance/typing animation. */
+function MessageLayout({ children }: { children: React.ReactNode }) {
   return (
-    <motion.div
-      animate={{ opacity: 1, transform: "translateY(0px)" }}
-      /*
-       * `data-slot` IS LOAD-BEARING, NOT DECORATION. `MessageContent` right-aligns a person's own
-       * message with `group-data-[align=end]/message:*:data-slot:self-end` — a selector that reaches
-       * DIRECT CHILDREN CARRYING A data-slot. Wrapping the bubble in a plain div made this the direct
-       * child, the selector matched nothing, and every message a person sent quietly moved to the
-       * left column and read as though the Bot had said it.
-       */
-      data-slot="message-arriving"
-      /*
-       * FULL WIDTH, AND A FLEX COLUMN, because that is what it displaced. `Bubble` is
-       * `w-fit max-w-[80%]` and aligns itself with `group-data-[align=end]/message:self-end`. Both
-       * need the parent this wrapper replaced: against a shrink-to-fit box the 80% resolves against
-       * the bubble's own width and short messages wrap for no reason, and `self-end` does nothing at
-       * all outside a flex container.
-       */
-      className="flex w-full flex-col"
-      initial={{
-        opacity: 0,
-        // Reduced motion keeps the fade and drops the movement: gentler, not absent.
-        transform: shouldReduceMotion ? "none" : "translateY(8px)",
-      }}
-      transition={{
-        // Reduced motion gets the fade with no queue: a cascade is movement too, just spread over
-        // time, and somebody who asked for less of it should not wait for their history to arrive.
-        delay: shouldReduceMotion ? 0 : delay,
-        duration: ENTRANCE_SECONDS,
-        ease: EASE_OUT,
-      }}
-    >
+    <div data-slot="message-arriving" className="flex w-full flex-col">
       {children}
-    </motion.div>
+    </div>
   );
 }
 
@@ -386,17 +291,20 @@ function Arriving({
  */
 const TranscriptMessage = memo(function TranscriptMessage({
   commandNames = "",
-  delay,
+  id,
+  onRender,
   role,
   streaming = false,
   text,
 }: {
   commandNames?: string;
-  delay: number;
+  id: string;
+  onRender?: (id: string) => void;
   role: "user" | "assistant";
   streaming?: boolean;
   text: string;
 }) {
+  onRender?.(id);
   const isUser = role === "user";
   const align = isUser ? "end" : "start";
   const invoked = isUser ? splitSkillChip(text, commandNames) : null;
@@ -404,7 +312,7 @@ const TranscriptMessage = memo(function TranscriptMessage({
   return (
     <MessageRow align={align}>
       <MessageContent>
-        <Arriving delay={delay}>
+        <MessageLayout>
           {/*
             A Bot's message takes the whole column, not the width of its words: block content
             inside it — a fenced code block, a table — should span the transcript rather than
@@ -451,15 +359,7 @@ const TranscriptMessage = memo(function TranscriptMessage({
                  * closes them for the duration.
                  */
                 <Streamdown
-                  animated={{
-                    animation: "fadeIn",
-                    duration: 140,
-                    maxBacklogMs: 180,
-                    sep: "word",
-                    stagger: 14,
-                  }}
                   components={markdownComponents}
-                  isAnimating={streaming}
                   mode={streaming ? "streaming" : "static"}
                 >
                   {text}
@@ -467,62 +367,9 @@ const TranscriptMessage = memo(function TranscriptMessage({
               )}
             </BubbleContent>
           </Bubble>
-        </Arriving>
+        </MessageLayout>
       </MessageContent>
     </MessageRow>
-  );
-});
-
-/** Official reasoning summary streamed by the model, not private chain-of-thought. */
-const ReasoningProgress = memo(function ReasoningProgress({
-  delay,
-  streaming,
-  text,
-}: {
-  delay: number;
-  streaming: boolean;
-  text: string;
-}) {
-  // A live card opens itself and stays open after completion. Restored history starts collapsed.
-  const [open, setOpen] = useState(streaming);
-
-  return (
-    <Arriving delay={delay}>
-      <details
-        className="group my-2 rounded-lg border border-border/70 bg-muted/25 px-3 py-2"
-        onToggle={(event) => setOpen(event.currentTarget.open)}
-        open={open}
-      >
-        <summary className="flex cursor-pointer list-none items-center gap-2 text-sm text-muted-foreground">
-          {streaming ? (
-            <IconLoader2 className="size-4 shrink-0 animate-spin motion-reduce:animate-none" />
-          ) : (
-            <IconCheck className="size-4 shrink-0 text-success" />
-          )}
-          <IconBrain className="size-4 shrink-0" />
-          <span className="font-medium text-foreground">Ход работы</span>
-          <span className="ml-auto text-xs">
-            {streaming ? "выполняется" : "готово"}
-          </span>
-        </summary>
-        <div className="reasoning-progress mt-2 border-l border-border pl-3 text-sm text-muted-foreground">
-          <Streamdown
-            animated={{
-              animation: "fadeIn",
-              duration: 120,
-              maxBacklogMs: 140,
-              sep: "word",
-              stagger: 10,
-            }}
-            components={markdownComponents}
-            isAnimating={streaming}
-            mode={streaming ? "streaming" : "static"}
-          >
-            {text}
-          </Streamdown>
-        </div>
-      </details>
-    </Arriving>
   );
 });
 
@@ -537,18 +384,21 @@ const ReasoningProgress = memo(function ReasoningProgress({
  * parent cannot guarantee is the classic way to make a memo boundary useless.
  */
 const TranscriptToolCall = memo(function TranscriptToolCall({
-  delay,
+  id,
+  onRender,
   toolCallId,
   name,
   args,
   result,
 }: {
-  delay: number;
+  id: string;
+  onRender?: (id: string) => void;
   toolCallId: string;
   name: string;
   args: string;
   result?: string;
 }) {
+  onRender?.(id);
   const renderToolCall = useRenderToolCall();
   const toolCall = useMemo(
     () => ({
@@ -574,7 +424,7 @@ const TranscriptToolCall = memo(function TranscriptToolCall({
   });
 
   return (
-    <Arriving delay={delay}>
+    <MessageLayout>
       <ToolRenderBoundary name={name}>
         {/*
          * A TOOL WITH NO REGISTERED RENDERER STILL HAPPENED, and since tools moved to the server
@@ -587,7 +437,7 @@ const TranscriptToolCall = memo(function TranscriptToolCall({
          */}
         {drawn ?? <ServerToolLine name={name} result={result} />}
       </ToolRenderBoundary>
-    </Arriving>
+    </MessageLayout>
   );
 });
 
@@ -634,7 +484,9 @@ function ServerToolLine({ name, result }: { name: string; result?: string }) {
 export function ChatTranscript({
   busy = false,
   commandNames = "",
+  conversationKey,
   messages,
+  onRowRender,
   onRemoveQueued,
   queued = EMPTY_QUEUE,
   restoring = false,
@@ -652,40 +504,91 @@ export function ChatTranscript({
    * cost was markdown parsing and chart SVGs, and those are skipped by the memoised children below,
    * which is where the 25x came from. This runs per render and is not worth guarding.
    */
-  const items = toVisibleChatItems(messages);
-  const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE_SIZE);
-  const visible = newestVisibleChatItems(items, historyLimit);
-
-  /*
-   * One decider per mounted transcript, so opening a different channel starts the cascade over and
-   * a message never inherits a delay from a conversation it was not in.
-   */
-  const delaysRef = useRef<ReturnType<typeof createFirstPaintDelays> | null>(
-    null,
+  const items = toVisibleChatItems(messages).filter(
+    (item): item is RenderedChatItem => item.kind !== "reasoning",
   );
-  if (delaysRef.current === null) {
-    delaysRef.current = createFirstPaintDelays();
-  }
-  const delays = delaysRef.current;
+  const [historyLimit, setHistoryLimit] = useState(() =>
+    conversationKey
+      ? conversationStateCache.get(conversationKey).historyLimit
+      : HISTORY_PAGE_SIZE,
+  );
+  const visible = newestVisibleChatItems(items, historyLimit);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const restoredScroll = useRef(false);
+  const revealAnchor = useRef<{
+    scrollHeight: number;
+    scrollTop: number;
+  } | null>(null);
 
-  /*
-   * Settled AFTER the render that first had items, not on mount: history arrives asynchronously, so
-   * on mount there is nothing to stagger yet and marking it settled then would mean the history
-   * cascade never happens.
-   */
-  const hasItems = items.length > 0;
-  useEffect(() => {
-    if (hasItems) {
-      delays.settle();
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (
+      !viewport ||
+      restoredScroll.current ||
+      restoring ||
+      items.length === 0 ||
+      !conversationKey
+    )
+      return;
+    const saved = conversationStateCache.get(conversationKey);
+    if (saved.scrollTop !== null) {
+      viewport.scrollTop =
+        saved.distanceFromEnd !== null && saved.distanceFromEnd <= 2
+          ? Math.max(0, viewport.scrollHeight - viewport.clientHeight)
+          : Math.min(
+              saved.scrollTop,
+              Math.max(0, viewport.scrollHeight - viewport.clientHeight),
+            );
     }
-  }, [hasItems, delays]);
+    restoredScroll.current = true;
+  }, [conversationKey, items.length, restoring]);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    const anchor = revealAnchor.current;
+    if (!viewport || !anchor) return;
+    viewport.scrollTop = anchoredScrollTop(
+      anchor.scrollTop,
+      anchor.scrollHeight,
+      viewport.scrollHeight,
+    );
+    revealAnchor.current = null;
+  });
+
+  const revealOlder = () => {
+    const viewport = viewportRef.current;
+    if (viewport) {
+      revealAnchor.current = {
+        scrollHeight: viewport.scrollHeight,
+        scrollTop: viewport.scrollTop,
+      };
+    }
+    const next = historyLimit + HISTORY_PAGE_SIZE;
+    if (conversationKey)
+      conversationStateCache.setHistoryLimit(conversationKey, next);
+    setHistoryLimit(next);
+  };
 
   return (
     <MessageScrollerProvider autoScroll>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <ActivityMenu items={items} busy={busy} run={run} stopped={stopped} />
         <MessageScroller className="min-h-0 flex-1">
-          <MessageScrollerViewport>
+          <MessageScrollerViewport
+            onScroll={(event) => {
+              if (!conversationKey) return;
+              const viewport = event.currentTarget;
+              conversationStateCache.setScroll(conversationKey, {
+                scrollTop: viewport.scrollTop,
+                distanceFromEnd: Math.max(
+                  0,
+                  viewport.scrollHeight -
+                    viewport.clientHeight -
+                    viewport.scrollTop,
+                ),
+              });
+            }}
+            ref={viewportRef}
+          >
             <MessageScrollerContent
               aria-busy={busy}
               className="mx-auto w-full max-w-2xl px-4 py-6"
@@ -702,9 +605,7 @@ export function ChatTranscript({
                 <div className="flex justify-center pb-6">
                   <button
                     className="rounded-full border border-border bg-background px-4 py-2 text-muted-foreground text-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-                    onClick={() =>
-                      setHistoryLimit((limit) => limit + HISTORY_PAGE_SIZE)
-                    }
+                    onClick={revealOlder}
                     type="button"
                   >
                     Показать предыдущие сообщения ({visible.hidden})
@@ -716,37 +617,19 @@ export function ChatTranscript({
                   <MessageScrollerItem key={item.id} messageId={item.id}>
                     <TranscriptToolCall
                       args={item.toolCall.function.arguments}
-                      delay={delays.delayFor(
-                        item.id,
-                        index,
-                        visible.items.length,
-                      )}
+                      id={item.id}
                       name={item.toolCall.function.name}
+                      onRender={onRowRender}
                       result={item.result}
                       toolCallId={item.toolCall.id}
                     />
                   </MessageScrollerItem>
-                ) : item.kind === "reasoning" ? (
-                  <MessageScrollerItem key={item.id} messageId={item.id}>
-                    <ReasoningProgress
-                      delay={delays.delayFor(
-                        item.id,
-                        index,
-                        visible.items.length,
-                      )}
-                      streaming={busy && index === visible.items.length - 1}
-                      text={item.text}
-                    />
-                  </MessageScrollerItem>
-                ) : (
+                ) : item.kind === "reasoning" ? null : (
                   <MessageScrollerItem key={item.id} messageId={item.id}>
                     <TranscriptMessage
                       commandNames={commandNames}
-                      delay={delays.delayFor(
-                        item.id,
-                        index,
-                        visible.items.length,
-                      )}
+                      id={item.id}
+                      onRender={onRowRender}
                       role={item.role}
                       streaming={
                         busy &&
@@ -758,6 +641,16 @@ export function ChatTranscript({
                   </MessageScrollerItem>
                 ),
               )}
+              {busy ? (
+                <p
+                  className="flex items-center gap-2 text-muted-foreground text-sm"
+                  data-testid="transcript-run-status"
+                  role="status"
+                >
+                  <span className="size-1.5 animate-pulse rounded-full bg-primary motion-reduce:animate-none" />
+                  {run ? agentRunStatusLabel(run.status) : "Сотрудник работает"}
+                </p>
+              ) : null}
               {/*
                * Outside the item list, so neither of these is a message. Each has no id, is never
                * anchored, and is gone by the next turn — giving one a `MessageScrollerItem` would ask

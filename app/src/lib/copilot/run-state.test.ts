@@ -68,21 +68,45 @@ describe("agent run state", () => {
 
   test("reconciles a missed final event only when a persisted answer exists", () => {
     let state = step(initialAgentRunState, { type: "accepted", at: 100 });
-    state = step(state, { type: "reconciled", at: 500, hasAssistantOutput: false });
+    state = step(state, {
+      type: "reconciled",
+      at: 500,
+      hasAssistantOutput: false,
+    });
     expect(state.status).toBe("accepted");
-    state = step(state, { type: "reconciled", at: 1_000, hasAssistantOutput: true });
+    state = step(state, {
+      type: "reconciled",
+      at: 1_000,
+      hasAssistantOutput: true,
+    });
     expect(state.status).toBe("completed");
     expect(state.finishedAt).toBe(1_000);
   });
 
-  test("keeps terminal failure and cancellation explicit", () => {
+  test("keeps the first terminal fact despite later terminal or starter events", () => {
     let state = step(initialAgentRunState, { type: "send_started", at: 100 });
-    state = step(state, { type: "failed", at: 900, error: "Gateway unavailable" });
+    state = step(state, {
+      type: "failed",
+      at: 900,
+      error: "Gateway unavailable",
+    });
     expect(state.status).toBe("failed");
     expect(state.error).toBe("Gateway unavailable");
     state = step(state, { type: "cancelled", at: 1_000 });
-    expect(state.status).toBe("cancelled");
-    expect(state.error).toBeNull();
+    state = step(state, { type: "run_started", at: 1_100, runId: "late-run" });
+    expect(state.status).toBe("failed");
+    expect(state.error).toBe("Gateway unavailable");
+    expect(state.runId).not.toBe("late-run");
+  });
+
+  test("ignores an older phase event instead of moving the visible lifecycle backwards", () => {
+    let state = step(initialAgentRunState, { type: "send_started", at: 100 });
+    state = step(state, { type: "text_delta", at: 500 });
+    state = step(state, { type: "tool_started", at: 300, name: "late-tool" });
+
+    expect(state.status).toBe("generating");
+    expect(state.updatedAt).toBe(500);
+    expect(state.toolName).toBeNull();
   });
 
   test("formats elapsed time for the activity panel", () => {
