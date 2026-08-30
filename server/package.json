@@ -16,6 +16,7 @@
     "@better-auth/drizzle-adapter": "^1.7.1",
     "@better-auth/sso": "^1.7.1",
     "@copilotkit/runtime": "1.69.0",
+    "@fastify/busboy": "3.2.2",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "better-auth": "^1.7.1",
     "cel-js": "^0.8.2",
@@ -25,10 +26,12 @@
     "postgres": "^3.4.9",
     "rxjs": "7.8.1",
     "yaml": "^2.9.0",
+    "yauzl": "3.4.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@copilotkit/aimock": "1.39.0",
+    "@types/yauzl": "3.4.0",
     "drizzle-kit": "^0.31.10",
     "eventsource": "3.0.7"
   }
