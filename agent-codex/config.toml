@@ -39,6 +39,7 @@ extends = ":read-only"
 [permissions.data-control-agent.filesystem]
 ":minimal" = "read"
 ":workspace_roots" = "write"
+"/workspace/.git" = "write"
 "~/.codex" = "deny"
 
 [permissions.data-control-agent.network]

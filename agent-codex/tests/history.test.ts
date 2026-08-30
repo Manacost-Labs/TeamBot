@@ -22,6 +22,13 @@ const input = {
 } as unknown as RunAgentInput;
 
 describe("Codex prompt translation", () => {
+  test("allows the data-control profile to commit inside its dedicated clone", async () => {
+    const config = await Bun.file(
+      new URL("../config.toml", import.meta.url),
+    ).text();
+    expect(config).toContain('"/workspace/.git" = "write"');
+  });
+
   test("gives only the data-control agent a writable parser workspace", () => {
     expect(permissionProfileFor(input)).toBe("openbot-agent");
     const dataControl = { ...input, agentId: "data-control" } as RunAgentInput;
