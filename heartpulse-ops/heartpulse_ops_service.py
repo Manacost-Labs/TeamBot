@@ -33,14 +33,48 @@ PUBLIC_URL = os.environ.get(
     "HEARTPULSE_PUBLIC_AUDIT_URL",
     "https://hearthpulse.net/api/bg/tier-lists?list=strategies&source=hsreplay",
 )
+PUBLIC_BASE_URL = os.environ.get(
+    "HEARTHPULSE_PUBLIC_BASE_URL",
+    "https://hearthpulse.net",
+).rstrip("/")
 VALIDATION_FILE = Path(os.environ.get("HEARTPULSE_OPS_VALIDATION_FILE", "/var/lib/openbot-heartpulse-ops/validation.json"))
 DEPLOY_HELPER = os.environ.get("HEARTPULSE_DEPLOY_HELPER", "/usr/local/sbin/heartpulse-deploy")
 EXPECTED_BRANCH = "agent/heartpulse-control"
 SAFE_COMMIT = re.compile(r"^[a-f0-9]{40}$")
 TEST_PATH = re.compile(r"^tests/[A-Za-z0-9_./-]+\.(?:ts|mjs)$")
 MAX_OUTPUT = 45_000
+MAX_PAGE_BYTES = 180_000
 MUTATION_LOCK = threading.Lock()
 SERVER_TOKEN = ""
+
+# The route matrix intentionally follows the user-facing navigation rather than
+# private/admin screens. API calls for subscription-gated sections are allowed to
+# return 401/403: the page shell must still be healthy and the access state is
+# reported explicitly to the agent.
+SITE_SECTIONS: tuple[dict[str, Any], ...] = (
+    {"id": "home", "title": "Главная", "path": "/", "apis": ("/api/home/summary",)},
+    {"id": "articles", "title": "Статьи", "path": "/articles", "apis": ("/api/articles",)},
+    {"id": "faq", "title": "FAQ", "path": "/faq", "apis": ()},
+    {"id": "developer-api", "title": "API", "path": "/developers/api", "apis": ("/api/v1/openapi.json",)},
+    {"id": "gallery", "title": "Галерея", "path": "/gallery", "apis": ("/api/gallery",)},
+    {"id": "cosmetics", "title": "Косметика", "path": "/cosmetics", "apis": ("/api/cosmetics/heroes", "/api/cosmetics/coins", "/api/cosmetics/pets")},
+    {"id": "guides-archive", "title": "Архив гайдов", "path": "/guides-archive", "apis": ("/api/guides-archive",)},
+    {"id": "contests", "title": "Конкурсы", "path": "/contests", "apis": ("/api/contests",)},
+    {"id": "standard-cards", "title": "Standard · Карты", "path": "/standard/cards", "apis": ("/api/constructed-cards?format=standard&limit=1",)},
+    {"id": "standard-matchups", "title": "Standard · Матчапы", "path": "/standard/matchups", "apis": ("/api/standard/matchups?format=standard",)},
+    {"id": "standard-meta", "title": "Standard · Мета", "path": "/standard/meta", "apis": ("/api/standard-meta/teaser",)},
+    {"id": "standard-fun-decks", "title": "Standard · Фан-колоды", "path": "/standard/fun-decks", "apis": ("/api/fun-decks",)},
+    {"id": "standard-archetypes", "title": "Standard · Архетипы", "path": "/standard/archetypes", "apis": ("/api/constructed-archetypes/teaser",)},
+    {"id": "standard-vicious-gold", "title": "Standard · Vicious Gold", "path": "/standard/vicious-gold", "apis": ("/api/vicious-syndicate-gold", "/api/vicious-syndicate-gold/builds")},
+    {"id": "arena-classes", "title": "Арена · Классы", "path": "/classes", "apis": ("/api/winrates?source=hsreplay",)},
+    {"id": "arena-tierlist", "title": "Арена · Тир-лист", "path": "/tierlist", "apis": ("/api/tierlist?source=hsreplay",)},
+    {"id": "arena-legendaries", "title": "Арена · Легендарки", "path": "/legendaries", "apis": ("/api/legendaries?source=hsreplay",)},
+    {"id": "bg-heroes", "title": "Battlegrounds · Герои", "path": "/heroes", "apis": ("/api/bg/heroes?mode=solo&mmr=TOP_50_PERCENT", "/api/bg/library/extra/heroes?per_page=1")},
+    {"id": "bg-library", "title": "Battlegrounds · Библиотека", "path": "/library", "apis": ("/api/bg/library/cards?card_type=minion&in_pool=1", "/api/bg/library/meta")},
+    {"id": "bg-tier-list", "title": "Battlegrounds · Тир-лист", "path": "/battlegrounds/tier-list", "apis": ("/api/bg/tier-lists?list=minions", "/api/bg/tier-lists?list=spells", "/api/bg/tier-lists?list=trinkets")},
+    {"id": "bg-strategies", "title": "Battlegrounds · Стратегии", "path": "/battlegrounds/strategies", "apis": ("/api/bg/tier-lists?list=strategies&source=hsreplay",)},
+    {"id": "bg-tier-builder", "title": "Battlegrounds · Конструктор тир-листов", "path": "/battlegrounds/tier-builder", "apis": ()},
+)
 
 
 class Refused(RuntimeError):
@@ -76,6 +110,124 @@ def _request_json(url: str, *, timeout: int = 30) -> tuple[int, Any]:
             return response.status, json.load(response)
     except urllib.error.HTTPError as error:
         return error.code, None
+
+
+def _request_page(url: str, *, timeout: int = 30) -> tuple[int, str, str]:
+    request = urllib.request.Request(url, headers={"Accept": "text/html", "User-Agent": "HeartPulse-Control/1.0"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read(MAX_PAGE_BYTES + 1)
+            return response.status, response.headers.get_content_type(), body.decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as error:
+        return error.code, error.headers.get_content_type(), ""
+
+
+def _summarize_json(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, dict):
+        summary: dict[str, Any] = {"keys": sorted(str(key) for key in payload.keys())[:20]}
+        for key in ("data", "items", "rows", "results", "entries", "cards", "heroes", "strategies"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                summary[f"{key}Count"] = len(value)
+        tiers = payload.get("tiers")
+        if isinstance(tiers, dict):
+            summary["tierCounts"] = {
+                str(tier): len(rows) if isinstance(rows, list) else 0
+                for tier, rows in tiers.items()
+                if str(tier) in {"S", "A", "B", "C", "D"}
+            }
+        return summary
+    if isinstance(payload, list):
+        return {"type": "array", "count": len(payload)}
+    return {"type": type(payload).__name__}
+
+
+def _audit_page(path: str) -> dict[str, Any]:
+    try:
+        status, content_type, body = _request_page(f"{PUBLIC_BASE_URL}{path}")
+    except Exception as error:
+        return {"path": path, "httpStatus": None, "contentType": None, "bytes": 0, "state": "unavailable", "issues": [f"request_failed:{type(error).__name__}"]}
+    issues: list[str] = []
+    if status in {401, 403}:
+        state = "access_protected"
+    elif status < 200 or status >= 400:
+        state = "unavailable"
+        issues.append(f"http_{status}")
+    elif "html" not in content_type:
+        state = "invalid"
+        issues.append("not_html")
+    elif 'id="root"' not in body and "id='root'" not in body:
+        state = "invalid"
+        issues.append("missing_app_root")
+    elif len(body) > MAX_PAGE_BYTES:
+        state = "invalid"
+        issues.append("page_too_large")
+    else:
+        state = "healthy"
+    return {"path": path, "httpStatus": status, "contentType": content_type, "bytes": len(body), "state": state, "issues": issues}
+
+
+def _audit_section_api(path: str) -> dict[str, Any]:
+    try:
+        status, payload = _request_json(f"{PUBLIC_BASE_URL}{path}")
+    except Exception as error:
+        return {"path": path, "httpStatus": None, "state": "unavailable", "issues": [f"request_failed:{type(error).__name__}"]}
+    if status in {401, 403}:
+        return {"path": path, "httpStatus": status, "state": "access_protected", "issues": ["endpoint_requires_auth"]}
+    if status < 200 or status >= 400:
+        return {"path": path, "httpStatus": status, "state": "unavailable", "issues": [f"http_{status}"]}
+    if payload is None:
+        return {"path": path, "httpStatus": status, "state": "invalid", "issues": ["invalid_json"]}
+    return {"path": path, "httpStatus": status, "state": "healthy", "summary": _summarize_json(payload), "issues": []}
+
+
+def audit_site_sections() -> dict[str, Any]:
+    """Audit every primary user-facing HeartPulse route and its data boundary."""
+    sections: list[dict[str, Any]] = []
+    for section in SITE_SECTIONS:
+        page = _audit_page(str(section["path"]))
+        apis = [_audit_section_api(str(path)) for path in section.get("apis", ())]
+        issues = [f"page:{issue}" for issue in page["issues"]]
+        issues.extend(f"api:{probe['path']}:{issue}" for probe in apis for issue in probe.get("issues", []))
+        states = [page["state"], *(probe["state"] for probe in apis)]
+        if any(state in {"unavailable", "invalid"} for state in states):
+            state = "degraded"
+        elif all(state == "access_protected" for state in states):
+            state = "access_protected"
+        else:
+            state = "healthy"
+        sections.append({"id": section["id"], "title": section["title"], "page": page, "apis": apis, "state": state, "issues": issues})
+    degraded = [section["id"] for section in sections if section["state"] == "degraded"]
+    protected = [section["id"] for section in sections if section["state"] == "access_protected"]
+    protected_apis = [
+        probe["path"]
+        for section in sections
+        for probe in section["apis"]
+        if probe["state"] == "access_protected"
+    ]
+    degraded_apis = [
+        probe["path"]
+        for section in sections
+        for probe in section["apis"]
+        if probe["state"] in {"unavailable", "invalid"}
+    ]
+    return {
+        "checkedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "coverage": {
+            "sections": len(sections),
+            "healthy": sum(section["state"] == "healthy" for section in sections),
+            "accessProtected": len(protected),
+            "degraded": len(degraded),
+            "apiBoundaries": sum(len(section["apis"]) for section in sections),
+            "protectedApis": len(protected_apis),
+            "degradedApis": len(degraded_apis),
+        },
+        "sections": sections,
+        "issues": degraded,
+        "accessProtected": protected,
+        "accessProtectedApis": protected_apis,
+        "degradedApis": degraded_apis,
+    }
 
 
 def _audit_payload(payload: Any) -> dict[str, Any]:
@@ -207,6 +359,7 @@ def publish_and_verify(summary: Any) -> dict[str, Any]:
 
 def dispatch(tool: str, arguments: Any) -> dict[str, Any]:
     args = arguments if isinstance(arguments, dict) else {}
+    if tool == "audit_site_sections": return audit_site_sections()
     if tool == "audit_strategy_data": return audit_strategy_data()
     if tool == "diagnose_rendering": return diagnose_rendering()
     if tool == "codegraph_explore": return codegraph_explore(args.get("question"))

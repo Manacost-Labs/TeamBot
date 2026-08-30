@@ -6,6 +6,12 @@ const SERVICE_URL =
 
 const TOOLS: readonly McpTool[] = Object.freeze([
   {
+    name: "audit_site_sections",
+    description:
+      "Audit all primary user-facing HeartPulse sections: page shells, API boundaries, JSON validity, access-protected states and broken routes across Home, Articles, Standard, Arena, Battlegrounds, Guides, Gallery, Cosmetics and Contests.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
     name: "audit_strategy_data",
     description:
       "Audit the complete API-to-HeartPulse Battlegrounds strategy payload. Validates HTTP, count, fetchedAt, card coverage, tier distribution and HSReplay all-D-without-metrics regression.",

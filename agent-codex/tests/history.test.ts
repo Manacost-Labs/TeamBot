@@ -63,6 +63,7 @@ describe("Codex prompt translation", () => {
     expect(isHeartPulseControlRun(heartpulse)).toBe(true);
     expect(permissionProfileFor(heartpulse)).toBe("heartpulse-control-agent");
     expect(instructionsFor(heartpulse)).toContain("audit_strategy_data");
+    expect(instructionsFor(heartpulse)).toContain("audit_site_sections");
     expect(instructionsFor(heartpulse)).toContain(
       "HSReplay all-D without metrics",
     );

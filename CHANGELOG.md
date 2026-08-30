@@ -8,6 +8,10 @@ Newest first. `Unreleased` is what is on `main` and not yet tagged.
 
 ## Unreleased
 
+### Контроль HearthPulse проверяет все основные разделы
+
+Агент «Контроль HearthPulse» теперь по расписанию проверяет HTML-оболочку и API-границы 22 основных страниц: Главная, статьи, Standard, Arena, Battlegrounds, архив гайдов, галерея, косметика, FAQ, API и конкурсы. Защищённые разделы отмечаются как `access_protected`, а ошибки маршрута, JSON и недоступные API передаются в цикл диагностики и безопасного исправления.
+
 ### A Bot's shell can no longer reach the embedded database without a password
 
 In the all-in-one image the cluster was `trust`-auth on loopback, and the Bot's shell runs in the

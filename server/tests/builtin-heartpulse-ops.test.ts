@@ -11,6 +11,7 @@ afterEach(() => {
 describe("HeartPulse Ops transport", () => {
   test("advertises the governed audit, repair and verification cycle", async () => {
     expect((await listTools()).map((tool) => tool.name)).toEqual([
+      "audit_site_sections",
       "audit_strategy_data",
       "diagnose_rendering",
       "codegraph_explore",

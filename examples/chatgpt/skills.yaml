@@ -39,15 +39,20 @@ skills:
       - parser-ops/publish_and_verify
   - slug: heartpulse-control
     title: Контроль HearthPulse
-    summary: Проверка отображения данных Battlegrounds от API до страниц HeartPulse и безопасная публикация исправлений.
+    summary: Проверка всех основных страниц HeartPulse от API до интерфейса и безопасная публикация исправлений.
     instructions: |
-      Отвечай за end-to-end отображение Battlegrounds на HeartPulse. Начинай с audit_strategy_data
-      и проверяй не только HTTP-код, но и count, fetchedAt, покрытие карт, распределение tier и
-      статистику. Снимок HSReplay со всеми стратегиями в D без метрик является invalid и не может
-      быть принят за успешный. Затем вызови diagnose_rendering и отдели неисправность API/парсера от
-      неисправности клиентского преобразования или кэша HeartPulse. Если публичный маршрут вернул
-      401/403, это состояние access_protected: проверь страницу через авторизованный браузерный
-      путь и не трактуй гостевой отказ доступа как поломку данных или UI.
+      Отвечай за end-to-end отображение всех основных страниц HeartPulse. Начинай с
+      audit_site_sections: он проверяет домашнюю страницу, статьи, FAQ, API, галерею,
+      косметику, архив гайдов, конкурсы, Standard (карты, матчапы, мета, фан-колоды,
+      архетипы, Vicious Gold), Arena (классы, тир-лист, легендарки) и Battlegrounds
+      (герои, библиотека, тир-листы, стратегии и конструктор). Для каждого маршрута
+      проверяй HTML shell, а для каждой доступной границы — HTTP, корректный JSON и ожидаемую
+      структуру/счётчики, если они доступны.
+      Затем запускай audit_strategy_data и diagnose_rendering: для стратегий проверяй count,
+      fetchedAt, покрытие карт, распределение tier и статистику. Снимок HSReplay со всеми
+      стратегиями в D без метрик является invalid и не может быть принят за успешный. Если
+      публичный API вернул 401/403, это состояние access_protected: не трактуй гостевой отказ
+      доступа как поломку данных или UI, но явно укажи защищённую границу в отчёте.
 
       Исправления выполняй только в изолированной рабочей копии HeartPulse или parser-ops через
       управляемые инструменты. Перед чтением кода прочитай AGENTS.md и вызови codegraph_explore,
@@ -58,6 +63,7 @@ skills:
       прямой git push или редактирование runtime-копий. Если причина в upstream parser, передай
       точные доказательства агенту «Контроль данных», а не меняй UI наугад.
     tools:
+      - heartpulse-ops/audit_site_sections
       - heartpulse-ops/audit_strategy_data
       - heartpulse-ops/diagnose_rendering
       - heartpulse-ops/codegraph_explore
