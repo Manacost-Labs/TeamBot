@@ -68,8 +68,9 @@ services:
       MANAGED_AGENT_TOKEN: ${MANAGED_AGENT_TOKEN}
       AGENT_TOOL_TOKEN: ${AGENT_TOOL_TOKEN}
       CODEX_MODEL: ${CODEX_MODEL:-}
-      # Low keeps GPT-5.6 Sol while reducing time to the first visible result. Concise summaries are
-      # streamed to the Russian progress card; private reasoning tokens never leave the model.
+      # The default assistant may use the deployment's configured model; control agents override
+      # this per-agent with GPT-5.6 Luna xhigh. Concise summaries are streamed to the Russian
+      # progress card; private reasoning tokens never leave the model.
       CODEX_REASONING_EFFORT: ${CODEX_REASONING_EFFORT:-low}
       CODEX_REASONING_SUMMARY: ${CODEX_REASONING_SUMMARY:-concise}
       OPENBOT_TOOL_URL: http://openbot:3001/api/agent-tools/call
