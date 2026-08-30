@@ -24,7 +24,10 @@ import type { ChannelEventHub } from "./channels/events";
 import { type ChannelStore, createChannelRoutes } from "./channels/routes";
 import type { ThreadIdentity } from "./channels/thread-identity";
 import { createThreadRoutes } from "./channels/thread-routes";
-import { createThreadReader } from "./channels/thread-status";
+import {
+  createThreadExecutionReader,
+  createThreadReader,
+} from "./channels/thread-status";
 import { createComponentRoutes } from "./components/routes";
 import type { SandboxedStore } from "./components/sandboxed";
 import { createSandboxedRoutes } from "./components/sandboxed-routes";
@@ -974,6 +977,7 @@ export function createApp(
   }
 
   if (threadIdentity) {
+    const intelligence = createIntelligenceClient(config.runtime.intelligence);
     app.route(
       "/api/threads",
       createThreadRoutes(
@@ -984,9 +988,18 @@ export function createApp(
         // rather than assumed, though: this is the one place besides the runtime mount itself that
         // needs to reach Intelligence, and it should keep working unmodified if that guarantee ever
         // loosens and a deployment can legitimately have no reader to build.
-        createThreadReader(
-          createIntelligenceClient(config.runtime.intelligence),
-        ),
+        createThreadReader(intelligence),
+        channelStore ? createThreadExecutionReader(intelligence) : undefined,
+        channelStore
+          ? async (threadId, actor, agentId, channelId) => {
+              const channel = await channelStore.get(actor, channelId);
+              return Boolean(
+                channel &&
+                  channel.threadId === threadId &&
+                  channel.agentIds.includes(agentId),
+              );
+            }
+          : undefined,
       ),
     );
   }

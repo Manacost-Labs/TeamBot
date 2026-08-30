@@ -1,12 +1,21 @@
 import { describe, expect, it } from "bun:test";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import type { RunAgentInput } from "@ag-ui/core";
 import {
   codexToolName,
   modelFor,
   reasoningEffortFor,
   researchFinalisationIssue,
+  runCodex,
   toolCallNames,
   workspaceFor,
 } from "../src/codex-run";
+import {
+  createAgentExecutionTiming,
+  type ExecutionTimingRecord,
+} from "../src/execution-timing";
 
 describe("Codex dynamic tool names", () => {
   it("moves governed MCP tools out of Codex's reserved namespace", () => {
@@ -100,3 +109,148 @@ describe("Codex dynamic tool names", () => {
     expect(reasoningEffortFor(input)).toBe("low");
   });
 });
+
+describe("Codex process timing", () => {
+  it("records spawn, initialization, thread and turn acknowledgements in order", async () => {
+    const input = {
+      agentId: "spoofed-agent",
+      runId: "run-process",
+      threadId: "thread-process",
+      messages: [{ id: "u", role: "user", content: "Do not log me" }],
+      tools: [],
+      context: [],
+      state: {},
+      forwardedProps: { openbotBotId: "codex" },
+    } as unknown as RunAgentInput;
+    const records: ExecutionTimingRecord[] = [];
+    const timing = createAgentExecutionTiming(input, {
+      requestId: "request-process",
+      now: () => records.length,
+      sink: (record) => records.push(record),
+    });
+
+    await runCodex(
+      input,
+      {
+        onText() {},
+        onReasoning() {},
+        onToolStart() {},
+        onToolResult() {},
+      },
+      { timing, spawn: fakeCodexProcess },
+    );
+
+    expect(records.map((record) => record.phase)).toEqual([
+      "child_process_spawned",
+      "codex_initialized",
+      "codex_thread_started",
+      "codex_turn_started",
+    ]);
+    expect(JSON.stringify(records)).not.toContain("Do not log me");
+  });
+
+  it("rejects an initialize request when the child process fails before spawn", async () => {
+    await expect(
+      runCodex(processInput(), emptyCallbacks, {
+        spawn: () => failingCodexProcess("error"),
+      }),
+    ).rejects.toThrow("early spawn failure");
+  });
+
+  it("rejects an initialize request when the spawned child exits before replying", async () => {
+    await expect(
+      runCodex(processInput(), emptyCallbacks, {
+        spawn: () => failingCodexProcess("exit"),
+      }),
+    ).rejects.toThrow("stopped with code 17");
+  });
+});
+
+const emptyCallbacks = {
+  onText() {},
+  onReasoning() {},
+  onToolStart() {},
+  onToolResult() {},
+};
+
+function processInput(): RunAgentInput {
+  return {
+    agentId: "spoofed-agent",
+    runId: "run-process-failure",
+    threadId: "thread-process-failure",
+    messages: [],
+    tools: [],
+    context: [],
+    state: {},
+    forwardedProps: { openbotBotId: "codex" },
+  } as unknown as RunAgentInput;
+}
+
+function fakeCodexProcess() {
+  const child = new EventEmitter() as EventEmitter & {
+    stdin: PassThrough;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    killed: boolean;
+    kill(): boolean;
+  };
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.killed = false;
+  child.kill = () => {
+    child.killed = true;
+    return true;
+  };
+  queueMicrotask(() => child.emit("spawn"));
+  child.stdin.on("data", (chunk) => {
+    const request = JSON.parse(String(chunk)) as {
+      id?: number;
+      method?: string;
+    };
+    if (request.id === undefined) return;
+    const result =
+      request.method === "thread/start"
+        ? { thread: { id: "codex-thread" } }
+        : {};
+    queueMicrotask(() => {
+      child.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
+      if (request.method === "turn/start") {
+        child.stdout.write(
+          `${JSON.stringify({
+            method: "turn/completed",
+            params: { turn: { status: "completed" } },
+          })}\n`,
+        );
+      }
+    });
+  });
+  return child as unknown as ChildProcessWithoutNullStreams;
+}
+
+function failingCodexProcess(kind: "error" | "exit") {
+  const child = new EventEmitter() as EventEmitter & {
+    stdin: PassThrough;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    killed: boolean;
+    kill(): boolean;
+  };
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.killed = false;
+  child.kill = () => {
+    child.killed = true;
+    return true;
+  };
+  queueMicrotask(() => {
+    if (kind === "error") {
+      child.emit("error", new Error("early spawn failure"));
+      return;
+    }
+    child.emit("spawn");
+    queueMicrotask(() => child.emit("exit", 17));
+  });
+  return child as unknown as ChildProcessWithoutNullStreams;
+}

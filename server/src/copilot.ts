@@ -1,5 +1,5 @@
 import type { BaseEvent, RunAgentInput } from "@ag-ui/client";
-import { AbstractAgent, HttpAgent } from "@ag-ui/client";
+import { AbstractAgent, HttpAgent, RunAgentInputSchema } from "@ag-ui/client";
 import type { BuiltInAgentConfiguration } from "@copilotkit/runtime/v2";
 import {
   BuiltInAgent,
@@ -17,6 +17,11 @@ import {
 import type { AgentActor } from "./agents/profile-types";
 import type { AgentFetch, StallGuard } from "./channels/stall-guard";
 import type { DeploymentConfig } from "./config";
+import {
+  createRuntimeRequestTiming,
+  type RuntimeTimingOptions,
+  type RuntimeTimingRecorder,
+} from "./copilot-telemetry";
 import type { SelectableSkill, Selection } from "./plugins/selection";
 import {
   latestUserText,
@@ -999,26 +1004,7 @@ class IntelligenceKnowingANewThread extends CopilotKitIntelligence {
  */
 const THREAD_LOCK_TTL_SECONDS = 120;
 
-type RuntimeRequestTrace = { id: string; startedAt: number };
-const runtimeRequestTraces = new WeakMap<Request, RuntimeRequestTrace>();
-
-/** Structured, content-free timing for the runtime boundary. Message bodies and credentials never enter this log. */
-function logRuntimePhase(
-  phase: string,
-  route: string,
-  trace: RuntimeRequestTrace | undefined,
-  status?: number,
-): void {
-  console.info(
-    JSON.stringify({
-      type: "agent-runtime-phase",
-      phase,
-      route,
-      ...(trace ? { requestId: trace.id, elapsedMs: Date.now() - trace.startedAt } : {}),
-      ...(status === undefined ? {} : { status }),
-    }),
-  );
-}
+const runtimeRequestTraces = new WeakMap<Request, RuntimeTimingRecorder>();
 
 /**
  * The private deployment has no CopilotKit Inspector surface, so advertising it makes every chat
@@ -1070,6 +1056,8 @@ export function mountCopilotRuntime(
   agentFetch?: AgentFetch,
   /** How a run gets its tool for handing work on. Absent means no Bot is offered one. */
   handoffForActor?: (actorId: string) => HandoffForRun,
+  /** Deterministic timing seam for tests and structured-log adapters. */
+  runtimeTimingOptions?: RuntimeTimingOptions,
 ) {
   const { intelligence } = config.runtime;
 
@@ -1171,49 +1159,62 @@ export function mountCopilotRuntime(
       runtime,
       basePath,
       hooks: {
-        onRequest: ({ request, path }) => {
+        onRequest: async ({ request, path }) => {
           if (!/\/agent\/(?:[^/]+)\/(?:run|connect)$/.test(path)) return;
-          const trace = { id: crypto.randomUUID(), startedAt: Date.now() };
-          runtimeRequestTraces.set(request, trace);
-          logRuntimePhase("request_received", path, trace);
-        },
-        onBeforeHandler: ({ request, route }) => {
-          if (route.method !== "agent/run" && route.method !== "agent/connect") return;
-          logRuntimePhase(
-            "request_accepted",
-            `${route.method}:${route.agentId}`,
-            runtimeRequestTraces.get(request),
+          runtimeRequestTraces.set(
+            request,
+            await createRuntimeRequestTiming(
+              request,
+              path,
+              runtimeTimingOptions,
+            ),
           );
+        },
+        onBeforeHandler: async ({ request, route }) => {
+          if (route.method !== "agent/run" && route.method !== "agent/connect")
+            return;
+          const trace = runtimeRequestTraces.get(request);
+          trace?.record("route_resolved");
+          // CopilotKit's route hook runs before its own body parser. Validate the cloned body with
+          // the same public AG-UI schema so "accepted" means structurally accepted, while leaving
+          // the original stream untouched for the actual handler.
+          const body = await request
+            .clone()
+            .json()
+            .catch(() => undefined);
+          if (RunAgentInputSchema.safeParse(body).success) {
+            trace?.record("request_accepted");
+          }
         },
         onResponse: ({ response, route, request }) => {
-          if (route.method === "info") return disableInspectorMetadata(response);
-          if (route.method !== "agent/run" && route.method !== "agent/connect") {
+          if (route.method === "info")
+            return disableInspectorMetadata(response);
+          if (
+            route.method !== "agent/run" &&
+            route.method !== "agent/connect"
+          ) {
             return undefined;
           }
-          logRuntimePhase(
-            route.method === "agent/run" ? "submit_ack" : route.method,
-            `${route.method}:${route.agentId}`,
-            runtimeRequestTraces.get(request),
-            response.status,
-          );
+          runtimeRequestTraces
+            .get(request)
+            ?.record(
+              route.method === "agent/run" ? "submit_ack" : "connect_ack",
+              {
+                status: response.status,
+              },
+            );
           return undefined;
         },
         onError: ({ error, route, request }) => {
-          if (!route || (route.method !== "agent/run" && route.method !== "agent/connect")) {
+          if (
+            !route ||
+            (route.method !== "agent/run" && route.method !== "agent/connect")
+          ) {
             return;
           }
-          logRuntimePhase(
-            "request_error",
-            `${route.method}:${route.agentId}`,
-            runtimeRequestTraces.get(request),
-          );
-          console.warn(
-            JSON.stringify({
-              type: "agent-runtime-error",
-              route: `${route.method}:${route.agentId}`,
-              errorType: error instanceof Error ? error.name : "unknown",
-            }),
-          );
+          runtimeRequestTraces.get(request)?.record("request_error", {
+            errorType: error instanceof Error ? error.name : "unknown",
+          });
         },
       },
     }),

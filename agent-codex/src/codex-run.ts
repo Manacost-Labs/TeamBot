@@ -2,6 +2,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import readline from "node:readline";
 import type { RunAgentInput } from "@ag-ui/core";
 import { DataControlWorkflow } from "./data-control-workflow";
+import type { AgentExecutionTiming } from "./execution-timing";
 import {
   deploymentToolNames,
   instructionsFor,
@@ -174,8 +175,17 @@ export function reasoningEffortFor(input: RunAgentInput): string {
 export async function runCodex(
   input: RunAgentInput,
   callbacks: CodexCallbacks,
+  options: {
+    timing?: AgentExecutionTiming;
+    spawn?: () => ChildProcessWithoutNullStreams;
+  } = {},
 ): Promise<void> {
-  const client = new CodexProcess(input, callbacks);
+  const client = new CodexProcess(
+    input,
+    callbacks,
+    options.timing,
+    options.spawn,
+  );
   try {
     await client.run();
   } finally {
@@ -194,6 +204,7 @@ class CodexProcess {
   private fail!: (error: Error) => void;
   private nextId = 1;
   private turnCompleted = false;
+  private terminalFailure: Error | undefined;
   private stderr = "";
   private readonly protocolTrace: string[] = [];
   private readonly toolNames = new Map<string, string>();
@@ -206,6 +217,9 @@ class CodexProcess {
   constructor(
     private readonly input: RunAgentInput,
     private readonly callbacks: CodexCallbacks,
+    private readonly timing?: AgentExecutionTiming,
+    spawnProcess: () => ChildProcessWithoutNullStreams = () =>
+      spawnCodexProcess(input),
   ) {
     this.dataControlWorkflow = isDataControlRun(input)
       ? new DataControlWorkflow()
@@ -214,25 +228,27 @@ class CodexProcess {
       this.finish = resolve;
       this.fail = reject;
     });
-    this.process = spawn("codex", ["app-server"], {
-      cwd: workspaceFor(input),
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    // A process can fail while run() is still awaiting an earlier JSON-RPC response.
+    // Keep the terminal promise observed until run() reaches it.
+    void this.finished.catch(() => undefined);
+    this.process = spawnProcess();
+    this.process.once("spawn", () =>
+      this.timing?.record("child_process_spawned"),
+    );
     readline
       .createInterface({ input: this.process.stdout })
       .on("line", (line) => this.onLine(line));
     this.process.stderr.on("data", (chunk) => {
       this.stderr = `${this.stderr}${String(chunk)}`.slice(-4000);
     });
-    this.process.once("error", (error) => this.fail(error));
+    this.process.once("error", (error) => this.failRun(error));
     this.process.once("exit", (code) => {
       if (!this.turnCompleted) {
         const trace =
           this.protocolTrace.length > 0
             ? ` Protocol: ${this.protocolTrace.join(" -> ")}`
             : "";
-        this.fail(
+        this.failRun(
           new Error(
             `Codex app-server stopped with code ${code ?? "unknown"}.${trace} ${this.stderr}`.trim(),
           ),
@@ -246,6 +262,7 @@ class CodexProcess {
       clientInfo: { name: "openbot", title: "OpenBot", version: "1.0.0" },
       capabilities: { experimentalApi: true },
     });
+    this.timing?.record("codex_initialized");
     this.notify("initialized", {});
 
     const dynamicTools = this.input.tools
@@ -273,6 +290,7 @@ class CodexProcess {
     const threadId = started.thread?.id;
     if (!threadId) throw new Error("Codex did not return a thread id.");
     this.threadId = threadId;
+    this.timing?.record("codex_thread_started");
 
     await this.request("turn/start", {
       threadId,
@@ -280,6 +298,7 @@ class CodexProcess {
       effort: reasoningEffortFor(this.input),
       summary: REASONING_SUMMARY,
     });
+    this.timing?.record("codex_turn_started");
     await this.finished;
   }
 
@@ -302,6 +321,14 @@ class CodexProcess {
 
   private write(message: unknown): void {
     this.process.stdin.write(`${JSON.stringify(message)}\n`);
+  }
+
+  private failRun(error: Error): void {
+    if (this.terminalFailure) return;
+    this.terminalFailure = error;
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+    this.fail(error);
   }
 
   private onLine(line: string): void {
@@ -358,7 +385,7 @@ class CodexProcess {
         | { status?: string; error?: unknown }
         | undefined;
       if (turn?.status === "failed")
-        this.fail(
+        this.failRun(
           new Error(JSON.stringify(turn.error ?? "Codex turn failed.")),
         );
       else {
@@ -370,9 +397,9 @@ class CodexProcess {
             input: [{ type: "text", text: correction }],
             effort: reasoningEffortFor(this.input),
             summary: REASONING_SUMMARY,
-          }).catch(this.fail);
+          }).catch((error) => this.failRun(error));
         } else if (correction) {
-          this.fail(
+          this.failRun(
             new Error(
               `Контроль данных did not complete required repairs for: ${this.dataControlWorkflow?.unresolvedSourceIds().join(", ")}`,
             ),
@@ -388,11 +415,11 @@ class CodexProcess {
               input: [{ type: "text", text: RESEARCH_FINALISATION_PROMPT }],
               effort: reasoningEffortFor(this.input),
               summary: REASONING_SUMMARY,
-            }).catch(this.fail);
+            }).catch((error) => this.failRun(error));
             return;
           }
           if (researchIssue) {
-            this.fail(
+            this.failRun(
               new Error(`${researchIssue} The run was not marked complete.`),
             );
             return;
@@ -405,7 +432,7 @@ class CodexProcess {
     }
     if (message.method === "error") {
       if (message.params?.willRetry === true) return;
-      this.fail(new Error(JSON.stringify(message.params ?? "Codex error.")));
+      this.failRun(new Error(JSON.stringify(message.params ?? "Codex error.")));
     }
   }
 
@@ -457,6 +484,16 @@ class CodexProcess {
       },
     });
   }
+}
+
+function spawnCodexProcess(
+  input: RunAgentInput,
+): ChildProcessWithoutNullStreams {
+  return spawn("codex", ["app-server"], {
+    cwd: workspaceFor(input),
+    env: process.env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
 }
 
 async function callDeploymentTool(
