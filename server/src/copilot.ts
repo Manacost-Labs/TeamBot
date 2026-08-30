@@ -442,7 +442,9 @@ async function buildAgent(
     );
 
   const whole = withTools(granted);
-  if (!narrowing && !handoff) return whole;
+  // A Bot with no tools needs no per-run rebuild. A Bot with any server-side tool does: its trusted
+  // run/thread pair does not exist until `run(input)`, and must never be taken from model arguments.
+  if (!narrowing && !handoff && granted.length === 0) return whole;
 
   return new RunBuiltAgent(
     { agentId: agent.id, description: agent.name },
@@ -459,11 +461,12 @@ async function buildAgent(
        */
       const passing = (await handoff?.(agent.id, input)) ?? [];
       const tools = passing.length > 0 ? [...offered, ...passing] : offered;
-      // Nothing added and nothing narrowed means nothing to rebuild, and reusing the agent already
-      // built for this request keeps that path allocation-for-allocation what it was.
-      return tools.length === granted.length && passing.length === 0
-        ? whole
-        : withTools(tools);
+      return withTools(
+        bindGrantedToolsToRun(tools, {
+          runId: input.runId,
+          threadId: input.threadId,
+        }),
+      );
     },
   );
 }
@@ -1317,4 +1320,20 @@ export function mountCopilotRuntime(
       return read.messages;
     },
   };
+}
+/**
+ * Close built-in tool execution over this run's trusted ids.
+ *
+ * The model still supplies exactly one value: its tool arguments. Run and thread ids travel through
+ * a second, server-owned function parameter and are captured by a fresh tool array per run, so two
+ * simultaneous conversations cannot overwrite or observe one another's context.
+ */
+export function bindGrantedToolsToRun(
+  tools: readonly GrantedTool[],
+  context: Readonly<{ runId: string; threadId: string }>,
+): GrantedTool[] {
+  return tools.map((tool) => ({
+    ...tool,
+    execute: (args: unknown) => tool.execute(args, context),
+  }));
 }

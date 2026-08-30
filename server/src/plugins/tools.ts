@@ -27,11 +27,20 @@ import { PluginRefusedError, type PluginStore } from "./store";
  */
 export const REFUSAL_MARKER = "Refused.";
 
+/** Trusted values known only once a built-in Bot's run has started. */
+export type TrustedToolRunContext = Readonly<{
+  runId: string;
+  threadId: string;
+}>;
+
 export type GrantedTool = {
   name: string;
   description: string;
   parameters: z.ZodType;
-  execute: (args: unknown) => Promise<string>;
+  execute: (
+    args: unknown,
+    runContext?: TrustedToolRunContext,
+  ) => Promise<string>;
   /**
    * `<serverId>/<toolName>`, carried alongside the name the model is offered.
    *
@@ -167,7 +176,7 @@ export async function grantedTools(options: {
     ref: tool.ref,
     description: tool.description,
     parameters: parametersFor(tool.inputSchema),
-    execute: async (args: unknown) => {
+    execute: async (args: unknown, runContext?: TrustedToolRunContext) => {
       try {
         const result = await store.callTool({
           ref: tool.ref,
@@ -179,6 +188,12 @@ export async function grantedTools(options: {
               : {},
           botId,
           actorId,
+          ...(runContext
+            ? {
+                runId: runContext.runId,
+                threadId: runContext.threadId,
+              }
+            : {}),
         });
         /*
          * A vendor's error is named as one, not handed over as content.

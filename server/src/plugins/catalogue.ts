@@ -267,6 +267,20 @@ export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
     docsUrl: "https://developers.notion.com/guides/mcp/build-mcp-client",
   },
   {
+    key: "attachments",
+    title: "Conversation Attachments",
+    vendor: "OpenBot",
+    summary:
+      "Governed, read-only access to files attached to the current conversation.",
+    host: "builtin://attachments",
+    path: "/",
+    transport: "builtin-attachments",
+    auth: Object.freeze({ kind: "builtin" }),
+    writeTools: Object.freeze([]),
+    docsUrl:
+      "https://github.com/CopilotKit/OpenBot/blob/main/docs/attachments.md",
+  },
+  {
     key: "routines",
     title: "Routines",
     vendor: "OpenBot",

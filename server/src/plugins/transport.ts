@@ -1,3 +1,4 @@
+import * as builtinAttachments from "./builtin-conversation-attachments";
 import * as builtinHeartPulseOps from "./builtin-heartpulse-ops";
 import * as builtinParserOps from "./builtin-parser-ops";
 import * as builtinRoutines from "./builtin-routines";
@@ -104,6 +105,7 @@ export type VendorTransport = {
 export type TransportKind =
   | "mcp"
   | "google-drive-rest"
+  | "builtin-attachments"
   | "builtin-routines"
   | "builtin-parser-ops"
   | "builtin-heartpulse-ops";
@@ -111,6 +113,7 @@ export type TransportKind =
 const TRANSPORTS: Record<TransportKind, VendorTransport> = {
   mcp,
   "google-drive-rest": driveRest,
+  "builtin-attachments": builtinAttachments,
   "builtin-routines": builtinRoutines,
   "builtin-parser-ops": builtinParserOps,
   "builtin-heartpulse-ops": builtinHeartPulseOps,

@@ -285,6 +285,17 @@ describe("Routines", () => {
   });
 });
 
+describe("conversation attachments", () => {
+  const entry = catalogueEntry("attachments");
+
+  test("is a credential-free builtin reached only through its reviewed transport", () => {
+    expect(resolveServerUrl("attachments")?.url).toBe("builtin://attachments");
+    expect(entry?.auth.kind).toBe("builtin");
+    expect(entry?.transport).toBe("builtin-attachments");
+    expect(entry?.writeTools).toEqual([]);
+  });
+});
+
 describe("Parser Ops", () => {
   const entry = catalogueEntry("parser-ops");
 

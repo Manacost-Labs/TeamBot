@@ -26,6 +26,8 @@ import {
   processAttachmentBlobLifecycle,
 } from "./attachments/lifecycle";
 import { createAttachmentStore } from "./attachments/store";
+import { createConversationAttachmentTools } from "./attachments/tool-facade";
+import { createConversationAttachmentToolStore } from "./attachments/tool-store";
 import { validateStoredAttachment } from "./attachments/validation";
 import { createAuditReader, createAuditStore, recordAuditEvent } from "./audit";
 import { startRetentionSweeps } from "./audit-retention";
@@ -71,6 +73,7 @@ import {
 } from "./credentials";
 import { createDatabase } from "./db/client";
 import { createPeopleStore } from "./people/store";
+import { useConversationAttachmentTools } from "./plugins/builtin-conversation-attachments";
 import { useRoutineTools } from "./plugins/builtin-routines";
 import { redirectUriFor } from "./plugins/oauth";
 import { createPluginStore } from "./plugins/store";
@@ -189,6 +192,15 @@ const attachmentUploads = createAttachmentUploadService({
 });
 const attachmentLifecycle = createAttachmentLifecycleStore(database);
 const attachmentMaintenance = createAttachmentBlobMaintenance(attachmentBlobs);
+useConversationAttachmentTools(
+  createConversationAttachmentTools(
+    createConversationAttachmentToolStore({
+      database,
+      metadata: attachmentStore,
+      blobs: attachmentBlobs,
+    }),
+  ),
+);
 const channelEvents = createChannelEventHub();
 /**
  * Which components each Bot may answer with.

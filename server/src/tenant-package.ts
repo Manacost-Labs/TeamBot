@@ -736,7 +736,7 @@ export async function synchronizeTenantPackage(
      * made during database synchronisation.
      */
     const packageBuiltinToolRefs = new Set<string>();
-    for (const serverId of ["parser-ops", "heartpulse-ops"]) {
+    for (const serverId of ["attachments", "parser-ops", "heartpulse-ops"]) {
       const entry = catalogueEntry(serverId);
       if (entry?.auth.kind !== "builtin") continue;
       await transaction
