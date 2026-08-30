@@ -130,6 +130,7 @@ describe("who may call a tool back, and as whom", () => {
       ok: true,
       botId: AGENT_A,
       actorId: "visitor_9",
+      runId: "r1",
     });
   });
 
@@ -182,6 +183,30 @@ describe("who may call a tool back, and as whom", () => {
       ok: true,
       botId: AGENT_A,
       actorId: "visitor_9",
+      runId: "r1",
+    });
+  });
+
+  test("keeps the signed conversation context after authorisation", async () => {
+    const verdict = await call(
+      tokenA,
+      mintRunAssertion(
+        {
+          botId: AGENT_A,
+          actorId: "visitor_9",
+          runId: "run_with_files",
+          threadId: "thread_with_files",
+        },
+        KEY,
+      ),
+    );
+
+    expect(verdict).toEqual({
+      ok: true,
+      botId: AGENT_A,
+      actorId: "visitor_9",
+      runId: "run_with_files",
+      threadId: "thread_with_files",
     });
   });
 

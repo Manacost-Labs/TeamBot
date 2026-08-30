@@ -7,6 +7,40 @@ import type { McpCallResult, McpTool } from "./mcp";
 import * as mcp from "./mcp";
 
 /**
+ * Identity resolved by this deployment before a tool runs.
+ *
+ * These fields never come from the model's tool arguments. Remote callbacks get them from the
+ * signed run assertion; in-process runs get the actor and Bot from the runtime that built the tool.
+ * A transport that needs a current conversation may require `runId`/`threadId` and refuse when an
+ * older in-process caller did not provide them.
+ */
+export type TrustedToolCallContext = {
+  actorId: string;
+  botId: string;
+  runId?: string;
+  threadId?: string;
+};
+
+export type VendorToolConnection = {
+  url: string;
+  token?: string;
+} & TrustedToolCallContext;
+
+/** Build the vendor-facing connection without ever merging model-produced tool arguments into it. */
+export function vendorToolConnection(
+  connection: { url: string; token?: string },
+  context: TrustedToolCallContext,
+): VendorToolConnection {
+  return {
+    ...connection,
+    actorId: context.actorId,
+    botId: context.botId,
+    ...(context.runId !== undefined ? { runId: context.runId } : {}),
+    ...(context.threadId !== undefined ? { threadId: context.threadId } : {}),
+  };
+}
+
+/**
  * How this deployment reaches one vendor: which protocol, chosen per catalogue entry.
  *
  * WHY THIS EXISTS. Every connector used to be MCP, so "the transport" was an import. Google's Drive
@@ -55,21 +89,7 @@ export type VendorTransport = {
     botId?: string;
   }): Promise<McpTool[]>;
   callTool(
-    connection: {
-      url: string;
-      token?: string;
-      /**
-       * Who this call is for, and which Bot is making it.
-       *
-       * Ignored by every transport that dials a vendor: MCP and Drive answer to a credential, and who
-       * holds it is already decided by the time the connection is built. The builtin transport has no
-       * credential and no vendor — it acts on this deployment's own tables — so the actor is not
-       * context, it is the authorization, and it refuses without one. A routine is somebody's.
-       */
-      actorId?: string;
-      /** The Bot the run belongs to. A routine runs as its Bot, which is never a name a model supplies. */
-      botId?: string;
-    },
+    connection: VendorToolConnection,
     toolName: string,
     args: Record<string, unknown>,
   ): Promise<McpCallResult>;

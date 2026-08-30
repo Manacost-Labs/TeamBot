@@ -37,7 +37,12 @@ import {
 } from "./catalogue";
 import { McpServerError } from "./mcp";
 import { registerDynamicClient } from "./oauth";
-import { transportFor } from "./transport";
+import {
+  type TrustedToolCallContext,
+  transportFor,
+  type VendorToolConnection,
+  vendorToolConnection,
+} from "./transport";
 
 /**
  * Plugins: what this deployment has added, which Bots may use it, and the one path a call takes.
@@ -529,12 +534,7 @@ export type PluginStoreOptions = {
    * reachable, which means the property most worth testing would be the one thing never tested.
    */
   callVendor?: (
-    connection: {
-      url: string;
-      token?: string;
-      actorId?: string;
-      botId?: string;
-    },
+    connection: VendorToolConnection,
     toolName: string,
     args: Record<string, unknown>,
   ) => Promise<{ text: string; isError: boolean }>;
@@ -2762,12 +2762,12 @@ export function createPluginStore(options: PluginStoreOptions) {
      * see, and a trail written only on success cannot show it. The grant is checked first because a
      * tool this Bot was never given should not reach the policy engine, the vault or the network.
      */
-    async callTool(input: {
-      ref: string;
-      args: Record<string, unknown>;
-      botId: string;
-      actorId: string;
-    }): Promise<{ text: string; isError: boolean }> {
+    async callTool(
+      input: {
+        ref: string;
+        args: Record<string, unknown>;
+      } & TrustedToolCallContext,
+    ): Promise<{ text: string; isError: boolean }> {
       const [serverId, ...rest] = input.ref.split("/");
       const toolName = rest.join("/");
       if (!serverId || !toolName) {
@@ -2908,12 +2908,7 @@ export function createPluginStore(options: PluginStoreOptions) {
         const { token } = await connectionTokenFor(row, entry, input.actorId);
         const vendor = injectedVendor ?? transportFor(entry).callTool;
         const result = await vendor(
-          {
-            url: effectiveUrl(row, entry),
-            token,
-            actorId: input.actorId,
-            botId: input.botId,
-          },
+          vendorToolConnection({ url: effectiveUrl(row, entry), token }, input),
           toolName,
           args,
         );

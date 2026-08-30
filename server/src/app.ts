@@ -980,6 +980,9 @@ export function createApp(
           botId: verdict.botId,
           // From the assertion, never the body: this is the name the audit row will carry.
           actorId: verdict.actorId,
+          // Signed with the identity above. Tool arguments are model output and never supply either.
+          runId: verdict.runId,
+          ...(verdict.threadId ? { threadId: verdict.threadId } : {}),
         });
         return context.json({ text: result.text, isError: result.isError });
       } catch (error) {
