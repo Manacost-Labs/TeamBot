@@ -11,6 +11,7 @@ import {
 } from "react";
 import { Streamdown } from "streamdown";
 import { ArtifactCard } from "@/components/channels/artifact-card";
+import { GoogleWorkspaceCard } from "@/components/channels/google-workspace-card";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import {
   MessageContent,
@@ -43,6 +44,7 @@ import {
   type AgentRunState,
   agentRunStatusLabel,
 } from "@/lib/copilot/run-state";
+import { parseGoogleWorkspaceResult } from "@/lib/google-workspace/result";
 import { markdownComponents, markdownUrlTransform } from "@/lib/markdown";
 import {
   abandonArtifactRenderTiming,
@@ -510,6 +512,7 @@ const TranscriptToolCall = memo(function TranscriptToolCall({
 }) {
   onRender?.(id);
   const artifact = parseArtifactToolResult(name, result)?.artifact ?? null;
+  const googleWorkspaceResult = parseGoogleWorkspaceResult(name, result);
   const timingStarted = useRef(false);
 
   useEffect(() => {
@@ -545,6 +548,8 @@ const TranscriptToolCall = memo(function TranscriptToolCall({
             trackPaint={timingStarted.current}
             toolCallId={toolCallId}
           />
+        ) : googleWorkspaceResult ? (
+          <GoogleWorkspaceCard result={googleWorkspaceResult} />
         ) : name.startsWith("mcp__") ? (
           <ServerToolLine name={name} result={result} />
         ) : (

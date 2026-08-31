@@ -1,19 +1,67 @@
 skills:
   - slug: conversation-files
     title: Файлы в диалоге
-    summary: Читать вложения и возвращать результат как Markdown-файл или PDF.
+    summary: Читать вложения и возвращать результат отдельным безопасным файлом.
     instructions: |
       Когда человек прикрепил файл, сначала найди его через list_conversation_attachments и читай
       только нужные метаданные или страницы текста. Не проси внутренний путь и не выдумывай
       содержимое неподдерживаемого файла. Если человек просит итог отдельным файлом, используй
-      create_artifact: text/markdown для редактируемого результата или application/pdf для готового
-      документа. В PDF передавай Markdown — двоичный PDF создаёт доверенный рендерер. После успешного
-      создания коротко объясни, что находится в карточке файла; не печатай JSON результата вручную.
+      create_artifact. Доступны text/markdown (.md), text/plain (.txt), application/json (.json),
+      text/csv (.csv), image/svg+xml (.svg), text/html (.html) и application/pdf (.pdf); имя и
+      расширение должны соответствовать MIME. JSON должен быть валидным. В PDF передавай Markdown —
+      двоичный PDF создаёт доверенный рендерер. HTML и SVG в интерфейсе показываются как безопасный
+      исходный текст. После успешного создания коротко объясни, что находится в карточке файла; не
+      печатай JSON результата вручную.
     tools:
       - attachments/list_conversation_attachments
       - attachments/read_attachment_metadata
       - attachments/read_attachment_text
       - artifacts/create_artifact
+  - slug: google-workspace
+    title: Google Workspace
+    summary: Читать Drive, переносить файлы между диалогом и Drive, работать с Docs и Sheets.
+    instructions: |
+      Для данных Google всегда используй инструменты google-drive, а не браузер: они выполняются с
+      OAuth-доступом именно того человека, который задал вопрос. Сначала ищи нужный файл по названию,
+      ключевым словам, типу, времени или папке и передавай в модель только выбранный результат.
+      Большие документы и таблицы читай частями; для Sheets всегда указывай ограниченный A1-диапазон.
+
+      Перед записью проверь точный документ, таблицу, вкладку и диапазон. Для append после сетевой
+      ошибки не повторяй вызов автоматически: сначала прочитай целевой участок, чтобы не создать
+      дубликаты. Для замены в Docs используй актуальную edit map и expectedText. Для очистки диапазона
+      требуй явного подтверждения человека. Не печатай OAuth-токены, сырые ответы API и содержимое
+      ячеек в техническом отчёте; после успешной записи верни короткое подтверждение и ссылку Google.
+
+      Файл из Drive импортируй в текущий диалог через import_google_drive_file_to_chat. Для загрузки
+      в Drive используй только точный attachmentId из текущего диалога. Папку указывай по точному id.
+      Перед move_google_drive_file сначала прочитай метаданные файла, передай полный актуальный набор
+      expectedParentIds и требуй явное confirm=true. После неоднозначной сетевой ошибки не повторяй
+      upload, создание папки или перемещение автоматически: инструмент сам выполняет безопасное
+      восстановление по идентификатору операции либо сообщает, что состояние нужно проверить.
+    tools:
+      - google-drive/search_files
+      - google-drive/list_recent_files
+      - google-drive/list_folder
+      - google-drive/get_file_metadata
+      - google-drive/read_file_content
+      - google-drive/export_file
+      - google-drive/import_google_drive_file_to_chat
+      - google-drive/upload_attachment_to_google_drive
+      - google-drive/create_google_drive_folder
+      - google-drive/move_google_drive_file
+      - google-drive/read_google_document
+      - google-drive/read_google_document_edit_map
+      - google-drive/create_google_doc
+      - google-drive/append_google_doc
+      - google-drive/replace_google_doc_range
+      - google-drive/get_google_sheet_metadata
+      - google-drive/list_google_sheet_tabs
+      - google-drive/read_google_sheet_range
+      - google-drive/create_google_spreadsheet
+      - google-drive/create_google_sheet_tab
+      - google-drive/append_google_sheet_rows
+      - google-drive/update_google_sheet_range
+      - google-drive/clear_google_sheet_range
   - slug: data-control
     title: Контроль данных
     summary: Аудит, восстановление и безопасное исправление 99 источников Hearthstone API.

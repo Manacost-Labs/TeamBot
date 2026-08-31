@@ -66,6 +66,10 @@ function RouteComponent() {
   const connection = (connections.data?.connections ?? []).find(
     (row) => row.serverId === key,
   );
+  const startConnect = () => {
+    setNotice(null);
+    connect.mutate(key);
+  };
 
   if (plugins.isPending) {
     return <PageShell title="Account">{null}</PageShell>;
@@ -154,6 +158,12 @@ function RouteComponent() {
                    */}
                   <DropdownMenuContent align="end" className="w-auto">
                     <DropdownMenuItem
+                      disabled={connect.isPending}
+                      onClick={startConnect}
+                    >
+                      Reconnect or update access
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
                       onClick={() =>
                         /*
                          * NOT BUILT YET, and it says so rather than appearing to work.
@@ -181,10 +191,7 @@ function RouteComponent() {
                  */
                 <Button
                   disabled={!enabled || connect.isPending}
-                  onClick={() => {
-                    setNotice(null);
-                    connect.mutate(key);
-                  }}
+                  onClick={startConnect}
                   size="sm"
                   type="button"
                   variant="outline"

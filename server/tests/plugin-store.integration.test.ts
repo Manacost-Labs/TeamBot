@@ -2516,9 +2516,8 @@ describe("a custom server may only be pointed at its own kind of credential", ()
  *
  * Unit-tested here as well as through a refresh, because the rule is the part that decides whether
  * anybody ever hears about an under-inclusive write list, and it has two branches a live listing
- * cannot show side by side: a vendor whose consent screen is the whole barrier, and one whose own
- * scope is read-only. The entries are the real ones, so a catalogue edit that removed Drive's
- * read-only scope would fail here rather than start filing rows about Drive.
+ * cannot show side by side: a vendor whose consent screen is the whole barrier, and a scoped,
+ * curated connector whose static adapter and catalogue are reviewed together.
  */
 describe("advertised tools a write list does not name", () => {
   test("a Notion tool absent from the write list is named, sorted", () => {
@@ -2539,12 +2538,8 @@ describe("advertised tools a write list does not name", () => {
     ).toEqual([]);
   });
 
-  /*
-   * Drive's grant is `drive.readonly`, so a tool missing from its write list cannot write whatever
-   * this deployment believes about it — the vendor refuses. Filing rows about it would be noise
-   * standing between somebody and the vendor where it is the only barrier.
-   */
-  test("a vendor whose own scope is read-only is not reconciled here", () => {
+  /* Drive is a scoped, static adapter rather than a live-discovered unscoped tool catalogue. */
+  test("a scoped curated adapter is not reconciled here", () => {
     expect(
       unlistedAdvertisedTools(catalogueEntry("google-drive"), [
         "search_files",

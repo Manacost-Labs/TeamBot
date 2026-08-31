@@ -243,11 +243,11 @@ MCP servers and skills share the plugin grant table, but they have different own
 - MCP tools are admin-governed because they can reach external systems with stored credentials.
 - Skills are reusable instructions. A person can create personal skills and attach them only to Bots they own. Administrators create deployment skills.
 
-The curated tool catalogue contains Google Drive, Notion and first-party conversation capabilities
+The curated tool catalogue contains Google Workspace, Notion and first-party conversation capabilities
 such as attachment reads and artifact creation. Custom MCP servers must pass URL checks; unknown
 tools and custom-server tools are treated as writes unless positively classified as reads.
 
-A catalogue entry says whose credential a Bot reaches it with, which is a different question from whether it is reachable at all. A deployment-wide token answers the same for everybody; Google Drive and Notion are both `user-oauth`, so a Bot reaches them as the person asking and sees only what that person can see. An administrator enabling the connector and a person connecting their own account are two decisions, and neither can be made for the other. See [Google Drive](plugins/google-drive.md) and [Notion](plugins/notion.md).
+A catalogue entry says whose credential a Bot reaches it with, which is a different question from whether it is reachable at all. A deployment-wide token answers the same for everybody; Google Workspace and Notion are both `user-oauth`, so a Bot reaches them as the person asking and sees only what that person can see. One Google Workspace consent serves Drive, Docs and Sheets, while exact read and write tools remain separately granted. An administrator enabling the connector and a person connecting their own account are two decisions, and neither can be made for the other. See [Google Workspace](plugins/google-drive.md) and [Notion](plugins/notion.md).
 
 Every MCP call checks the grant first, then evaluates the same action policy engine with MCP context, then audits the result.
 

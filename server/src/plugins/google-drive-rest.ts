@@ -1,3 +1,11 @@
+import { randomUUID } from "node:crypto";
+import type { ConversationAttachmentMetadata } from "../attachments/tool-store";
+import {
+  type GoogleDriveBridgeContext,
+  type GoogleDriveFileBridge,
+  googleDriveOperationId,
+  MAX_GOOGLE_BRIDGE_BYTES,
+} from "./google-drive-file-bridge";
 import { MAX_RESULT_CHARS, type McpCallResult, type McpTool } from "./mcp";
 
 /**
@@ -23,8 +31,9 @@ import { MAX_RESULT_CHARS, type McpCallResult, type McpTool } from "./mcp";
  * an administrator has already made keeps working across the swap, in either direction. Diverging
  * here would silently turn switching transports into re-granting every tool on every Bot.
  *
- * Read-only, and only the tools that can be implemented faithfully. Google's MCP server also
- * advertises writes; the `drive.readonly` scope refuses them, and nothing here offers them.
+ * Read tools plus four narrowly governed file-bridge mutations. Broad Drive reads use
+ * `drive.readonly`; uploads, app-created folders and moves use `drive.file`. Every mutation is
+ * still classified as a write and must pass the employee grant, policy and audit boundaries.
  */
 
 /** Long enough for a slow listing, short enough that a Bot's turn is not held open on it. */
@@ -41,6 +50,10 @@ const MAX_ID_CHARS = 256;
 
 /** Four UTF-8 bytes per result character, plus room for metadata around the content. */
 const MAX_RESPONSE_BYTES = MAX_RESULT_CHARS * 4 + 16_384;
+const DRIVE_API_BASE = "https://www.googleapis.com/drive/v3";
+const DRIVE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3";
+const DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
+const OPENBOT_OPERATION_PROPERTY = "openbotOperation";
 
 /**
  * The fields asked for, rather than Drive's default.
@@ -51,6 +64,9 @@ const MAX_RESPONSE_BYTES = MAX_RESULT_CHARS * 4 + 16_384;
  */
 const FILE_FIELDS =
   "id,name,mimeType,createdTime,modifiedTime,webViewLink,size,parents,owners(emailAddress),description";
+
+const WRITE_FILE_FIELDS =
+  "id,name,mimeType,webViewLink,parents,appProperties,trashed";
 
 /**
  * Google's editor formats, and the plain-text export each one has.
@@ -242,9 +258,91 @@ const TOOLS: readonly McpTool[] = Object.freeze([
       additionalProperties: false,
     },
   },
+  {
+    name: "import_google_drive_file_to_chat",
+    description:
+      "Import one supported Google Drive file into this conversation as a private attachment. Native Docs, Sheets and Slides are exported to bounded text formats.",
+    inputSchema: {
+      type: "object",
+      properties: { fileId: DRIVE_ID_SCHEMA },
+      required: ["fileId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "upload_attachment_to_google_drive",
+    description:
+      "Upload one attachment from this exact conversation to Google Drive. An optional Drive folder id and exact output name may be supplied.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        attachmentId: {
+          type: "string",
+          format: "uuid",
+          minLength: 36,
+          maxLength: 36,
+        },
+        folderId: DRIVE_ID_SCHEMA,
+        name: { type: "string", minLength: 1, maxLength: 255 },
+      },
+      required: ["attachmentId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "create_google_drive_folder",
+    description:
+      "Create one Google Drive folder, optionally inside an exact parent folder id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", minLength: 1, maxLength: 255 },
+        parentId: DRIVE_ID_SCHEMA,
+      },
+      required: ["name"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "move_google_drive_file",
+    description:
+      "Move one Drive file to an exact folder only when its current parents still exactly match expectedParentIds. Requires confirm=true.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: DRIVE_ID_SCHEMA,
+        folderId: DRIVE_ID_SCHEMA,
+        expectedParentIds: {
+          type: "array",
+          items: DRIVE_ID_SCHEMA,
+          maxItems: 10,
+          uniqueItems: true,
+        },
+        confirm: { const: true },
+      },
+      required: ["fileId", "folderId", "expectedParentIds", "confirm"],
+      additionalProperties: false,
+    },
+  },
 ]);
 
-type Connection = { url: string; token?: string };
+type Connection = {
+  url: string;
+  token?: string;
+  actorId?: string;
+  botId?: string;
+  runId?: string;
+  threadId?: string;
+};
+
+let fileBridge: GoogleDriveFileBridge | null = null;
+
+/** Composition seam: trusted conversation storage is installed once at process startup. */
+export function useGoogleDriveFileBridge(
+  bridge: GoogleDriveFileBridge | null,
+): void {
+  fileBridge = bridge;
+}
 
 /**
  * No credential is needed to know what this adapter can do, because the answer is in this file.
@@ -273,12 +371,23 @@ async function request(
   connection: Connection,
   path: string,
   query: Record<string, string>,
-): Promise<{ ok: true; response: Response } | { ok: false; message: string }> {
+  options: Readonly<{
+    base?: typeof DRIVE_API_BASE | typeof DRIVE_UPLOAD_BASE;
+    body?: BodyInit;
+    headers?: Record<string, string>;
+    maxResponseBytes?: number;
+    method?: "GET" | "PATCH" | "POST";
+  }> = {},
+): Promise<
+  | { ok: true; response: Response }
+  | { ok: false; message: string; ambiguous?: boolean }
+> {
   if (!connection.token) {
     return { ok: false, message: "No credential was available for this call." };
   }
 
-  const url = new URL(`${connection.url.replace(/\/+$/, "")}${path}`);
+  // Ignore the stored row URL here. A person's bearer token reaches only these reviewed constants.
+  const url = new URL(`${options.base ?? DRIVE_API_BASE}${path}`);
   for (const [key, value] of Object.entries(query)) {
     url.searchParams.set(key, value);
   }
@@ -286,7 +395,12 @@ async function request(
   let response: Response;
   try {
     response = await fetch(url, {
-      headers: { authorization: `Bearer ${connection.token}` },
+      body: options.body,
+      headers: {
+        authorization: `Bearer ${connection.token}`,
+        ...options.headers,
+      },
+      method: options.method ?? "GET",
       // A bearer token is only for Google's pinned API host, never a redirect target.
       redirect: "manual",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -298,6 +412,7 @@ async function request(
         error instanceof Error && error.name === "TimeoutError"
           ? "Google Drive did not answer in time."
           : "Google Drive could not be reached. Try again shortly.",
+      ambiguous: options.method !== undefined && options.method !== "GET",
     };
   }
 
@@ -319,11 +434,16 @@ async function request(
     return {
       ok: false,
       message,
+      ambiguous:
+        options.method !== undefined &&
+        options.method !== "GET" &&
+        (response.status === 429 || response.status >= 500),
     };
   }
 
+  const maxResponseBytes = options.maxResponseBytes ?? MAX_RESPONSE_BYTES;
   const declaredLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
+  if (Number.isFinite(declaredLength) && declaredLength > maxResponseBytes) {
     await response.body?.cancel().catch(() => undefined);
     return {
       ok: false,
@@ -422,6 +542,8 @@ type DriveFile = {
   parents?: string[];
   owners?: { emailAddress?: string }[];
   description?: string;
+  appProperties?: Record<string, string>;
+  trashed?: boolean;
 };
 
 /**
@@ -689,6 +811,14 @@ function normalizeDriveFile(value: unknown): DriveFile | null {
         (parent): parent is string => typeof parent === "string",
       )
     : undefined;
+  const appProperties =
+    typeof file.appProperties === "object" && file.appProperties !== null
+      ? Object.fromEntries(
+          Object.entries(file.appProperties).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
+        )
+      : undefined;
   return {
     id: optionalString("id"),
     name: optionalString("name"),
@@ -700,6 +830,8 @@ function normalizeDriveFile(value: unknown): DriveFile | null {
     parents,
     owners,
     description: optionalString("description"),
+    appProperties,
+    trashed: typeof file.trashed === "boolean" ? file.trashed : undefined,
   };
 }
 
@@ -741,6 +873,661 @@ async function listDriveFiles(
     : failure(files.message);
 }
 
+const ATTACHMENT_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const WINDOWS_RESERVED_NAME =
+  /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu;
+
+type ImportPlan = {
+  mimeType: string;
+  extension: string;
+  alternateExtensions?: readonly string[];
+  exportMimeType?: string;
+};
+
+const NATIVE_IMPORTS: Readonly<Record<string, ImportPlan>> = Object.freeze({
+  "application/vnd.google-apps.document": {
+    mimeType: "text/markdown",
+    extension: ".md",
+    exportMimeType: "text/markdown",
+  },
+  "application/vnd.google-apps.spreadsheet": {
+    mimeType: "text/csv",
+    extension: ".csv",
+    exportMimeType: "text/csv",
+  },
+  "application/vnd.google-apps.presentation": {
+    mimeType: "text/plain",
+    extension: ".txt",
+    exportMimeType: "text/plain",
+  },
+});
+
+const STORED_IMPORTS: Readonly<Record<string, ImportPlan>> = Object.freeze({
+  "text/plain": { mimeType: "text/plain", extension: ".txt" },
+  "text/markdown": { mimeType: "text/markdown", extension: ".md" },
+  "text/csv": { mimeType: "text/csv", extension: ".csv" },
+  "application/json": { mimeType: "application/json", extension: ".json" },
+  "application/xml": { mimeType: "application/xml", extension: ".xml" },
+  "application/yaml": {
+    mimeType: "application/yaml",
+    extension: ".yaml",
+    alternateExtensions: [".yml"],
+  },
+  "application/pdf": { mimeType: "application/pdf", extension: ".pdf" },
+  "image/png": { mimeType: "image/png", extension: ".png" },
+  "image/jpeg": {
+    mimeType: "image/jpeg",
+    extension: ".jpg",
+    alternateExtensions: [".jpeg"],
+  },
+  "image/gif": { mimeType: "image/gif", extension: ".gif" },
+  "image/webp": { mimeType: "image/webp", extension: ".webp" },
+  "image/svg+xml": { mimeType: "image/svg+xml", extension: ".svg" },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {
+    mimeType:
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    extension: ".docx",
+  },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+    mimeType:
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    extension: ".xlsx",
+  },
+});
+
+function bridgeContext(
+  connection: Connection,
+): GoogleDriveBridgeContext | null {
+  return connection.actorId &&
+    connection.botId &&
+    connection.threadId &&
+    connection.runId
+    ? {
+        actorId: connection.actorId,
+        botId: connection.botId,
+        threadId: connection.threadId,
+        runId: connection.runId,
+      }
+    : null;
+}
+
+function exactNameArgument(
+  args: Record<string, unknown>,
+  key: string,
+  label: string,
+  required = false,
+): ReadResult<string | undefined> {
+  const value = args[key];
+  if (value === undefined) {
+    return required
+      ? { ok: false, message: `${label} is required.` }
+      : { ok: true, value: undefined };
+  }
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value !== value.normalize("NFC").trim() ||
+    [...value].length > 255 ||
+    hasControlCharacter(value)
+  ) {
+    return { ok: false, message: `${label} is invalid.` };
+  }
+  return { ok: true, value };
+}
+
+function idArrayArgument(
+  args: Record<string, unknown>,
+  key: string,
+): ReadResult<string[]> {
+  const value = args[key];
+  if (
+    !Array.isArray(value) ||
+    value.length > 10 ||
+    value.some((item) => typeof item !== "string" || !DRIVE_ID.test(item)) ||
+    new Set(value).size !== value.length
+  ) {
+    return { ok: false, message: `${key} must be a unique Drive id array.` };
+  }
+  return { ok: true, value: value as string[] };
+}
+
+function importedFilename(file: DriveFile, fileId: string, plan: ImportPlan) {
+  const accepted = [plan.extension, ...(plan.alternateExtensions ?? [])];
+  let name = [...(file.name ?? `drive-${fileId.slice(0, 12)}`).normalize("NFC")]
+    .map((character) => {
+      const point = character.codePointAt(0) ?? 0;
+      return point <= 0x1f ||
+        (point >= 0x7f && point <= 0x9f) ||
+        character === "/" ||
+        character === "\\"
+        ? "_"
+        : character;
+    })
+    .join("")
+    .trim()
+    .replace(/^\.+/u, "")
+    .replace(/\.+$/u, "");
+  if (!accepted.some((extension) => name.toLowerCase().endsWith(extension))) {
+    name = `${name || `drive-${fileId.slice(0, 12)}`}${plan.extension}`;
+  }
+  if (WINDOWS_RESERVED_NAME.test(name)) name = `_${name}`;
+  const codePoints = [...name];
+  if (codePoints.length > 255) {
+    const suffix =
+      accepted.find((extension) => name.toLowerCase().endsWith(extension)) ??
+      plan.extension;
+    const stem = [...name.slice(0, -suffix.length)].slice(
+      0,
+      255 - [...suffix].length,
+    );
+    name = `${stem.join("")}${suffix}`;
+  }
+  return name;
+}
+
+function boundedBody(
+  body: ReadableStream<Uint8Array>,
+  maximum = MAX_GOOGLE_BRIDGE_BYTES,
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  let total = 0;
+  return new ReadableStream({
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) {
+          controller.close();
+          return;
+        }
+        total += next.value.byteLength;
+        if (!Number.isSafeInteger(total) || total > maximum) {
+          await reader.cancel(new Error("Google Drive file exceeds limit"));
+          controller.error(new Error("Google Drive file exceeds limit"));
+          return;
+        }
+        controller.enqueue(next.value);
+      } catch {
+        controller.error(new Error("Google Drive file could not be read"));
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+}
+
+function validGoogleLink(value: string | undefined): string | undefined {
+  if (!value || value.length > 2_048 || hasControlCharacter(value)) return;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" &&
+      [
+        "drive.google.com",
+        "docs.google.com",
+        "sheets.google.com",
+        "slides.google.com",
+      ].includes(url.hostname)
+      ? url.toString()
+      : undefined;
+  } catch {
+    return;
+  }
+}
+
+function driveWriteResult(file: DriveFile): McpCallResult {
+  if (
+    !file.id ||
+    !DRIVE_ID.test(file.id) ||
+    !file.name ||
+    file.name.length > 255 ||
+    hasControlCharacter(file.name) ||
+    !file.mimeType ||
+    file.mimeType.length > 255 ||
+    hasControlCharacter(file.mimeType)
+  ) {
+    return failure("Google Drive returned invalid file metadata.");
+  }
+  return asResult(
+    JSON.stringify({
+      file: {
+        id: file.id,
+        name: file.name,
+        mimeType: file.mimeType,
+        parents: (file.parents ?? []).filter((parent) => DRIVE_ID.test(parent)),
+        ...(validGoogleLink(file.webViewLink)
+          ? { webViewLink: validGoogleLink(file.webViewLink) }
+          : {}),
+      },
+    }),
+  );
+}
+
+async function findOperationFile(
+  connection: Connection,
+  operationId: string,
+): Promise<ReadResult<DriveFile | null>> {
+  const found = await request(connection, "/files", {
+    q: `appProperties has { key='${OPENBOT_OPERATION_PROPERTY}' and value='${operationId}' } and trashed = false`,
+    pageSize: "2",
+    fields: `files(${WRITE_FILE_FIELDS})`,
+  });
+  if (!found.ok) return found;
+  const parsed = await readResponseJson<unknown>(found.response);
+  if (!parsed.ok) return parsed;
+  const files = driveFiles(parsed.value);
+  if (!files.ok) return files;
+  if (files.value.length > 1) {
+    return {
+      ok: false,
+      message:
+        "Google Drive has more than one result for this operation; no file was guessed.",
+    };
+  }
+  return { ok: true, value: files.value[0] ?? null };
+}
+
+async function requireFolder(
+  connection: Connection,
+  folderId: string,
+): Promise<ReadResult<DriveFile>> {
+  const folder = await readMetadata(connection, folderId, WRITE_FILE_FIELDS);
+  if (!folder.ok) return folder;
+  return folder.value.mimeType === DRIVE_FOLDER_MIME && !folder.value.trashed
+    ? folder
+    : { ok: false, message: "The target Drive id is not a live folder." };
+}
+
+async function readAttachmentBytes(source: {
+  attachment: ConversationAttachmentMetadata;
+  openStream(signal?: AbortSignal): Promise<ReadableStream<Uint8Array>>;
+}): Promise<ReadResult<Uint8Array>> {
+  const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const stream = await source.openStream(signal);
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > MAX_GOOGLE_BRIDGE_BYTES || total > source.attachment.size) {
+        await reader.cancel(new Error("Attachment exceeds limit"));
+        return { ok: false, message: "The attachment is too large to upload." };
+      }
+      chunks.push(next.value);
+    }
+  } catch {
+    await reader.cancel().catch(() => undefined);
+    return { ok: false, message: "The attachment could not be read safely." };
+  } finally {
+    reader.releaseLock();
+  }
+  if (total !== source.attachment.size) {
+    return { ok: false, message: "The attachment size changed while reading." };
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { ok: true, value: bytes };
+}
+
+function multipartBody(
+  metadata: Record<string, unknown>,
+  mimeType: string,
+  content: Uint8Array,
+): { body: Blob; contentType: string } {
+  const boundary = `openbot_${randomUUID().replaceAll("-", "")}`;
+  const body = new Blob([
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`,
+    `--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`,
+    Uint8Array.from(content).buffer,
+    `\r\n--${boundary}--`,
+  ]);
+  return { body, contentType: `multipart/related; boundary=${boundary}` };
+}
+
+async function verifiedWriteFile(
+  connection: Connection,
+  response: Response,
+): Promise<ReadResult<DriveFile>> {
+  const parsed = await readResponseJson<unknown>(response);
+  if (!parsed.ok) return parsed;
+  const candidate = normalizeDriveFile(parsed.value);
+  if (!candidate?.id || !DRIVE_ID.test(candidate.id)) {
+    return {
+      ok: false,
+      message: "Google Drive returned invalid file metadata.",
+    };
+  }
+  return readMetadata(connection, candidate.id, WRITE_FILE_FIELDS);
+}
+
+async function importGoogleDriveFileToChat(
+  connection: Connection,
+  args: Record<string, unknown>,
+): Promise<McpCallResult> {
+  const extra = unexpectedArgument(args, ["fileId"]);
+  if (extra) return failure(extra);
+  const fileId = idArgument(args, "fileId", "The file id");
+  const context = bridgeContext(connection);
+  if (!fileId.ok || !fileId.value) {
+    return failure(fileId.ok ? "A file id is required." : fileId.message);
+  }
+  if (!context || !fileBridge) {
+    return failure("Google Drive import is unavailable for this conversation.");
+  }
+  const operationId = googleDriveOperationId("import", context, [fileId.value]);
+  try {
+    return await fileBridge.withOperationLock(operationId, async () => {
+      const recovered = await fileBridge?.recoverImport(context, operationId);
+      if (!recovered?.ok) {
+        return failure(
+          recovered?.message ?? "Google Drive import is unavailable.",
+        );
+      }
+      if (recovered.value) {
+        return asResult(JSON.stringify({ attachment: recovered.value }));
+      }
+
+      const metadata = await readMetadata(
+        connection,
+        fileId.value as string,
+        "id,name,mimeType,size",
+      );
+      if (!metadata.ok) return failure(metadata.message);
+      const sourceMime = metadata.value.mimeType;
+      const plan = sourceMime
+        ? (NATIVE_IMPORTS[sourceMime] ?? STORED_IMPORTS[sourceMime])
+        : undefined;
+      if (!plan) {
+        return failure(
+          `This Drive file type (${sourceMime ?? "unknown"}) is not supported for safe chat import.`,
+        );
+      }
+      const declaredSize = Number(metadata.value.size);
+      if (
+        metadata.value.size !== undefined &&
+        (!Number.isSafeInteger(declaredSize) ||
+          declaredSize < 1 ||
+          declaredSize > MAX_GOOGLE_BRIDGE_BYTES)
+      ) {
+        return failure("The Google Drive file is too large to import.");
+      }
+
+      const downloaded = plan.exportMimeType
+        ? await request(
+            connection,
+            `/files/${encodeURIComponent(fileId.value as string)}/export`,
+            { mimeType: plan.exportMimeType },
+            { maxResponseBytes: MAX_GOOGLE_BRIDGE_BYTES },
+          )
+        : await request(
+            connection,
+            `/files/${encodeURIComponent(fileId.value as string)}`,
+            { alt: "media" },
+            { maxResponseBytes: MAX_GOOGLE_BRIDGE_BYTES },
+          );
+      if (!downloaded.ok) return failure(downloaded.message);
+      if (!downloaded.response.body) {
+        return failure("Google Drive returned an empty file response.");
+      }
+      const published = await fileBridge?.publishImport(context, {
+        operationId,
+        name: importedFilename(metadata.value, fileId.value as string, plan),
+        mimeType: plan.mimeType,
+        body: boundedBody(downloaded.response.body),
+      });
+      return published?.ok
+        ? asResult(JSON.stringify({ attachment: published.value }))
+        : failure(
+            published?.message ?? "The Google Drive file could not be stored.",
+          );
+    });
+  } catch {
+    return failure("The Google Drive import could not be completed safely.");
+  }
+}
+
+async function uploadAttachmentToGoogleDrive(
+  connection: Connection,
+  args: Record<string, unknown>,
+): Promise<McpCallResult> {
+  const extra = unexpectedArgument(args, ["attachmentId", "folderId", "name"]);
+  if (extra) return failure(extra);
+  const attachmentId = args.attachmentId;
+  const folderId = idArgument(args, "folderId", "The folder id", false);
+  const name = exactNameArgument(args, "name", "The Drive filename");
+  const context = bridgeContext(connection);
+  if (typeof attachmentId !== "string" || !ATTACHMENT_ID.test(attachmentId)) {
+    return failure("The attachment id is invalid.");
+  }
+  if (!folderId.ok) return failure(folderId.message);
+  if (!name.ok) return failure(name.message);
+  if (!context || !fileBridge) {
+    return failure("Attachment upload is unavailable for this conversation.");
+  }
+  const source = await fileBridge.attachmentForUpload(context, attachmentId);
+  if (!source.ok) return failure(source.message);
+  const outputName = name.value ?? source.value.attachment.name;
+  const operationId = googleDriveOperationId("upload", context, [
+    attachmentId,
+    folderId.value ?? "",
+    outputName,
+  ]);
+
+  try {
+    return await fileBridge.withOperationLock(operationId, async () => {
+      const existing = await findOperationFile(connection, operationId);
+      if (!existing.ok) return failure(existing.message);
+      if (existing.value) return driveWriteResult(existing.value);
+      if (folderId.value) {
+        const folder = await requireFolder(connection, folderId.value);
+        if (!folder.ok) return failure(folder.message);
+      }
+      const bytes = await readAttachmentBytes(source.value);
+      if (!bytes.ok) return failure(bytes.message);
+      const metadata = {
+        name: outputName,
+        ...(folderId.value ? { parents: [folderId.value] } : {}),
+        appProperties: { [OPENBOT_OPERATION_PROPERTY]: operationId },
+      };
+      const multipart = multipartBody(
+        metadata,
+        source.value.attachment.mimeType,
+        bytes.value,
+      );
+      const created = await request(
+        connection,
+        "/files",
+        { uploadType: "multipart", fields: WRITE_FILE_FIELDS },
+        {
+          base: DRIVE_UPLOAD_BASE,
+          method: "POST",
+          body: multipart.body,
+          headers: { "content-type": multipart.contentType },
+        },
+      );
+      if (!created.ok) {
+        if (!created.ambiguous) return failure(created.message);
+        const resolved = await findOperationFile(connection, operationId);
+        return resolved.ok && resolved.value
+          ? driveWriteResult(resolved.value)
+          : failure(
+              "The upload outcome is unknown. It was not retried; check Drive before trying again.",
+            );
+      }
+      const verified = await verifiedWriteFile(connection, created.response);
+      return verified.ok
+        ? driveWriteResult(verified.value)
+        : failure(verified.message);
+    });
+  } catch {
+    return failure("The attachment upload could not be completed safely.");
+  }
+}
+
+async function createGoogleDriveFolder(
+  connection: Connection,
+  args: Record<string, unknown>,
+): Promise<McpCallResult> {
+  const extra = unexpectedArgument(args, ["name", "parentId"]);
+  if (extra) return failure(extra);
+  const name = exactNameArgument(args, "name", "The folder name", true);
+  const parentId = idArgument(args, "parentId", "The parent folder id", false);
+  const context = bridgeContext(connection);
+  if (!name.ok || !name.value) {
+    return failure(name.ok ? "The folder name is required." : name.message);
+  }
+  if (!parentId.ok) return failure(parentId.message);
+  if (!context || !fileBridge) {
+    return failure(
+      "Drive folder creation is unavailable for this conversation.",
+    );
+  }
+  const operationId = googleDriveOperationId("create-folder", context, [
+    name.value,
+    parentId.value ?? "",
+  ]);
+  try {
+    return await fileBridge.withOperationLock(operationId, async () => {
+      const existing = await findOperationFile(connection, operationId);
+      if (!existing.ok) return failure(existing.message);
+      if (existing.value) return driveWriteResult(existing.value);
+      if (parentId.value) {
+        const parent = await requireFolder(connection, parentId.value);
+        if (!parent.ok) return failure(parent.message);
+      }
+      const created = await request(
+        connection,
+        "/files",
+        { fields: WRITE_FILE_FIELDS },
+        {
+          method: "POST",
+          headers: { "content-type": "application/json; charset=utf-8" },
+          body: JSON.stringify({
+            name: name.value,
+            mimeType: DRIVE_FOLDER_MIME,
+            ...(parentId.value ? { parents: [parentId.value] } : {}),
+            appProperties: { [OPENBOT_OPERATION_PROPERTY]: operationId },
+          }),
+        },
+      );
+      if (!created.ok) {
+        if (!created.ambiguous) return failure(created.message);
+        const resolved = await findOperationFile(connection, operationId);
+        return resolved.ok && resolved.value
+          ? driveWriteResult(resolved.value)
+          : failure(
+              "The folder creation outcome is unknown. It was not retried; check Drive first.",
+            );
+      }
+      const verified = await verifiedWriteFile(connection, created.response);
+      return verified.ok
+        ? driveWriteResult(verified.value)
+        : failure(verified.message);
+    });
+  } catch {
+    return failure("The Drive folder could not be created safely.");
+  }
+}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  return (
+    left.length === right.length &&
+    [...left].sort().every((value, index) => value === [...right].sort()[index])
+  );
+}
+
+async function moveGoogleDriveFile(
+  connection: Connection,
+  args: Record<string, unknown>,
+): Promise<McpCallResult> {
+  const extra = unexpectedArgument(args, [
+    "fileId",
+    "folderId",
+    "expectedParentIds",
+    "confirm",
+  ]);
+  if (extra) return failure(extra);
+  const fileId = idArgument(args, "fileId", "The file id");
+  const folderId = idArgument(args, "folderId", "The target folder id");
+  const expected = idArrayArgument(args, "expectedParentIds");
+  const context = bridgeContext(connection);
+  if (!fileId.ok || !fileId.value)
+    return failure(fileId.ok ? "A file id is required." : fileId.message);
+  if (!folderId.ok || !folderId.value)
+    return failure(folderId.ok ? "A folder id is required." : folderId.message);
+  if (!expected.ok) return failure(expected.message);
+  if (args.confirm !== true)
+    return failure("Moving a Drive file requires confirm=true.");
+  if (!context || !fileBridge)
+    return failure("Drive file moves are unavailable for this conversation.");
+  const operationId = googleDriveOperationId("move", context, [
+    fileId.value,
+    folderId.value,
+    ...[...expected.value].sort(),
+  ]);
+  try {
+    return await fileBridge.withOperationLock(operationId, async () => {
+      const target = await requireFolder(connection, folderId.value as string);
+      if (!target.ok) return failure(target.message);
+      const current = await readMetadata(
+        connection,
+        fileId.value as string,
+        WRITE_FILE_FIELDS,
+      );
+      if (!current.ok) return failure(current.message);
+      const parents = current.value.parents ?? [];
+      if (sameIds(parents, [folderId.value as string]))
+        return driveWriteResult(current.value);
+      if (!sameIds(parents, expected.value)) {
+        return failure(
+          "The file parents changed; refresh metadata and confirm the move again.",
+        );
+      }
+      const query: Record<string, string> = {
+        addParents: folderId.value as string,
+        fields: WRITE_FILE_FIELDS,
+      };
+      if (expected.value.length > 0)
+        query.removeParents = expected.value.join(",");
+      const moved = await request(
+        connection,
+        `/files/${encodeURIComponent(fileId.value as string)}`,
+        query,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json; charset=utf-8" },
+          body: "{}",
+        },
+      );
+      if (!moved.ok && !moved.ambiguous) return failure(moved.message);
+      const verified = await readMetadata(
+        connection,
+        fileId.value as string,
+        WRITE_FILE_FIELDS,
+      );
+      if (
+        verified.ok &&
+        sameIds(verified.value.parents ?? [], [folderId.value as string])
+      ) {
+        return driveWriteResult(verified.value);
+      }
+      return failure(
+        "The move outcome is unknown. It was not retried; refresh the file metadata.",
+      );
+    });
+  } catch {
+    return failure("The Drive file move could not be completed safely.");
+  }
+}
+
 /**
  * Call one tool.
  *
@@ -754,6 +1541,18 @@ export async function callTool(
   toolName: string,
   args: Record<string, unknown>,
 ): Promise<McpCallResult> {
+  if (toolName === "import_google_drive_file_to_chat") {
+    return importGoogleDriveFileToChat(connection, args);
+  }
+  if (toolName === "upload_attachment_to_google_drive") {
+    return uploadAttachmentToGoogleDrive(connection, args);
+  }
+  if (toolName === "create_google_drive_folder") {
+    return createGoogleDriveFolder(connection, args);
+  }
+  if (toolName === "move_google_drive_file") {
+    return moveGoogleDriveFile(connection, args);
+  }
   if (toolName === "search_files") {
     const query = scopedDriveQuery(args);
     return query.ok

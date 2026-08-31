@@ -287,10 +287,11 @@ export function refFromToolName(toolName: string): string | null {
  * the mechanical half of that, so the reconciliation is somebody reading a trail rather than somebody
  * remembering.
  *
- * Only where the list stands alone. A vendor that expresses SCOPES has something behind the list: a
- * tool missing from Drive's `writeTools` still cannot write, because `drive.readonly` refuses it at
- * the vendor. Naming those would be noise in front of the one case that has no second barrier at all
- * — Notion, whose access is per-page on a consent screen and whose `scopes` are therefore empty.
+ * Only where the list stands alone. A scoped curated connector is reviewed as a catalogue and
+ * adapter pair: its OAuth scopes constrain the vendor operation, while exact per-Bot grants and the
+ * action policy remain the local boundary. Drive's tool list is static code covered by that review.
+ * This extra reconciliation is for the case with no scope boundary at all — Notion, whose access is
+ * per-page on a consent screen and whose `scopes` are therefore empty.
  *
  * A server with no catalogue entry is not reconciled either, and for the opposite reason: nothing
  * reviewed says any tool of theirs only reads, so all of them are already writes.

@@ -196,12 +196,13 @@ export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
       tokenUrl: "https://oauth2.googleapis.com/token",
       revokeUrl: "https://oauth2.googleapis.com/revoke",
       /*
-       * One per-person Google connection serves Drive, Docs and Sheets. Drive stays read-only;
-       * document and spreadsheet writes use their product-specific scopes instead of unrestricted
-       * Drive write access. Employee grants and the policy engine remain the action boundary.
+       * One per-person Google connection serves Drive, Docs and Sheets. `drive.file` permits only
+       * files this app creates or the person explicitly opens with it; broad Drive reads remain on
+       * `drive.readonly`. Employee grants and the policy engine remain the action boundary.
        */
       scopes: Object.freeze([
         "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/drive.file",
         "https://www.googleapis.com/auth/documents",
         "https://www.googleapis.com/auth/spreadsheets",
       ]),
@@ -217,11 +218,8 @@ export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
       }),
     },
     /*
-     * Named writes even though the scope above makes Google refuse them.
-     *
-     * Belt and braces on purpose. The scope is what stops them; this list is what keeps a boundary
-     * written about writes covering them, so widening the scope later cannot quietly turn a write
-     * into something the policy engine has never heard of.
+     * Every external mutation and the local attachment import is named here. Vendor scopes are a
+     * second boundary, not a substitute for the employee grant, action policy and audit trail.
      */
     writeTools: Object.freeze([
       "create_file",
@@ -234,8 +232,24 @@ export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
       "append_google_sheet_rows",
       "update_google_sheet_range",
       "clear_google_sheet_range",
+      "import_google_drive_file_to_chat",
+      "upload_attachment_to_google_drive",
+      "create_google_drive_folder",
+      "move_google_drive_file",
     ]),
     requiredToolScopes: Object.freeze({
+      import_google_drive_file_to_chat: Object.freeze([
+        "https://www.googleapis.com/auth/drive.readonly",
+      ]),
+      upload_attachment_to_google_drive: Object.freeze([
+        "https://www.googleapis.com/auth/drive.file",
+      ]),
+      create_google_drive_folder: Object.freeze([
+        "https://www.googleapis.com/auth/drive.file",
+      ]),
+      move_google_drive_file: Object.freeze([
+        "https://www.googleapis.com/auth/drive.file",
+      ]),
       read_google_document: Object.freeze([
         "https://www.googleapis.com/auth/documents",
       ]),
@@ -277,7 +291,7 @@ export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
       ]),
     }),
     docsUrl:
-      "https://developers.google.com/workspace/guides/configure-mcp-servers",
+      "https://developers.google.com/identity/protocols/oauth2/web-server",
   },
   {
     key: "notion",

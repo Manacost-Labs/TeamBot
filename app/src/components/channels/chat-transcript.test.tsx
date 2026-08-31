@@ -341,4 +341,49 @@ describe("transcript windowing", () => {
     expect(view.getByText("not-json")).toBeTruthy();
     expect(fetches).toBe(0);
   });
+
+  test("renders a successful governed Google write as a safe result card", () => {
+    const view = render(
+      <ChatTranscript
+        conversationKey="channel-a"
+        messages={[
+          {
+            id: "assistant-google-tool",
+            role: "assistant",
+            toolCalls: [
+              {
+                id: "google-call",
+                type: "function",
+                function: {
+                  name: "mcp__google-drive__append_google_sheet_rows",
+                  arguments: "{}",
+                },
+              },
+            ],
+          },
+          {
+            id: "google-result",
+            role: "tool",
+            toolCallId: "google-call",
+            content: [
+              "Google Sheets",
+              "",
+              "[Research](https://docs.google.com/spreadsheets/d/sheet_1/edit)",
+              "Research!A2:B3",
+              "2 rows added · 4 cells",
+              "spreadsheetId: sheet_1",
+            ].join("\n"),
+          },
+        ]}
+      />,
+    );
+
+    expect(view.getByTestId("google-workspace-card")).toBeTruthy();
+    expect(view.getByText("Строки добавлены")).toBeTruthy();
+    expect(view.getByText("Research!A2:B3")).toBeTruthy();
+    expect(view.queryByText(/spreadsheetId/)).toBeNull();
+    expect(
+      view.getByRole("link", { name: "Открыть Research" }).getAttribute("href"),
+    ).toBe("https://docs.google.com/spreadsheets/d/sheet_1/edit");
+  });
 });

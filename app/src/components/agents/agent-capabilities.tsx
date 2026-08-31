@@ -30,6 +30,17 @@ const GOOGLE_GROUPS: ReadonlyArray<{
       "get_file_metadata",
       "read_file_content",
       "export_file",
+      "import_google_drive_file_to_chat",
+    ]),
+  },
+  {
+    title: "Google Drive — запись",
+    description:
+      "Загрузка вложений, создание папок и подтверждённое перемещение файлов.",
+    names: new Set([
+      "upload_attachment_to_google_drive",
+      "create_google_drive_folder",
+      "move_google_drive_file",
     ]),
   },
   {

@@ -38,6 +38,7 @@ import { Switch } from "@/components/ui/switch";
 import { useBotNames } from "@/lib/agents/bot-names";
 import { agentListQueryOptions } from "@/lib/agents/queries";
 import { storeMcpToken } from "@/lib/credentials/mutations";
+import { googleOAuthJavaScriptOrigin } from "@/lib/google-workspace/oauth-setup";
 import {
   addCuratedServerMutationOptions,
   connectAccountMutationOptions,
@@ -179,6 +180,10 @@ function RouteComponent() {
    */
   const auth = entry?.auth ?? "deployment-bearer";
   const title = entry?.title ?? server?.title ?? key;
+  const googleOrigin = googleOAuthJavaScriptOrigin(
+    key,
+    plugins.data?.redirectUri,
+  );
 
   /** Adding is two writes when a token was typed: the credential, then the record pointing at it. */
   const add = async () => {
@@ -578,6 +583,22 @@ function RouteComponent() {
                   {plugins.data.redirectUri}
                 </code>
               )}
+              {googleOrigin ? (
+                <div className="mt-4 space-y-2 text-muted-foreground text-sm">
+                  <p>
+                    In Google Cloud, create a Web application client and add
+                    this Authorized JavaScript origin:
+                  </p>
+                  <code className="block select-all break-all rounded bg-muted px-2 py-1 font-mono text-xs">
+                    {googleOrigin}
+                  </code>
+                  <p>
+                    Enable Google Drive API, Google Docs API and Google Sheets
+                    API in the same project. The client ID and secret belong in
+                    the OAuth client dialog above, never in source control.
+                  </p>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </PageSection>

@@ -104,6 +104,10 @@ describe("the adapter is the transport the catalogue asks for", () => {
       "get_file_metadata",
       "read_file_content",
       "export_file",
+      "import_google_drive_file_to_chat",
+      "upload_attachment_to_google_drive",
+      "create_google_drive_folder",
+      "move_google_drive_file",
     ]);
 
     for (const tool of tools) {

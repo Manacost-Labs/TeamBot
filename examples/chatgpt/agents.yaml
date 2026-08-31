@@ -6,7 +6,7 @@ agents:
     avatar_seed: chatgpt-assistant
     type: remote-ag-ui
     endpoint: ${MANAGED_AGENT_AG_UI_URL:-}
-    skills: [conversation-files]
+    skills: [conversation-files, google-workspace]
   - id: data-control
     name: Контроль данных
     title: Контроль 99 источников

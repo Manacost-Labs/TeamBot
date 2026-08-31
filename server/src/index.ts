@@ -80,6 +80,8 @@ import { createPeopleStore } from "./people/store";
 import { useArtifactTools } from "./plugins/builtin-artifacts";
 import { useConversationAttachmentTools } from "./plugins/builtin-conversation-attachments";
 import { useRoutineTools } from "./plugins/builtin-routines";
+import { createGoogleDriveFileBridge } from "./plugins/google-drive-file-bridge";
+import { useGoogleDriveFileBridge } from "./plugins/google-drive-rest";
 import { redirectUriFor } from "./plugins/oauth";
 import { createPluginStore } from "./plugins/store";
 import { grantedSkills, grantedTools } from "./plugins/tools";
@@ -204,6 +206,14 @@ const conversationAttachmentStore = createConversationAttachmentToolStore({
 });
 useConversationAttachmentTools(
   createConversationAttachmentTools(conversationAttachmentStore),
+);
+useGoogleDriveFileBridge(
+  createGoogleDriveFileBridge({
+    database,
+    attachments: attachmentStore,
+    uploads: attachmentUploads,
+    conversationAttachments: conversationAttachmentStore,
+  }),
 );
 const artifactRenderer = config.artifactRenderer
   ? createArtifactRenderer(config.artifactRenderer)

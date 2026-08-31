@@ -175,10 +175,10 @@ describe("Google Drive", () => {
     expect(drive?.auth.kind).toBe("user-oauth");
   });
 
-  test("uses one Google consent for Drive reads and governed Docs and Sheets writes", () => {
-    // Drive itself stays read-only; document and spreadsheet writes use their product scopes.
+  test("uses one Google consent for governed Drive, Docs and Sheets access", () => {
     expect(drive?.auth.kind === "user-oauth" ? drive.auth.scopes : []).toEqual([
       "https://www.googleapis.com/auth/drive.readonly",
+      "https://www.googleapis.com/auth/drive.file",
       "https://www.googleapis.com/auth/documents",
       "https://www.googleapis.com/auth/spreadsheets",
     ]);
@@ -198,6 +198,16 @@ describe("Google Drive", () => {
     expect(classifyTool(drive, "read_google_sheet_range", true)).toBe("read");
     expect(classifyTool(drive, "create_google_doc", true)).toBe("write");
     expect(classifyTool(drive, "append_google_sheet_rows", true)).toBe("write");
+    expect(classifyTool(drive, "import_google_drive_file_to_chat", true)).toBe(
+      "write",
+    );
+    expect(classifyTool(drive, "upload_attachment_to_google_drive", true)).toBe(
+      "write",
+    );
+    expect(classifyTool(drive, "create_google_drive_folder", true)).toBe(
+      "write",
+    );
+    expect(classifyTool(drive, "move_google_drive_file", true)).toBe("write");
   });
 
   test("requires old connections to be renewed before new product scopes are used", () => {
@@ -236,6 +246,20 @@ describe("Google Drive", () => {
         "https://www.googleapis.com/auth/drive.readonly",
       ),
     ).toEqual(["https://www.googleapis.com/auth/spreadsheets"]);
+    expect(
+      missingToolScopes(
+        drive,
+        "upload_attachment_to_google_drive",
+        "https://www.googleapis.com/auth/drive.readonly",
+      ),
+    ).toEqual(["https://www.googleapis.com/auth/drive.file"]);
+    expect(
+      missingToolScopes(
+        drive,
+        "import_google_drive_file_to_chat",
+        "https://www.googleapis.com/auth/drive.file",
+      ),
+    ).toEqual(["https://www.googleapis.com/auth/drive.readonly"]);
   });
 });
 

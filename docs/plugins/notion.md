@@ -3,9 +3,8 @@
 A Bot with this connector granted reaches Notion **as the person asking**, through the hosted MCP
 server Notion runs at `mcp.notion.com`, on the catalogue's default MCP transport. Two people asking
 the same question get the pages their own accounts can see, and neither sees anything they could not
-open themselves. Unlike Google Drive, this connector ships both read and write tools: the writing
-tools are named in the catalogue, and the action policy governs every call the same as any other
-plugin tool.
+open themselves. Its writing tools are named in the catalogue, and the action policy governs every
+call the same as any other plugin tool.
 
 Setting it up takes two people, and neither can do the other's half:
 
