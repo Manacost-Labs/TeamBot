@@ -2304,32 +2304,11 @@ export function createPluginStore(options: PluginStoreOptions) {
      * "may this person put their skill on that Bot", and a whole profile is more than that needs.
      */
     /**
-     * Whether this Bot's run happens in this process, rather than at an endpoint somewhere.
-     *
-     * Undefined for a Bot nobody has heard of. Asked because a tool this deployment executes can
-     * only be offered to a run it builds: a Bot at an endpoint runs its own loop and is handed
-     * descriptions of what it may call back for, and handing work to another Bot is not one of them.
-     */
-    async agentRunsHere(agentId: string): Promise<boolean | undefined> {
-      const [row] = await database
-        .select({ type: agents.type })
-        .from(agents)
-        .innerJoin(agentProfiles, eq(agentProfiles.agentId, agents.id))
-        // A deleted Bot is not one anybody may be given, and answering about it at all would say it
-        // had existed.
-        .where(and(eq(agents.id, agentId), isNull(agentProfiles.deletedAt)))
-        .limit(1);
-      return row ? row.type === "built_in" : undefined;
-    },
-
-    /**
      * Whether this Bot is one somebody could be handed work by, at all.
      *
-     * The TARGET of a bot grant, unlike the grantee, may perfectly well run at its own endpoint —
-     * being handed work is not the same as being able to hand it on. What it may not be is absent:
-     * `ref` is bare text with no foreign key, so a typo stored happily, `message_bot` was offered,
-     * and every hop refused as not-granted. That is the same row-that-cannot-work this check exists
-     * to stop, arriving from the other side.
+     * Both sides may run at their own endpoint; what neither may be is absent. `ref` is bare text
+     * with no foreign key, so a typo would otherwise be stored happily and every hop refused as
+     * not-granted.
      */
     async agentIsRegistered(agentId: string): Promise<boolean> {
       const [row] = await database

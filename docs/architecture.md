@@ -215,20 +215,19 @@ Reaching a second Bot spends a model call, may wake a computer and can fan out; 
 already in the conversation costs nothing and cannot be aimed anywhere they cannot see. A deployment
 able to switch off the safe exit and keep the expensive one would be backwards.
 
-Both tools are for Bots that run here. A Bot at its own endpoint runs its own loop and is handed
-descriptions of the tools it may call back for, and the callback path executes MCP refs only, so
-neither `message_bot` nor `ask_person` can reach it.
+Both tools work for built-in and remote AG-UI Bots. A remote Bot receives their descriptions with
+the ordinary deployment-owned tools and calls `/api/agent-tools/call` with the run assertion this
+deployment signed. The callback authenticates the Bot token, takes the actor, thread, run and chain
+depth only from that assertion, then rebuilds the tools against the current grant and caps before
+executing them. Revoking a grant therefore applies to the next callback without restarting either
+process.
 
-It is the Bot **doing the asking** that has to run here. Being handed work is not the same as being
-able to hand it on, so the target of a grant may perfectly well live at its own endpoint. A grant
-whose *grantee* is remote is refused rather than stored, so an administrator finds out at the point
-of granting rather than from a Bot that never hands anything on.
-
-That is a real limit rather than a detail, and it is worth being plain about which Bots it leaves
-out: **a Bot created through the UI is a remote one**, because creating a coworker here means
-pointing it at an AG-UI endpoint. Only Bots a tenant package declares as built-in run in this
-process. So on a deployment with no package, nothing can be granted `message_bot` at all, and the
-screens say nothing about why.
+Either side of a handoff may live at its own endpoint. The target is delivered through the same
+runtime path as an ordinary conversation; the asking Bot calls back into the deployment that owns
+the queue, policy and audit trail. A UI-created Bot is remote by design, so this callback path is
+what makes the orchestration screen useful for ordinary coworkers rather than only package-defined
+built-ins. A custom endpoint must implement the deployment-tool callback contract; the managed
+agent runtime does so by default.
 
 Who "a person" is, is a seam. This template answers the person in the conversation, which is the only
 answer a template can give honestly; a company has an on-call rota or a duty desk, and that is a

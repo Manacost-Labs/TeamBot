@@ -657,10 +657,8 @@ export function createPluginRoutes(
      * Which way this is going, because they are not symmetric.
      *
      * TAKING SOMETHING AWAY IS ALWAYS ALLOWED. The checks below decide whether a grant should exist,
-     * and applying them to a revoke turns every one of them into a trap: a `bot` grant made before
-     * the grantee moved to its own endpoint — or before this check existed — could never be removed,
-     * because the reason it is wrong is the same reason the revoke was refused. An administrator
-     * looking at a dead row in the UI would have had no way to delete it.
+     * and applying them to a revoke turns every one of them into a trap: a grant whose Bot or target
+     * was deleted could never be removed because the reason it is stale would also refuse cleanup.
      */
     intent: "grant" | "revoke",
   ): Promise<string | null> {

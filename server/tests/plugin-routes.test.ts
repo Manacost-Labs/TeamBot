@@ -115,11 +115,6 @@ describe("adding a curated server", () => {
  */
 function grantsApp(
   role: "admin" | "user" = "admin",
-  runsHere: (agentId: string) => boolean | undefined = (agentId) => {
-    // Undefined is "no such Bot", which is what the store answers for one nobody registered.
-    if (agentId === "never-registered") return undefined;
-    return agentId !== "at-an-endpoint";
-  },
   owner: string | null = null,
   toolExists = true,
 ) {
@@ -137,7 +132,6 @@ function grantsApp(
     skillOwner: async () => null,
     agentOwner: async () => owner,
     toolExists: async () => toolExists,
-    agentRunsHere: async (agentId: string) => runsHere(agentId),
     agentIsRegistered: async (agentId: string) =>
       agentId !== "never-registered",
   };
@@ -158,7 +152,7 @@ function grantsApp(
 
 describe("granting per-user Google tools", () => {
   test("an owner may grant and revoke a currently advertised Google tool", async () => {
-    const { calls, app } = grantsApp("user", undefined, ADMIN.id);
+    const { calls, app } = grantsApp("user", ADMIN.id);
     const ref = "google-drive/search_files";
 
     const granted = await app.request(
@@ -183,7 +177,7 @@ describe("granting per-user Google tools", () => {
   });
 
   test("an owner cannot pre-grant an unknown future Google tool", async () => {
-    const { calls, app } = grantsApp("user", undefined, ADMIN.id, false);
+    const { calls, app } = grantsApp("user", ADMIN.id, false);
     const response = await app.request(
       "http://openbot.test/api/plugins/grants",
       {
@@ -202,7 +196,7 @@ describe("granting per-user Google tools", () => {
   });
 
   test("a user cannot change Google access on somebody else's Bot", async () => {
-    const { calls, app } = grantsApp("user", undefined, "another-user");
+    const { calls, app } = grantsApp("user", "another-user");
     const response = await app.request(
       "http://openbot.test/api/plugins/grants",
       {
@@ -331,7 +325,7 @@ describe("granting a hop to a Bot that runs somewhere else", () => {
 
   test("a Bot nobody has heard of is refused too", async () => {
     // Undefined is "no such Bot", which must not read as "runs somewhere else" or as permission.
-    const { calls, app } = grantsApp("admin", () => undefined);
+    const { calls, app } = grantsApp();
 
     const response = await app.request(
       "http://openbot.test/api/plugins/grants",
