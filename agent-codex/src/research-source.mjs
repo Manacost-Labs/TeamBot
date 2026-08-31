@@ -79,6 +79,24 @@ function requestBody() {
       },
     };
   }
+  if (command === "youtube-search") {
+    return {
+      command,
+      options: {
+        query: option("query", true),
+        limit: integer("limit", 20),
+      },
+    };
+  }
+  if (command === "youtube-transcript") {
+    return {
+      command,
+      options: {
+        video: option("video", true),
+        language: option("language"),
+      },
+    };
+  }
   if (command === "tinyfish-search") {
     return {
       command,

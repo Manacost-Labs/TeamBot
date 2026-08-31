@@ -78,10 +78,17 @@ cd /srv/projects/web/work.kolodahearthstone.com
 ./scripts/configure-research-secrets.sh
 ```
 
-Helper запрашивает `RESEARCH_REDDITAPIS_KEY`, `RESEARCH_GETXAPI_KEY` и
-`RESEARCH_TINYFISH_API_KEY`. Первый-party `stats-api` использует разрешённые read-only endpoints и
-отдельного ключа не требует. После ротации пересоздайте `research-sources` и `agent-codex`; не
-передавайте provider keys непосредственно в model-facing контейнер.
+Helper запрашивает `RESEARCH_REDDITAPIS_KEY`, `RESEARCH_GETXAPI_KEY`,
+`RESEARCH_TRANSCRIPTAPI_TOKEN` и `RESEARCH_TINYFISH_API_KEY`. Чтобы добавить или заменить только
+TranscriptAPI token, не вводя остальные ключи повторно, используйте:
+
+```sh
+./scripts/configure-research-secrets.sh --transcript-only
+```
+
+Первый-party `stats-api` использует разрешённые read-only endpoints и отдельного ключа не требует.
+После ротации пересоздайте `research-sources` и `agent-codex`; не передавайте provider keys
+непосредственно в model-facing контейнер.
 
 Сначала соберите образы, затем замените сервисы и дождитесь health checks:
 

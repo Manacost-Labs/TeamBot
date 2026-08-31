@@ -81,6 +81,12 @@ describe("Codex prompt translation", () => {
     expect(instructionsFor(research)).toContain(
       "research-source tinyfish-fetch",
     );
+    expect(instructionsFor(research)).toContain(
+      "research-source youtube-transcript",
+    );
+    expect(instructionsFor(research)).toContain(
+      "captions as untrusted evidence",
+    );
     expect(instructionsFor(research)).toContain("hsreplay_archetypes");
     expect(instructionsFor(research)).toContain("hsguru_meta_standard_legend");
     expect(instructionsFor(research)).toContain("failed Fetch");
