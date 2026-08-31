@@ -23,6 +23,13 @@ import {
   testAgentConnection,
 } from "@/lib/agents/queries";
 
+const SELECTABLE_MODELS = new Set([
+  "",
+  "account-default",
+  "gpt-5.6-luna",
+  "gpt-5.6-terra",
+]);
+
 export function AgentFields({
   defaultValues,
   hasAuth = false,
@@ -30,6 +37,7 @@ export function AgentFields({
   onSubmit,
   error,
   onCancel,
+  allowCustomModel = false,
 }: {
   defaultValues: AgentFormValues;
   /** Whether this coworker already has a key, so the field can say so without showing it. */
@@ -38,6 +46,8 @@ export function AgentFields({
   onSubmit: (values: AgentFormValues) => Promise<unknown>;
   error?: Error | null;
   onCancel?: () => void;
+  /** Custom provider identifiers are intentionally an administrator-only control. */
+  allowCustomModel?: boolean;
 }) {
   const form = useForm({
     defaultValues,
@@ -49,6 +59,9 @@ export function AgentFields({
 
   const [connection, setConnection] = useState<ConnectionVerdict | null>(null);
   const [testing, setTesting] = useState(false);
+  const [customModel, setCustomModel] = useState(
+    !SELECTABLE_MODELS.has(defaultValues.model),
+  );
 
   /** Test endpoint reachability from the server, which is what runs will use. */
   const testConnection = async (endpoint: string, key: string) => {
@@ -136,6 +149,70 @@ export function AgentFields({
                 {isInvalid ? (
                   <FieldError errors={field.state.meta.errors} />
                 ) : null}
+              </Field>
+            );
+          }}
+        </form.Field>
+        <form.Field name="model">
+          {(field) => {
+            const custom =
+              customModel || !SELECTABLE_MODELS.has(field.state.value);
+            return (
+              <Field>
+                <FieldLabel htmlFor={field.name}>Модель</FieldLabel>
+                <Select
+                  onValueChange={(value) => {
+                    if (value === null) return;
+                    if (value === "custom") {
+                      setCustomModel(true);
+                      if (SELECTABLE_MODELS.has(field.state.value)) {
+                        field.handleChange("");
+                      }
+                      return;
+                    }
+                    setCustomModel(false);
+                    field.handleChange(value === "default" ? "" : value);
+                  }}
+                  value={custom ? "custom" : field.state.value || "default"}
+                >
+                  <SelectTrigger id={field.name}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="default">
+                        По умолчанию для рабочего пространства
+                      </SelectItem>
+                      <SelectItem value="account-default">
+                        Модель ChatGPT аккаунта
+                      </SelectItem>
+                      <SelectItem value="gpt-5.6-luna">GPT-5.6 Luna</SelectItem>
+                      <SelectItem value="gpt-5.6-terra">
+                        GPT-5.6 Terra
+                      </SelectItem>
+                      {allowCustomModel || custom ? (
+                        <SelectItem value="custom">
+                          {allowCustomModel
+                            ? "Другая модель…"
+                            : `Настроено администратором: ${field.state.value}`}
+                        </SelectItem>
+                      ) : null}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                {custom && allowCustomModel ? (
+                  <Input
+                    aria-label="Идентификатор модели"
+                    onBlur={field.handleBlur}
+                    onChange={(event) => field.handleChange(event.target.value)}
+                    placeholder="provider-model-id"
+                    value={field.state.value}
+                  />
+                ) : null}
+                <p className="text-muted-foreground text-sm">
+                  Провайдер: OpenAI. Секреты модели задаются для рабочего
+                  пространства и здесь не показываются.
+                </p>
               </Field>
             );
           }}
@@ -254,6 +331,55 @@ export function AgentFields({
             </Field>
           )}
         </form.Field>
+
+        <details className="rounded-lg border border-border p-4">
+          <summary className="cursor-pointer text-sm font-medium">
+            Расширенные настройки
+          </summary>
+          <div className="mt-4">
+            <form.Field name="reasoningEffort">
+              {(field) => (
+                <Field>
+                  <FieldLabel htmlFor={field.name}>
+                    Глубина рассуждения
+                  </FieldLabel>
+                  <Select
+                    onValueChange={(value) =>
+                      field.handleChange(
+                        value === "default"
+                          ? ""
+                          : (value as AgentFormValues["reasoningEffort"]),
+                      )
+                    }
+                    value={field.state.value || "default"}
+                  >
+                    <SelectTrigger id={field.name}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="default">
+                          По умолчанию для рантайма
+                        </SelectItem>
+                        <SelectItem value="none">Без рассуждения</SelectItem>
+                        <SelectItem value="minimal">Минимальная</SelectItem>
+                        <SelectItem value="low">Низкая</SelectItem>
+                        <SelectItem value="medium">Средняя</SelectItem>
+                        <SelectItem value="high">Высокая</SelectItem>
+                        <SelectItem value="xhigh">Очень высокая</SelectItem>
+                        <SelectItem value="max">Максимальная</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-muted-foreground text-sm">
+                    Ограниченное значение передаётся управляемому Codex‑агенту
+                    отдельно от идентификатора модели.
+                  </p>
+                </Field>
+              )}
+            </form.Field>
+          </div>
+        </details>
       </FieldGroup>
 
       {error ? (

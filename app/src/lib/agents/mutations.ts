@@ -11,6 +11,18 @@ export type AgentInput = {
   endpoint?: string;
   /** Write-only auth value; omitted when the user leaves the key field empty. */
   auth?: { header: string; value: string };
+  /** Null clears the managed-runtime override. */
+  model?: string | null;
+  /** Null clears the bounded managed-runtime effort override. */
+  reasoningEffort?:
+    | "none"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "max"
+    | null;
 };
 
 /** The sentence for every write here, since they all fail the same way to a reader. */

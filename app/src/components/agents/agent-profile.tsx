@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 import { AbstractAvatar } from "@/components/agents/abstract-avatar";
+import { AgentCapabilities } from "@/components/agents/agent-capabilities";
 import { AgentFields } from "@/components/agents/agent-fields";
 import { CallbackTokenPanel } from "@/components/agents/callback-token-panel";
 import { HandoffPanel } from "@/components/agents/handoff-panel";
@@ -17,6 +18,7 @@ import {
   updateAgentMutationOptions,
 } from "@/lib/agents/mutations";
 import { agentQueryOptions } from "@/lib/agents/queries";
+import { currentUserQueryOptions } from "@/lib/auth/queries";
 
 function Tag({ children }: { children: ReactNode }) {
   return (
@@ -66,6 +68,7 @@ export function AgentProfile({ agentId }: { agentId: string }) {
   const isConfirmingDelete = confirmingDeleteId === agentId;
 
   const agent = useQuery(agentQueryOptions(agentId));
+  const currentUser = useQuery(currentUserQueryOptions());
   const updateAgent = useMutation(updateAgentMutationOptions(queryClient));
   const duplicateAgent = useMutation(
     duplicateAgentMutationOptions(queryClient),
@@ -124,6 +127,7 @@ export function AgentProfile({ agentId }: { agentId: string }) {
 
       {isEditing ? (
         <AgentFields
+          allowCustomModel={currentUser.data?.role === "admin"}
           defaultValues={{
             name: profile.name,
             roleDescription: profile.roleDescription,
@@ -132,6 +136,8 @@ export function AgentProfile({ agentId }: { agentId: string }) {
             endpoint: profile.endpoint ?? "",
             // The server never sends credentials back to the client.
             authValue: "",
+            model: profile.model ?? "",
+            reasoningEffort: profile.reasoningEffort ?? "",
           }}
           hasAuth={profile.hasAuth}
           error={updateAgent.error}
@@ -146,14 +152,25 @@ export function AgentProfile({ agentId }: { agentId: string }) {
           submitLabel="Сохранить изменения"
         />
       ) : (
-        <section className="grid gap-2">
-          <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Роль
-          </h2>
-          <p className="text-sm whitespace-pre-wrap text-pretty">
-            {profile.roleDescription}
-          </p>
-        </section>
+        <>
+          <section className="grid gap-2">
+            <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Роль
+            </h2>
+            <p className="text-sm whitespace-pre-wrap text-pretty">
+              {profile.roleDescription}
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              <Tag>{profile.model ?? "Модель рабочего пространства"}</Tag>
+              <Tag>
+                {profile.reasoningEffort
+                  ? `Рассуждение: ${profile.reasoningEffort}`
+                  : "Глубина рассуждения по умолчанию"}
+              </Tag>
+            </div>
+          </section>
+          <AgentCapabilities agentId={agentId} mine={profile.mine} />
+        </>
       )}
 
       {/*

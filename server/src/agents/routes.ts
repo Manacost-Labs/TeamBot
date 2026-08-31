@@ -10,6 +10,7 @@ import {
   AgentNotFoundError,
   AgentNotManageableError,
   type AgentProfileStore,
+  CustomAgentModelError,
   ManagedAgentUnavailableError,
   ProtectedAgentError,
 } from "./profile-store";
@@ -30,7 +31,24 @@ type AgentInputObject = {
   visibility?: unknown;
   endpoint?: unknown;
   auth?: unknown;
+  model?: unknown;
+  reasoningEffort?: unknown;
 };
+
+const REASONING_EFFORTS = new Set([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+const SELECTABLE_MODELS = new Set([
+  "account-default",
+  "gpt-5.6-luna",
+  "gpt-5.6-terra",
+]);
 
 /**
  * Parse and validate what a user typed into the agent form.
@@ -44,6 +62,9 @@ export function parseAgentInput(
   allowPrivateHosts = false,
   /** Private addresses this deployment named as acceptable. Empty is the default posture. */
   allowedHosts: ReadonlySet<string> = new Set(),
+  /** Custom model ids are an administrator control; an existing id may pass through unchanged. */
+  allowCustomModel = false,
+  existingModel: string | null = null,
 ): AgentInputParseResult {
   if (!isAgentInputObject(input)) {
     return { ok: false, error: "Agent input must be a JSON object." };
@@ -110,9 +131,60 @@ export function parseAgentInput(
     }
   }
 
+  let model: string | null | undefined;
+  if (input.model === null || input.model === "") {
+    model = null;
+  } else if (input.model !== undefined) {
+    if (typeof input.model !== "string") {
+      return { ok: false, error: "Model must be a valid model identifier." };
+    }
+    const candidate = input.model.trim();
+    if (!/^[A-Za-z0-9._:-]{1,120}$/.test(candidate)) {
+      return { ok: false, error: "Model must be a valid model identifier." };
+    }
+    if (
+      !SELECTABLE_MODELS.has(candidate) &&
+      !allowCustomModel &&
+      candidate !== existingModel
+    ) {
+      return {
+        ok: false,
+        error: "Only an administrator can set a custom model identifier.",
+      };
+    }
+    model = candidate;
+  }
+
+  let reasoningEffort: CreateAgentInput["reasoningEffort"];
+  if (input.reasoningEffort === null || input.reasoningEffort === "") {
+    reasoningEffort = null;
+  } else if (input.reasoningEffort !== undefined) {
+    if (
+      typeof input.reasoningEffort !== "string" ||
+      !REASONING_EFFORTS.has(input.reasoningEffort.trim())
+    ) {
+      return {
+        ok: false,
+        error:
+          "Reasoning effort must be none, minimal, low, medium, high, xhigh or max.",
+      };
+    }
+    reasoningEffort =
+      input.reasoningEffort.trim() as CreateAgentInput["reasoningEffort"];
+  }
+
   return {
     ok: true,
-    value: { name, title, roleDescription, visibility, endpoint, auth },
+    value: {
+      name,
+      title,
+      roleDescription,
+      visibility,
+      ...(endpoint ? { endpoint } : {}),
+      ...(auth ? { auth } : {}),
+      ...(model !== undefined ? { model } : {}),
+      ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+    },
   };
 }
 
@@ -309,6 +381,7 @@ export function createAgentRoutes(
       await context.req.json().catch(() => null),
       allowPrivateHosts,
       allowedHosts,
+      context.var.actor.role === "admin",
     );
     if (!parsed.ok) return context.json({ error: parsed.error }, 400);
 
@@ -321,6 +394,15 @@ export function createAgentRoutes(
       await record(context, "bot.created", agent.id, {
         name: parsed.value.name,
         ...(parsed.value.endpoint ? { endpoint: parsed.value.endpoint } : {}),
+        ...(parsed.value.model !== undefined
+          ? { model: parsed.value.model ?? "workspace-default" }
+          : {}),
+        ...(parsed.value.reasoningEffort !== undefined
+          ? {
+              reasoningEffort:
+                parsed.value.reasoningEffort ?? "runtime-default",
+            }
+          : {}),
         hasKey: Boolean(parsed.value.auth),
       });
       return context.json({ agent: agentDto(context.var.actor, agent) }, 201);
@@ -335,6 +417,9 @@ export function createAgentRoutes(
       await context.req.json().catch(() => null),
       allowPrivateHosts,
       allowedHosts,
+      // The store compares a custom id with the profile under its mutation lock. Doing that here
+      // would read before validating malformed JSON and race a concurrent administrator edit.
+      true,
     );
     if (!parsed.ok) return context.json({ error: parsed.error }, 400);
 
@@ -349,6 +434,15 @@ export function createAgentRoutes(
       await record(context, "bot.updated", agent.id, {
         name: parsed.value.name,
         ...(parsed.value.endpoint ? { endpoint: parsed.value.endpoint } : {}),
+        ...(parsed.value.model !== undefined
+          ? { model: parsed.value.model ?? "workspace-default" }
+          : {}),
+        ...(parsed.value.reasoningEffort !== undefined
+          ? {
+              reasoningEffort:
+                parsed.value.reasoningEffort ?? "runtime-default",
+            }
+          : {}),
         ...(parsed.value.auth ? { keyReplaced: true } : {}),
       });
       return context.json({ agent: agentDto(context.var.actor, agent) });
@@ -517,6 +611,8 @@ function agentDto(actor: AgentActor, agent: AgentProfile) {
     // and any credential for it lives in the vault, never in this row.
     endpoint: agent.endpoint,
     hasAuth: agent.hasAuth,
+    model: agent.model,
+    reasoningEffort: agent.reasoningEffort,
     // Whether one exists, never what it is.
     hasCallbackToken: agent.hasCallbackToken,
     canManage: canManageAgent(actor, agent),
@@ -542,6 +638,9 @@ function mapStoreError(context: Context, error: unknown): Response {
   }
   if (error instanceof ManagedAgentUnavailableError) {
     return context.json({ error: error.message }, 400);
+  }
+  if (error instanceof CustomAgentModelError) {
+    return context.json({ error: error.message }, 403);
   }
   throw error;
 }

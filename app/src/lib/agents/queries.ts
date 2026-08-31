@@ -20,6 +20,18 @@ export type AgentProfile = {
   endpoint: string | null;
   /** Whether a key is set for it. Never the key itself. */
   hasAuth: boolean;
+  /** Null means the deployment/account default. */
+  model: string | null;
+  /** Null means the managed runtime default. */
+  reasoningEffort:
+    | "none"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "max"
+    | null;
   /**
    * Whether this coworker holds a credential for calling tools back.
    *

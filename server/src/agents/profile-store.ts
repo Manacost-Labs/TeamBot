@@ -105,6 +105,34 @@ export class ManagedAgentUnavailableError extends Error {
   }
 }
 
+export class CustomAgentModelError extends Error {
+  constructor() {
+    super("Only an administrator can set a custom model identifier.");
+    this.name = "CustomAgentModelError";
+  }
+}
+
+const SELECTABLE_MODELS = new Set([
+  "account-default",
+  "gpt-5.6-luna",
+  "gpt-5.6-terra",
+]);
+
+function assertModelAllowed(
+  actor: AgentActor,
+  requested: string | null | undefined,
+  existing: string | null = null,
+) {
+  if (
+    actor.role !== "admin" &&
+    requested &&
+    !SELECTABLE_MODELS.has(requested) &&
+    requested !== existing
+  ) {
+    throw new CustomAgentModelError();
+  }
+}
+
 const joinedProjection = {
   id: agents.id,
   name: agents.name,
@@ -166,7 +194,39 @@ function mapProfile(
     // Whether a key is set, never which. The form needs to show "a key is set" so a person does not
     // wipe one by saving an unrelated edit; showing the value would put a secret in a screenshot.
     hasAuth: authFromConfiguration(row.configuration) !== null,
+    model: modelOf(row.configuration),
+    reasoningEffort: reasoningEffortOf(row.configuration),
   };
+}
+
+function modelOf(configuration: unknown): string | null {
+  if (!configuration || typeof configuration !== "object") return null;
+  const model = (configuration as { model?: unknown }).model;
+  return typeof model === "string" &&
+    /^[A-Za-z0-9._:-]{1,120}$/.test(model.trim())
+    ? model.trim()
+    : null;
+}
+
+const REASONING_EFFORTS = new Set([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+
+function reasoningEffortOf(
+  configuration: unknown,
+): AgentProfile["reasoningEffort"] {
+  if (!configuration || typeof configuration !== "object") return null;
+  const effort = (configuration as { reasoningEffort?: unknown })
+    .reasoningEffort;
+  return typeof effort === "string" && REASONING_EFFORTS.has(effort)
+    ? (effort as NonNullable<AgentProfile["reasoningEffort"]>)
+    : null;
 }
 
 /**
@@ -301,6 +361,7 @@ export function createAgentProfileStore(
     },
 
     create(actor, input) {
+      assertModelAllowed(actor, input.model);
       return database.transaction(async (transaction) => {
         const id = newAgentId();
         const endpoint = input.endpoint
@@ -320,6 +381,10 @@ export function createAgentProfileStore(
           // auth-header.ts for why a bearer token must not sit next to the endpoint.
           configuration: {
             ...endpoint,
+            ...(input.model ? { model: input.model } : {}),
+            ...(input.reasoningEffort
+              ? { reasoningEffort: input.reasoningEffort }
+              : {}),
             ...(input.auth && vault
               ? {
                   auth: await storeAgentAuth({
@@ -356,6 +421,7 @@ export function createAgentProfileStore(
           const profile = await findAccessibleProfile(transaction, actor, id);
           if (!profile) throw new AgentNotFoundError(id);
           requireManageable(actor, profile);
+          assertModelAllowed(actor, input.model, profile.model);
 
           const updatedAt = new Date();
           /**
@@ -379,6 +445,10 @@ export function createAgentProfileStore(
           const configuration = {
             ...previous,
             ...(input.endpoint ? { endpoint: input.endpoint } : {}),
+            ...(input.model !== undefined ? { model: input.model } : {}),
+            ...(input.reasoningEffort !== undefined
+              ? { reasoningEffort: input.reasoningEffort }
+              : {}),
             ...(input.auth && vault
               ? {
                   auth: await storeAgentAuth({
@@ -444,7 +514,13 @@ export function createAgentProfileStore(
           id: duplicateId,
           name: source.name,
           type: "remote_ag_ui",
-          configuration: managedConfiguration,
+          configuration: {
+            ...managedConfiguration,
+            ...(source.model ? { model: source.model } : {}),
+            ...(source.reasoningEffort
+              ? { reasoningEffort: source.reasoningEffort }
+              : {}),
+          },
         });
         await transaction.insert(agentProfiles).values({
           agentId: duplicateId,

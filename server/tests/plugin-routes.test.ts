@@ -120,6 +120,8 @@ function grantsApp(
     if (agentId === "never-registered") return undefined;
     return agentId !== "at-an-endpoint";
   },
+  owner: string | null = null,
+  toolExists = true,
 ) {
   const calls: Array<{ verb: string; kind: string; ref: string }> = [];
   const store = {
@@ -133,7 +135,8 @@ function grantsApp(
       calls.push({ verb: "revoke", kind, ref });
     },
     skillOwner: async () => null,
-    agentOwner: async () => null,
+    agentOwner: async () => owner,
+    toolExists: async () => toolExists,
     agentRunsHere: async (agentId: string) => runsHere(agentId),
     agentIsRegistered: async (agentId: string) =>
       agentId !== "never-registered",
@@ -152,6 +155,71 @@ function grantsApp(
 
   return { calls, app };
 }
+
+describe("granting per-user Google tools", () => {
+  test("an owner may grant and revoke a currently advertised Google tool", async () => {
+    const { calls, app } = grantsApp("user", undefined, ADMIN.id);
+    const ref = "google-drive/search_files";
+
+    const granted = await app.request(
+      "http://openbot.test/api/plugins/grants",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: "mcp", ref, agentId: "assistant" }),
+      },
+    );
+    const revoked = await app.request(
+      `http://openbot.test/api/plugins/grants?kind=mcp&ref=${encodeURIComponent(ref)}&agentId=assistant`,
+      { method: "DELETE" },
+    );
+
+    expect(granted.status).toBe(200);
+    expect(revoked.status).toBe(200);
+    expect(calls).toEqual([
+      { verb: "grant", kind: "mcp", ref },
+      { verb: "revoke", kind: "mcp", ref },
+    ]);
+  });
+
+  test("an owner cannot pre-grant an unknown future Google tool", async () => {
+    const { calls, app } = grantsApp("user", undefined, ADMIN.id, false);
+    const response = await app.request(
+      "http://openbot.test/api/plugins/grants",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "mcp",
+          ref: "google-drive/future_write",
+          agentId: "assistant",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(403);
+    expect(calls).toEqual([]);
+  });
+
+  test("a user cannot change Google access on somebody else's Bot", async () => {
+    const { calls, app } = grantsApp("user", undefined, "another-user");
+    const response = await app.request(
+      "http://openbot.test/api/plugins/grants",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "mcp",
+          ref: "google-drive/search_files",
+          agentId: "assistant",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(403);
+    expect(calls).toEqual([]);
+  });
+});
 
 describe("granting one Bot to another", () => {
   test("an administrator can grant it", async () => {

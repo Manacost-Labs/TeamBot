@@ -308,6 +308,8 @@ describe("agent profile store integration", () => {
       // moves host, and the alternative is deleting the coworker and losing its conversations. It
       // reaches here already validated by the same check that guards creation.
       endpoint: "https://moved.example.test/ag-ui",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "high",
       ownerUserId: "forged-owner",
       avatarSeed: "forged-avatar",
       packageId: deploymentPackage.id,
@@ -337,7 +339,11 @@ describe("agent profile store integration", () => {
       id: source.agentId,
       name: "Renamed Assistant",
       type: "remote_ag_ui",
-      configuration: { endpoint: "https://moved.example.test/ag-ui" },
+      configuration: {
+        endpoint: "https://moved.example.test/ag-ui",
+        model: "gpt-5.6-luna",
+        reasoningEffort: "high",
+      },
       packageId: null,
     });
     expect(profile).toMatchObject({
@@ -515,6 +521,11 @@ describe("agent profile store integration", () => {
       title: "Source Title",
       roleDescription: "Source role.",
       avatarSeed: "source-avatar",
+      configuration: {
+        endpoint: "https://seed.example.test/ag-ui",
+        model: "gpt-5.6-luna",
+        reasoningEffort: "xhigh",
+      },
     });
     await store.setHidden(owner, source.agentId, true);
 
@@ -533,6 +544,8 @@ describe("agent profile store integration", () => {
       systemOwned: false,
       hidden: false,
       deletedAt: null,
+      model: "gpt-5.6-luna",
+      reasoningEffort: "xhigh",
     });
     expect(duplicate.id).not.toBe(source.agentId);
     createdAgentIds.push(duplicate.id);

@@ -123,6 +123,27 @@ describe("registered Copilot agents", () => {
     ).toMatchObject({ model: "gpt-5.6-luna-xhigh" });
   });
 
+  test("keeps only a bounded per-agent reasoning override", () => {
+    expect(
+      registeredAgentFromRow({
+        ...riskRow,
+        configuration: {
+          endpoint: "https://risk.internal:443/ag-ui",
+          reasoningEffort: " xhigh ",
+        },
+      }),
+    ).toMatchObject({ reasoningEffort: "xhigh" });
+    expect(
+      registeredAgentFromRow({
+        ...riskRow,
+        configuration: {
+          endpoint: "https://risk.internal:443/ag-ui",
+          reasoningEffort: "xhigh;unsafe",
+        },
+      }),
+    ).not.toHaveProperty("reasoningEffort");
+  });
+
   test("configures an OpenAI built-in agent", () => {
     expect(
       builtInAgentConfiguration(
@@ -518,6 +539,29 @@ describe("standing agent roles", () => {
       "standing-role",
     );
     expect(JSON.stringify(sent?.state ?? {})).not.toContain("standing-role");
+  });
+
+  test("forwards model and reasoning overrides to the managed endpoint", async () => {
+    await using endpoint = fakeAgUiEndpoint();
+    const agents = await buildAgents(
+      [
+        {
+          ...remoteAgent(endpoint.url),
+          model: "gpt-5.6-luna",
+          reasoningEffort: "xhigh",
+        },
+      ],
+      { provider: "openai", defaultModel: "gpt-5.6-terra" },
+      null,
+    );
+
+    agents.agent_expense?.setMessages([userMessage("Check this.")]);
+    await agents.agent_expense?.runAgent();
+
+    expect(endpoint.requests.at(-1)?.forwardedProps).toMatchObject({
+      openbotAgentModel: "gpt-5.6-luna",
+      openbotAgentReasoningEffort: "xhigh",
+    });
   });
 
   test("resolves a deleted coworker as a tombstone that never reaches its endpoint", async () => {

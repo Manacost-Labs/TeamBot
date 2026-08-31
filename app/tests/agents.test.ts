@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { agentFormSchema } from "@/lib/agents/form";
+import {
+  agentFormSchema,
+  agentInputFrom,
+  emptyAgentForm,
+} from "@/lib/agents/form";
 import { agentKeys } from "@/lib/agents/queries";
 import { channelKeys } from "@/lib/channels/queries";
 
@@ -27,6 +31,8 @@ describe("coworker form validation", () => {
         visibility: "private",
         endpoint: "",
         authValue: "",
+        model: "",
+        reasoningEffort: "",
       }).name,
     ).toBe("Expense Manager");
   });
@@ -38,6 +44,8 @@ describe("coworker form validation", () => {
       roleDescription: "Review receipts.",
       visibility: "private" as const,
       authValue: "",
+      model: "",
+      reasoningEffort: "",
     };
     // Empty means the Bot in the box, which is what most people want first time.
     expect(agentFormSchema.safeParse({ ...valid, endpoint: "" }).success).toBe(
@@ -64,6 +72,8 @@ describe("coworker form validation", () => {
       visibility: "private" as const,
       endpoint: "",
       authValue: "",
+      model: "",
+      reasoningEffort: "",
     };
 
     expect(agentFormSchema.safeParse({ ...valid, name: "   " }).success).toBe(
@@ -84,5 +94,37 @@ describe("coworker form validation", () => {
     expect(
       agentFormSchema.safeParse({ ...valid, visibility: "everyone" }).success,
     ).toBe(false);
+  });
+
+  test("accepts bounded model and reasoning overrides", () => {
+    const valid = {
+      ...emptyAgentForm,
+      name: "Editor",
+      title: "Chief editor",
+      roleDescription: "Improve drafts and explain meaningful edits.",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "xhigh" as const,
+    };
+
+    expect(agentFormSchema.safeParse(valid).success).toBe(true);
+    expect(
+      agentFormSchema.safeParse({ ...valid, model: "bad model" }).success,
+    ).toBe(false);
+    expect(
+      agentFormSchema.safeParse({
+        ...valid,
+        reasoningEffort: "unbounded",
+      }).success,
+    ).toBe(false);
+    expect(agentInputFrom(valid)).toMatchObject({
+      model: "gpt-5.6-luna",
+      reasoningEffort: "xhigh",
+    });
+    expect(
+      agentInputFrom({ ...valid, model: "", reasoningEffort: "" }),
+    ).toMatchObject({
+      model: null,
+      reasoningEffort: null,
+    });
   });
 });

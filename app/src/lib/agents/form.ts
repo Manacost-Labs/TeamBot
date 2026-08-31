@@ -38,6 +38,23 @@ export const agentFormSchema = z.object({
    * always empty when editing, and leaving it empty keeps whatever key is already set.
    */
   authValue: z.string(),
+  model: z
+    .string()
+    .trim()
+    .refine(
+      (value) => value === "" || /^[A-Za-z0-9._:-]{1,120}$/.test(value),
+      "Use letters, numbers, dots, underscores, colons or hyphens.",
+    ),
+  reasoningEffort: z.enum([
+    "",
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+  ]),
 });
 
 export type AgentFormValues = z.infer<typeof agentFormSchema>;
@@ -49,6 +66,8 @@ export const emptyAgentForm: AgentFormValues = {
   visibility: "private",
   endpoint: "",
   authValue: "",
+  model: "",
+  reasoningEffort: "",
 };
 
 /** Convert form values to API input; omit an empty key so editing preserves the current credential. */
@@ -59,6 +78,8 @@ export function agentInputFrom(values: AgentFormValues) {
     roleDescription: values.roleDescription,
     visibility: values.visibility,
     endpoint: values.endpoint,
+    model: values.model || null,
+    reasoningEffort: values.reasoningEffort || null,
     ...(values.authValue.trim()
       ? { auth: { header: "Authorization", value: values.authValue.trim() } }
       : {}),

@@ -210,6 +210,63 @@ describe("agent input parser", () => {
       },
     });
   });
+
+  test("accepts only bounded model and reasoning overrides", () => {
+    expect(
+      parseAgentInput({
+        ...validInput,
+        model: " gpt-5.6-luna ",
+        reasoningEffort: "xhigh",
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        ...validInput,
+        model: "gpt-5.6-luna",
+        reasoningEffort: "xhigh",
+      },
+    });
+    expect(
+      parseAgentInput({ ...validInput, model: "gpt model; unsafe" }),
+    ).toEqual({
+      ok: false,
+      error: "Model must be a valid model identifier.",
+    });
+    expect(
+      parseAgentInput({ ...validInput, model: "company-custom-model" }),
+    ).toEqual({
+      ok: false,
+      error: "Only an administrator can set a custom model identifier.",
+    });
+    expect(
+      parseAgentInput(
+        { ...validInput, model: "company-custom-model" },
+        false,
+        new Set(),
+        true,
+      ),
+    ).toEqual({
+      ok: true,
+      value: { ...validInput, model: "company-custom-model" },
+    });
+    expect(
+      parseAgentInput({ ...validInput, reasoningEffort: "unbounded" }),
+    ).toEqual({
+      ok: false,
+      error:
+        "Reasoning effort must be none, minimal, low, medium, high, xhigh or max.",
+    });
+    expect(
+      parseAgentInput({
+        ...validInput,
+        model: null,
+        reasoningEffort: null,
+      }),
+    ).toEqual({
+      ok: true,
+      value: { ...validInput, model: null, reasoningEffort: null },
+    });
+  });
 });
 
 describe("agent lifecycle routes", () => {
@@ -317,7 +374,7 @@ describe("agent lifecycle routes", () => {
     const store = fakeStore({
       async list() {
         return [
-          profile(),
+          profile({ model: "gpt-5.6-luna", reasoningEffort: "high" }),
           profile({ id: "agent-2", ownerUserId: "user-2" }),
           profile({
             id: "system-agent",
@@ -342,6 +399,8 @@ describe("agent lifecycle routes", () => {
           visibility: "private",
           hidden: false,
           systemOwned: false,
+          model: "gpt-5.6-luna",
+          reasoningEffort: "high",
           canManage: true,
           mine: true,
         },

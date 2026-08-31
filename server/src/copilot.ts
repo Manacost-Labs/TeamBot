@@ -65,6 +65,8 @@ type RegisteredRemoteAgent = {
   endpoint: string;
   /** Optional per-coworker model override, forwarded only to the managed runtime. */
   model?: string;
+  /** Optional bounded Codex reasoning effort, forwarded only to the managed runtime. */
+  reasoningEffort?: string;
   standingMessage: StandingRoleMessage;
   /** The key this agent sits behind, resolved from the vault at load time. Never logged. */
   headers?: Record<string, string>;
@@ -81,6 +83,16 @@ type RegisteredUnavailableAgent = {
   type: "unavailable";
   reason: string;
 };
+
+const MANAGED_REASONING_EFFORTS = new Set([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
 
 export type RegisteredAgent =
   | RegisteredBuiltInAgent
@@ -174,6 +186,10 @@ export function registeredAgentFromRow(
         ...(typeof configuration.model === "string" &&
         /^[A-Za-z0-9._:-]{1,120}$/.test(configuration.model.trim())
           ? { model: configuration.model.trim() }
+          : {}),
+        ...(typeof configuration.reasoningEffort === "string" &&
+        MANAGED_REASONING_EFFORTS.has(configuration.reasoningEffort.trim())
+          ? { reasoningEffort: configuration.reasoningEffort.trim() }
           : {}),
         standingMessage: standingRoleMessage(row),
       }
@@ -645,6 +661,9 @@ function remoteAgentWithStandingRole(
         ...(input.forwardedProps ?? {}),
         openbotBotId: agent.id,
         ...(agent.model ? { openbotAgentModel: agent.model } : {}),
+        ...(agent.reasoningEffort
+          ? { openbotAgentReasoningEffort: agent.reasoningEffort }
+          : {}),
         /*
          * Which of those tools this deployment runs, as opposed to the surface.
          *

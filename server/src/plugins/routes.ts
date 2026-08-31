@@ -667,9 +667,26 @@ export function createPluginRoutes(
     const actor = skillActor(context);
 
     if (kind === "mcp") {
-      return actor.isAdmin
-        ? null
-        : "An administrator decides which Bots may reach a tool.";
+      if (actor.isAdmin) return null;
+
+      /*
+       * Google runs on the caller's own OAuth token, never a deployment credential. The owner may
+       * therefore decide which reviewed Google tools their own Bot can ask for. This remains much
+       * narrower than granting arbitrary MCP: the server id is pinned, the tool must already be in
+       * the advertised list, and call time still checks OAuth, grant, policy and audit.
+       */
+      if (ref.startsWith("google-drive/")) {
+        const owner = await store.agentOwner(agentId);
+        if (owner !== actor.id) {
+          return "You can only change Google access for a Bot you own.";
+        }
+        if (intent === "grant" && !(await store.toolExists(ref))) {
+          return "That Google Workspace tool is not available in this deployment.";
+        }
+        return null;
+      }
+
+      return "An administrator decides which Bots may reach a tool.";
     }
 
     if (kind === "bot") {

@@ -87,6 +87,18 @@ export function grantPlugin(variables: {
   });
 }
 
+/** Revoke one grant without refetching, for an atomic-looking bounded batch in an editor. */
+export function revokePlugin(variables: {
+  kind: PluginKind;
+  ref: string;
+  agentId: string;
+}): Promise<unknown> {
+  return client(
+    `/api/plugins/grants?kind=${variables.kind}&ref=${encodeURIComponent(variables.ref)}&agentId=${encodeURIComponent(variables.agentId)}`,
+    { method: "DELETE", fallback: "That Agent could not be changed." },
+  );
+}
+
 /**
  * Whether one Bot carries one plugin.
  *
@@ -105,10 +117,7 @@ export function setPluginGrantMutationOptions(queryClient: QueryClient) {
         await grantPlugin(variables);
         return;
       }
-      await client(
-        `/api/plugins/grants?kind=${variables.kind}&ref=${encodeURIComponent(variables.ref)}&agentId=${encodeURIComponent(variables.agentId)}`,
-        { method: "DELETE", fallback: "That Agent could not be changed." },
-      );
+      await revokePlugin(variables);
     },
     onSuccess: () => invalidatePlugins(queryClient),
   });

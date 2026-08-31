@@ -2232,6 +2232,11 @@ export function createPluginStore(options: PluginStoreOptions) {
       return row ? row.ownerUserId : undefined;
     },
 
+    /** Whether a ref names a tool this deployment currently advertises. */
+    async toolExists(ref: string): Promise<boolean> {
+      return (await knownToolRefs([ref])).has(ref);
+    },
+
     async installSkill(input: {
       slug: string;
       title: string;

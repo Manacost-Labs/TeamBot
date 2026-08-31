@@ -1,5 +1,14 @@
 export type AgentVisibility = "public" | "private";
 
+export type AgentReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
 export type AgentActor = {
   id: string;
   role: "admin" | "user";
@@ -20,6 +29,10 @@ export type AgentProfile = {
   endpoint: string | null;
   /** Whether a key is set for it. Never the key. */
   hasAuth: boolean;
+  /** Optional managed-runtime model override. Null keeps the deployment/account default. */
+  model: string | null;
+  /** Optional managed-runtime effort override. Null keeps the runtime default. */
+  reasoningEffort: AgentReasoningEffort | null;
   /**
    * Whether this agent holds a credential for calling tools back.
    *
@@ -48,4 +61,8 @@ export type CreateAgentInput = Pick<
    * why it is optional rather than defaulting to empty; a blank field must not drop a key.
    */
   auth?: { header: string; value: string };
+  /** Empty/absent keeps the deployment or ChatGPT account default. */
+  model?: string | null;
+  /** Empty/absent keeps the managed runtime's bounded default. */
+  reasoningEffort?: AgentReasoningEffort | null;
 };
