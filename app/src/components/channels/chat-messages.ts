@@ -9,6 +9,10 @@ import {
   agentRunStatusLabel,
   isAgentRunActive,
 } from "@/lib/copilot/run-state";
+import {
+  parseArtifactToolResult,
+  REMOTE_CREATE_ARTIFACT_TOOL_NAME,
+} from "@/lib/artifacts/contract";
 
 /**
  * Transcript projection that pairs assistant tool calls with later tool-result messages.
@@ -321,6 +325,7 @@ export function projectTranscriptWindow(
 
   const safeSize = Math.max(1, Math.floor(size));
   const safeOlderStep = Math.max(1, Math.floor(olderStep));
+  const knownToolCallIds = toolCallIds(messages);
   const results = new Map<string, string | undefined>();
   const tailNewestFirst: TranscriptItem[] = [];
   const pinnedNewerNewestFirst: TranscriptItem[] = [];
@@ -374,6 +379,15 @@ export function projectTranscriptWindow(
       // more than one result for the same call, matching the forward reader's last-result-wins rule.
       if (!results.has(message.toolCallId)) {
         results.set(message.toolCallId, message.content);
+      }
+      const recovered = recoveredArtifactToolCall(message, knownToolCallIds);
+      if (recovered) {
+        visit({
+          kind: "tool",
+          id: recovered.id,
+          toolCall: recovered,
+          result: message.content,
+        });
       }
       continue;
     }
@@ -447,9 +461,47 @@ function isToolResult(
   return message.role === "tool" && "toolCallId" in message;
 }
 
+function toolCallIds(
+  messages: ReadonlyArray<Readonly<Message>>,
+): ReadonlySet<string> {
+  return new Set(
+    messages.flatMap((message) =>
+      message.role === "assistant"
+        ? (message.toolCalls ?? []).map((call) => call.id)
+        : [],
+    ),
+  );
+}
+
+/**
+ * Intelligence can retain a completed tool result while omitting its assistant call envelope.
+ * Recover only a validated first-party artifact candidate; ArtifactCard still fetches authenticated
+ * metadata and requires `source: agent_generated` before exposing a preview or download.
+ */
+function recoveredArtifactToolCall(
+  message: Readonly<Message> & ToolResultMessage,
+  knownToolCallIds: ReadonlySet<string>,
+): ToolCall | null {
+  if (
+    knownToolCallIds.has(message.toolCallId) ||
+    !parseArtifactToolResult(REMOTE_CREATE_ARTIFACT_TOOL_NAME, message.content)
+  ) {
+    return null;
+  }
+  return {
+    id: message.toolCallId,
+    type: "function",
+    function: {
+      name: REMOTE_CREATE_ARTIFACT_TOOL_NAME,
+      arguments: "{}",
+    },
+  };
+}
+
 export function toVisibleChatItems(
   messages: ReadonlyArray<Readonly<Message>>,
 ): VisibleChatItem[] {
+  const knownToolCallIds = toolCallIds(messages);
   // Gather results first so calls render with their current completion state in the same pass.
   const results = new Map<string, string | undefined>();
   for (const message of messages) {
@@ -457,6 +509,19 @@ export function toVisibleChatItems(
   }
 
   return messages.flatMap((message): VisibleChatItem[] => {
+    if (isToolResult(message)) {
+      const recovered = recoveredArtifactToolCall(message, knownToolCallIds);
+      return recovered
+        ? [
+            {
+              kind: "tool",
+              id: recovered.id,
+              toolCall: recovered,
+              result: message.content,
+            },
+          ]
+        : [];
+    }
     if (message.role === "reasoning") {
       return message.content
         ? [{ kind: "reasoning", id: message.id, text: message.content }]

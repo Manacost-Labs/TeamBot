@@ -284,6 +284,52 @@ describe("transcript windowing", () => {
     },
   );
 
+  test("renders a verified artifact card from an orphaned persisted result", async () => {
+    const attachmentId = "69bb8eb0-1ac8-4c67-aeca-2362e2f507cd";
+    globalThis.fetch = (async () =>
+      Response.json({
+        attachment: {
+          id: attachmentId,
+          name: "youtube-summary.md",
+          mimeType: "text/markdown",
+          size: 8782,
+          messageId: "artifact:69bb8eb0-1ac8-4c67-aeca-2362e2f507ca",
+          source: "agent_generated",
+        },
+      })) as unknown as typeof fetch;
+
+    const view = render(
+      <ChatTranscript
+        conversationKey="youtube-channel"
+        messages={[
+          {
+            id: "artifact-result",
+            role: "tool",
+            toolCallId: "orphaned-artifact-call",
+            content: JSON.stringify({
+              schema: "openbot.artifact.v1",
+              artifact: {
+                attachmentId,
+                filename: "youtube-summary.md",
+                mimeType: "text/markdown",
+                size: 8782,
+                title: "Конспект YouTube-видео",
+              },
+            }),
+          },
+          {
+            id: "answer",
+            role: "assistant",
+            content: "Успешных ссылок: 1. Недоступных: 0.",
+          },
+        ]}
+      />,
+    );
+
+    await view.findByText("youtube-summary.md · Markdown · 8.6 КБ");
+    expect(view.getByTestId("artifact-card")).toBeTruthy();
+  });
+
   test("keeps matching JSON from another tool and malformed artifact results as ordinary output", () => {
     let fetches = 0;
     globalThis.fetch = (async () => {

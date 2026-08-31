@@ -344,6 +344,60 @@ describe("projectTranscriptWindow", () => {
     expect(window.hiddenBefore).toBe(1);
   });
 
+  test("recovers a persisted artifact result when its assistant tool call is missing", () => {
+    const result = JSON.stringify({
+      schema: "openbot.artifact.v1",
+      artifact: {
+        attachmentId: "69bb8eb0-1ac8-4c67-aeca-2362e2f507cd",
+        filename: "youtube-summary.md",
+        mimeType: "text/markdown",
+        size: 8782,
+        title: "Конспект YouTube-видео",
+      },
+    });
+    const window = projectTranscriptWindow(
+      [
+        {
+          id: "artifact-result",
+          role: "tool",
+          toolCallId: "artifact-call",
+          content: result,
+        },
+        {
+          id: "answer",
+          role: "assistant",
+          content: "Успешных ссылок: 1. Недоступных: 0.",
+        },
+      ] as Message[],
+      { size: 60 },
+    );
+
+    expect(window.items[0]).toMatchObject({
+      kind: "tool",
+      id: "artifact-call",
+      result,
+      toolCall: {
+        function: { name: "openbot__artifacts__create_artifact" },
+      },
+    });
+  });
+
+  test("does not recover a malformed standalone tool result", () => {
+    const window = projectTranscriptWindow(
+      [
+        {
+          id: "tool-result",
+          role: "tool",
+          toolCallId: "unknown-call",
+          content: '{"schema":"openbot.artifact.v1"}',
+        },
+      ] as Message[],
+      { size: 60 },
+    );
+
+    expect(window.items).toEqual([]);
+  });
+
   test("falls back to the live tail when a saved row no longer exists", () => {
     const window = projectTranscriptWindow(longHistory, {
       size: 60,
