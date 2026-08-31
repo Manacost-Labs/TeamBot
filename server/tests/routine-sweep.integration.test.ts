@@ -943,7 +943,7 @@ describe("consuming a claimed firing", () => {
       const [leaked] = await runsFor(routine.id);
       await database
         .update(routineRuns)
-        .set({ startedAt: new Date(Date.now() - 11 * 60_000) })
+        .set({ startedAt: new Date(Date.now() - 41 * 60_000) })
         .where(eq(routineRuns.id, leaked?.id as string));
 
       await dispatchClaimedRoutines(
@@ -1019,7 +1019,7 @@ describe("consuming a claimed firing", () => {
     const attempt = runs.find((run) => run.id !== inFlight.runId);
     await database
       .update(routineRuns)
-      .set({ startedAt: new Date(Date.now() - 11 * 60_000) })
+      .set({ startedAt: new Date(Date.now() - 41 * 60_000) })
       .where(eq(routineRuns.id, attempt?.id as string));
     const warnAgain = spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -1069,7 +1069,7 @@ describe("consuming a claimed firing", () => {
     const [leaked] = await runsFor(routine.id);
     await database
       .update(routineRuns)
-      .set({ startedAt: new Date(Date.now() - 11 * 60_000) })
+      .set({ startedAt: new Date(Date.now() - 41 * 60_000) })
       .where(eq(routineRuns.id, leaked?.id as string));
 
     // Attempt two, claimed twenty minutes after the occurrence: outside the window, so the firing
@@ -1105,11 +1105,11 @@ describe("consuming a claimed firing", () => {
   test("a run abandoned by a dead server is closed by the next pass, as skipped, with an honest reason", async () => {
     const { owner, routine } = await makeRoutine();
     const { runId } = await store.insertRun(routine.id);
-    // Aged past the reaper's cutoff (twice the server's five-minute turn timeout) by hand: the run
-    // was opened by a server that died eleven minutes ago.
+    // Aged past the reaper's cutoff (which includes the longer data-control turn timeout) by hand:
+    // the run was opened by a server that died forty-one minutes ago.
     await database
       .update(routineRuns)
-      .set({ startedAt: new Date(Date.now() - 11 * 60_000) })
+      .set({ startedAt: new Date(Date.now() - 41 * 60_000) })
       .where(eq(routineRuns.id, runId));
 
     // Nothing is claimed in this pass; the reaper alone does the work.

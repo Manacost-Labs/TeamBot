@@ -58,8 +58,8 @@ describe("attachment metadata migration", () => {
         "utf8",
       ),
     ) as { entries: JournalEntry[] };
-    const entry = journal.entries.at(-1);
-    const previous = journal.entries.at(-2);
+    const entry = journal.entries.find((candidate) => candidate.idx === 25);
+    const previous = journal.entries.find((candidate) => candidate.idx === 24);
 
     expect(entry?.idx).toBe(25);
     expect(entry?.tag).toMatch(/^0025_/);

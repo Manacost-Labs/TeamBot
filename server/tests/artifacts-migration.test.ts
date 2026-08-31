@@ -11,8 +11,8 @@ describe("artifact export migration", () => {
         "utf8",
       ),
     ) as { entries: JournalEntry[] };
-    const entry = journal.entries.at(-1);
-    const previous = journal.entries.at(-2);
+    const entry = journal.entries.find((candidate) => candidate.idx === 26);
+    const previous = journal.entries.find((candidate) => candidate.idx === 25);
 
     expect(entry?.idx).toBe(26);
     expect(entry?.tag).toBe("0026_artifact_exports");

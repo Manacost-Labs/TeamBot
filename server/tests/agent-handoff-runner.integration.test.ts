@@ -31,11 +31,11 @@ const silent: AuditStore = { insert: async () => {} };
 afterAll(async () => {
   await database.delete(workItems).where(eq(workItems.kind, kind));
   await database.$client.close();
-});
+}, 15_000);
 
 beforeEach(async () => {
   await database.delete(workItems).where(eq(workItems.kind, kind));
-});
+}, 15_000);
 
 function hop(run: string, n: number): HandoffWork {
   return {

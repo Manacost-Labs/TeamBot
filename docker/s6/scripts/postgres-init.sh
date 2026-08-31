@@ -1,4 +1,5 @@
 #!/command/with-contenv sh
+# shellcheck shell=sh
 # Create the cluster the first time, and hand the API a password every time.
 #
 # Bound to loopback, but no longer trust-auth. The process beside it is not the only client: the

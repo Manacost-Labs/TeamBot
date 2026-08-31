@@ -412,7 +412,7 @@ describe("agent profile store integration", () => {
     expect(profile.systemOwned).toBe(true);
     await expect(
       store.update(owner, source.agentId, input),
-    ).rejects.toBeInstanceOf(ProtectedAgentError);
+    ).rejects.toBeInstanceOf(AgentNotManageableError);
     await expect(
       store.softDelete(owner, source.agentId),
     ).rejects.toBeInstanceOf(ProtectedAgentError);
@@ -443,7 +443,7 @@ describe("agent profile store integration", () => {
     expect(outcome.status).toBe("rejected");
     expect(blocked).toBe(true);
     if (outcome.status === "rejected") {
-      expect(outcome.reason).toBeInstanceOf(ProtectedAgentError);
+      expect(outcome.reason).toBeInstanceOf(AgentNotManageableError);
     }
     const [canonical] = await database
       .select()

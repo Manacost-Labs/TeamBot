@@ -1,6 +1,6 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { createAgentProfileStore } from "../src/agents/profile-store";
 import type { AgentActor } from "../src/agents/profile-types";
 import { createChannelStore } from "../src/channels/routes";
@@ -1053,10 +1053,14 @@ describe("reaping the runs the server never finished", () => {
   }
 
   test("closes only the rows past the cutoff, as skipped, and leaves live work alone", async () => {
-    const { routine } = await makeRoutine();
-    const abandoned = await store.insertRun(routine.id);
-    const inFlight = await store.insertRun(routine.id);
-    const finished = await store.insertRun(routine.id);
+    // Each routine can have only one open run. Use separate routines so this test exercises the
+    // reaper's age/status boundary rather than the scheduled-overlap guard in `insertRun`.
+    const { routine: abandonedRoutine } = await makeRoutine();
+    const { routine: inFlightRoutine } = await makeRoutine();
+    const { routine: finishedRoutine } = await makeRoutine();
+    const abandoned = await store.insertRun(abandonedRoutine.id);
+    const inFlight = await store.insertRun(inFlightRoutine.id);
+    const finished = await store.insertRun(finishedRoutine.id);
     await store.finishRun(finished.runId, "succeeded");
     await ageRun(abandoned.runId, 11 * 60_000);
 
@@ -1072,7 +1076,13 @@ describe("reaping the runs the server never finished", () => {
     const rows = await database
       .select()
       .from(routineRuns)
-      .where(eq(routineRuns.routineId, routine.id));
+      .where(
+        inArray(routineRuns.id, [
+          abandoned.runId,
+          inFlight.runId,
+          finished.runId,
+        ]),
+      );
     const byId = new Map(rows.map((row) => [row.id, row]));
 
     const abandonedRow = byId.get(abandoned.runId);
