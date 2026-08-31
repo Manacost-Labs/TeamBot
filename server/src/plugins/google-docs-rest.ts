@@ -858,11 +858,19 @@ async function mutate(
     `/documents/${encodeURIComponent(documentId)}:batchUpdate`,
     { method: "POST", body },
   );
-  if (!response.ok) return failure(response.message);
+  if (!response.ok) {
+    return {
+      ...failure(response.message),
+      externalEffect: response.ambiguous ? "unknown" : "none",
+    };
+  }
   if (!mutationResponseSchema.safeParse(response.payload).success) {
-    return failure(
-      "Google Docs returned an unexpected response after the write. The write outcome is unknown. Do not retry automatically; read the document before deciding what to do.",
-    );
+    return {
+      ...failure(
+        "Google Docs returned an unexpected response after the write. The write outcome is unknown. Do not retry automatically; read the document before deciding what to do.",
+      ),
+      externalEffect: "unknown",
+    };
   }
   return null;
 }
@@ -931,19 +939,27 @@ export async function callTool(
       args,
       "A valid documentId and 1–10,000 characters of text are required to append.",
     );
-    if (!input.ok) return input.result;
+    if (!input.ok) return { ...input.result, externalEffect: "none" };
     const found = await fetchDocument(connection, input.value.documentId);
-    if (!found.ok) return found.result;
+    if (!found.ok) return { ...found.result, externalEffect: "none" };
     if (!found.document.revisionId) {
-      return failure(
-        "Google Docs did not return a revision id, so a concurrency-safe append cannot be made.",
-      );
+      return {
+        ...failure(
+          "Google Docs did not return a revision id, so a concurrency-safe append cannot be made.",
+        ),
+        externalEffect: "none",
+      };
     }
     const selected = selectTab(found.document, input.value.tabId);
-    if (!selected.ok) return failure(selected.message);
+    if (!selected.ok) {
+      return { ...failure(selected.message), externalEffect: "none" };
+    }
     const index = lastBodyIndex(selected.tab);
     if (index === null) {
-      return failure("Google Docs returned a tab without a writable body.");
+      return {
+        ...failure("Google Docs returned a tab without a writable body."),
+        externalEffect: "none",
+      };
     }
     const writeError = await mutate(connection, input.value.documentId, {
       requests: [
@@ -957,9 +973,12 @@ export async function callTool(
       writeControl: { requiredRevisionId: found.document.revisionId },
     });
     if (writeError) return writeError;
-    return asResult(
-      `Appended ${[...input.value.text].length} characters to [${found.document.title || "Untitled document"}](${documentLink(input.value.documentId)}), tab ${selected.tabId}.`,
-    );
+    return {
+      ...asResult(
+        `Appended ${[...input.value.text].length} characters to [${found.document.title || "Untitled document"}](${documentLink(input.value.documentId)}), tab ${selected.tabId}.`,
+      ),
+      externalEffect: "applied",
+    };
   }
 
   if (toolName === "replace_google_doc_range") {

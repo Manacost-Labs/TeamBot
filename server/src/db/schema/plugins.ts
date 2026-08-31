@@ -1,7 +1,11 @@
+import { sql } from "drizzle-orm";
 import {
   boolean,
+  char,
+  check,
   index,
   integer,
+  pgEnum,
   pgTable,
   primaryKey,
   text,
@@ -174,6 +178,116 @@ export const mcpUserCredentials = pgTable(
   (table) => [
     primaryKey({ columns: [table.serverId, table.userId] }),
     index("mcp_user_credentials_user_idx").on(table.userId),
+  ],
+);
+
+export const googleAppendOperationState = pgEnum(
+  "google_append_operation_state",
+  ["prepared", "dispatching", "succeeded", "ambiguous", "not_applied"],
+);
+
+/**
+ * Durable at-most-once boundary for Google Docs and Sheets append calls.
+ *
+ * The appended values or text never belong in this table. A run-scoped fingerprint identifies the
+ * logical request, while the state records whether an external POST was allowed to start. Once a
+ * row reaches `dispatching`, recovery may report an unknown outcome but must never dispatch it a
+ * second time automatically.
+ */
+export const googleAppendOperations = pgTable(
+  "google_append_operations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    actorId: text("actor_id").notNull(),
+    botId: text("bot_id").notNull(),
+    runId: text("run_id").notNull(),
+    serverId: text("server_id").notNull(),
+    toolName: text("tool_name").notNull(),
+    /** Safe Google resource id. Sheet names, tab names and appended data remain hashed. */
+    targetId: text("target_id").notNull(),
+    locationFingerprint: char("location_fingerprint", { length: 64 }).notNull(),
+    requestFingerprint: char("request_fingerprint", { length: 64 }).notNull(),
+    state: googleAppendOperationState("state").notNull(),
+    leaseToken: uuid("lease_token"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    dispatchStartedAt: timestamp("dispatch_started_at", {
+      withTimezone: true,
+    }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    attempts: integer("attempts").notNull().default(1),
+    /** Rows for Sheets, Unicode code points for Docs. */
+    itemCount: integer("item_count").notNull(),
+    /** Cells for Sheets and null for Docs. */
+    cellCount: integer("cell_count"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    uniqueIndex("google_append_operations_request_key").on(
+      table.actorId,
+      table.botId,
+      table.runId,
+      table.serverId,
+      table.toolName,
+      table.requestFingerprint,
+    ),
+    index("google_append_operations_recovery_idx").on(
+      table.state,
+      table.leaseExpiresAt,
+      table.dispatchStartedAt,
+    ),
+    check(
+      "google_append_operations_fingerprints_check",
+      sql`${table.locationFingerprint} ~ '^[0-9a-f]{64}$'
+        AND ${table.requestFingerprint} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "google_append_operations_tool_check",
+      sql`${table.toolName} IN ('append_google_doc', 'append_google_sheet_rows')`,
+    ),
+    check(
+      "google_append_operations_attempts_check",
+      sql`${table.attempts} >= 1`,
+    ),
+    check(
+      "google_append_operations_counts_check",
+      sql`${table.itemCount} >= 1 AND (${table.cellCount} IS NULL OR ${table.cellCount} >= 1)`,
+    ),
+    check(
+      "google_append_operations_identity_length_check",
+      sql`char_length(${table.actorId}) BETWEEN 1 AND 255
+        AND char_length(${table.botId}) BETWEEN 1 AND 255
+        AND char_length(${table.runId}) BETWEEN 1 AND 4096
+        AND char_length(${table.serverId}) BETWEEN 1 AND 255
+        AND char_length(${table.targetId}) BETWEEN 1 AND 256`,
+    ),
+    check(
+      "google_append_operations_state_check",
+      sql`(
+        ${table.state} = 'prepared'
+        AND ${table.leaseToken} IS NOT NULL
+        AND ${table.leaseExpiresAt} IS NOT NULL
+        AND ${table.dispatchStartedAt} IS NULL
+        AND ${table.finishedAt} IS NULL
+      ) OR (
+        ${table.state} = 'dispatching'
+        AND ${table.leaseToken} IS NOT NULL
+        AND ${table.leaseExpiresAt} IS NULL
+        AND ${table.dispatchStartedAt} IS NOT NULL
+        AND ${table.finishedAt} IS NULL
+      ) OR (
+        ${table.state} IN ('succeeded', 'ambiguous')
+        AND ${table.leaseToken} IS NULL
+        AND ${table.leaseExpiresAt} IS NULL
+        AND ${table.dispatchStartedAt} IS NOT NULL
+        AND ${table.finishedAt} IS NOT NULL
+      ) OR (
+        ${table.state} = 'not_applied'
+        AND ${table.leaseToken} IS NULL
+        AND ${table.leaseExpiresAt} IS NULL
+        AND ${table.finishedAt} IS NOT NULL
+      )`,
+    ),
   ],
 );
 

@@ -197,6 +197,13 @@
       "when": 1788139371343,
       "tag": "0027_tiny_stature",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1788175423189,
+      "tag": "0028_calm_warstar",
+      "breakpoints": true
     }
   ]
 }

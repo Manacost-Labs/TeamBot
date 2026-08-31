@@ -413,6 +413,7 @@ describe("document writes", () => {
     });
 
     expect(result.isError).toBe(false);
+    expect(result.externalEffect).toBe("applied");
     expect(result.text).toContain("Appended 11 characters");
     expect(calls).toHaveLength(2);
     expect(calls[1].method).toBe("POST");
@@ -444,6 +445,7 @@ describe("document writes", () => {
     });
 
     expect(result.isError).toBe(true);
+    expect(result.externalEffect).toBe("unknown");
     expect(result.text).toContain("write outcome is unknown");
     expect(result.text).toContain("Do not retry automatically");
     expect(result.text).toContain("read the document");
@@ -461,6 +463,7 @@ describe("document writes", () => {
     });
 
     expect(result.isError).toBe(true);
+    expect(result.externalEffect).toBe("unknown");
     expect(result.text).toContain("write outcome is unknown");
     expect(result.text).not.toContain("do not echo");
   });
@@ -474,6 +477,7 @@ describe("document writes", () => {
     });
 
     expect(result.isError).toBe(true);
+    expect(result.externalEffect).toBe("unknown");
     expect(result.text).toContain("write outcome is unknown");
     expect(result.text).toContain("Do not retry automatically");
   });
@@ -493,6 +497,7 @@ describe("document writes", () => {
     });
 
     expect(result.isError).toBe(true);
+    expect(result.externalEffect).toBe("none");
     expect(result.text).toContain("tabId");
   });
 

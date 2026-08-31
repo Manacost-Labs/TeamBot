@@ -8,6 +8,7 @@ import { createDatabase } from "../src/db/client";
 import {
   agents,
   credentials,
+  googleAppendOperations,
   mcpServers,
   mcpTools,
   mcpUserCredentials,
@@ -44,6 +45,8 @@ const otherId = `user_oauth_other_${suite}`;
 const serverId = "google-drive";
 const toolName = "search_files";
 const ref = `${serverId}/${toolName}`;
+const appendToolName = "append_google_sheet_rows";
+const appendRef = `${serverId}/${appendToolName}`;
 
 // 32 zero bytes in base64. A real AES-256 key length, unlike `"x".repeat(44)`, which decodes to 33
 // bytes and makes `importKey` throw — the existing plugin store test gets away with it only because
@@ -63,6 +66,8 @@ const otherRefreshToken = `refresh-token-for-other-${suite}`;
  * secret was about to be sent — without a vendor to send it to.
  */
 const decrypted: string[] = [];
+let appendVendorCalls = 0;
+let appendEffect: "applied" | "unknown" | "missing" = "applied";
 
 /** Every refresh token handed to the vendor's token endpoint, in order. */
 const exchanged: string[] = [];
@@ -93,6 +98,7 @@ let clientBefore: string | null = null;
  * row; never deleting leaves a fixture that reads on screen as a tool the vendor offers.
  */
 let toolWasAlreadyAdvertised = false;
+let appendToolWasAlreadyAdvertised = false;
 const credentialIds: string[] = [];
 
 const store = createPluginStore({
@@ -142,8 +148,27 @@ const store = createPluginStore({
   encryptionKey: ENCRYPTION_KEY,
   policy: () => policy,
   // Stops before the network, and records what the call would have gone out with.
-  callVendor: async (connection) => {
+  callVendor: async (connection, calledTool) => {
     decrypted.push(connection.token ?? "<none>");
+    if (calledTool === appendToolName) {
+      appendVendorCalls += 1;
+      return appendEffect === "applied"
+        ? {
+            text: "One row appended.",
+            isError: false,
+            externalEffect: "applied" as const,
+          }
+        : appendEffect === "unknown"
+          ? {
+              text: "The append outcome is unknown.",
+              isError: true,
+              externalEffect: "unknown" as const,
+            }
+          : {
+              text: "Vendor claimed success without an effect.",
+              isError: false,
+            };
+    }
     return { text: "[vendor not reached in tests]", isError: false };
   },
   /*
@@ -232,7 +257,8 @@ async function connect(userId: string, refreshToken: string) {
       serverId,
       userId,
       credentialId: credential.id,
-      scope: "https://www.googleapis.com/auth/drive.readonly",
+      scope:
+        "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/spreadsheets",
     })
     .onConflictDoUpdate({
       target: [mcpUserCredentials.serverId, mcpUserCredentials.userId],
@@ -271,6 +297,18 @@ beforeAll(async () => {
           and(eq(mcpTools.serverId, serverId), eq(mcpTools.name, toolName)),
         )
     ).length > 0;
+  appendToolWasAlreadyAdvertised =
+    (
+      await database
+        .select({ name: mcpTools.name })
+        .from(mcpTools)
+        .where(
+          and(
+            eq(mcpTools.serverId, serverId),
+            eq(mcpTools.name, appendToolName),
+          ),
+        )
+    ).length > 0;
   clientBefore = existing?.credentialId ?? null;
 
   // Written directly, so the test needs no vendor to be reachable. What is under test is which
@@ -289,15 +327,30 @@ beforeAll(async () => {
     .insert(mcpTools)
     .values({ serverId, name: toolName, description: "Search files." })
     .onConflictDoNothing();
+  await database
+    .insert(mcpTools)
+    .values({
+      serverId,
+      name: appendToolName,
+      description: "Append rows.",
+    })
+    .onConflictDoNothing();
 
   // The Bot holds the tool throughout. Everything here is about the person, not the grant.
   await database
     .insert(pluginGrants)
     .values({ kind: "mcp", ref, agentId: botId })
     .onConflictDoNothing();
+  await database
+    .insert(pluginGrants)
+    .values({ kind: "mcp", ref: appendRef, agentId: botId })
+    .onConflictDoNothing();
 });
 
 afterAll(async () => {
+  await database
+    .delete(googleAppendOperations)
+    .where(inArray(googleAppendOperations.actorId, [askerId, otherId]));
   /*
    * The suite's own two people, never every row for this vendor.
    *
@@ -345,11 +398,23 @@ afterAll(async () => {
   await database
     .delete(pluginGrants)
     .where(and(eq(pluginGrants.ref, ref), eq(pluginGrants.agentId, botId)));
+  await database
+    .delete(pluginGrants)
+    .where(
+      and(eq(pluginGrants.ref, appendRef), eq(pluginGrants.agentId, botId)),
+    );
   // The fixture tool goes whether or not this suite owns the server, but only if it put it there.
   if (!toolWasAlreadyAdvertised) {
     await database
       .delete(mcpTools)
       .where(and(eq(mcpTools.serverId, serverId), eq(mcpTools.name, toolName)));
+  }
+  if (!appendToolWasAlreadyAdvertised) {
+    await database
+      .delete(mcpTools)
+      .where(
+        and(eq(mcpTools.serverId, serverId), eq(mcpTools.name, appendToolName)),
+      );
   }
   if (!serverWasAlreadyConfigured) {
     await database.delete(mcpTools).where(eq(mcpTools.serverId, serverId));
@@ -493,6 +558,134 @@ describe("a person who has connected", () => {
       store.callTool({ ref, args: {}, botId, actorId: askerId }),
     ).rejects.toThrow(PluginRefusedError);
     expect(decrypted).toEqual([]);
+  });
+});
+
+describe("durable Google append dispatch", () => {
+  test("requires trusted run context before OAuth or the vendor", async () => {
+    appendVendorCalls = 0;
+    await expect(
+      store.callTool({
+        ref: appendRef,
+        args: {
+          spreadsheetId: "sheet_1",
+          sheetName: "Research",
+          rows: [["private value", 1]],
+        },
+        botId,
+        actorId: askerId,
+      }),
+    ).rejects.toThrow(/trusted current run/);
+    expect(appendVendorCalls).toBe(0);
+  });
+
+  test("refuses unnormalizable append arguments before OAuth or the vendor", async () => {
+    appendVendorCalls = 0;
+    await expect(
+      store.callTool({
+        ref: appendRef,
+        args: {
+          spreadsheetId: "sheet_1",
+          sheetName: "Research",
+          rows: [["private value", 1]],
+          unrecognized: "drift",
+        },
+        botId,
+        actorId: askerId,
+        runId: `append-invalid-${suite}`,
+        threadId: `thread-${suite}`,
+      }),
+    ).rejects.toThrow(/duplicate protection/);
+    expect(appendVendorCalls).toBe(0);
+  });
+
+  test("replays a successful identical append without a second vendor call", async () => {
+    await registerClient();
+    await connect(askerId, askerRefreshToken);
+    appendEffect = "applied";
+    appendVendorCalls = 0;
+    const input = {
+      ref: appendRef,
+      args: {
+        spreadsheetId: "sheet_1",
+        sheetName: "Research",
+        rows: [["private value", 1]],
+      },
+      botId,
+      actorId: askerId,
+      runId: `append-success-${suite}`,
+      threadId: `thread-${suite}`,
+    };
+
+    const first = await store.callTool(input);
+    const replay = await store.callTool(input);
+
+    expect(first.isError).toBe(false);
+    expect(replay.isError).toBe(false);
+    expect(replay.text).toContain("Google was not called again");
+    expect(appendVendorCalls).toBe(1);
+  });
+
+  test("persists an unknown outcome and never automatically retries it", async () => {
+    await registerClient();
+    await connect(askerId, askerRefreshToken);
+    appendEffect = "unknown";
+    appendVendorCalls = 0;
+    const input = {
+      ref: appendRef,
+      args: {
+        spreadsheetId: "sheet_1",
+        sheetName: "Research",
+        rows: [["possibly appended", 1]],
+      },
+      botId,
+      actorId: askerId,
+      runId: `append-unknown-${suite}`,
+      threadId: `thread-${suite}`,
+    };
+
+    try {
+      const first = await store.callTool(input);
+      const replay = await store.callTool(input);
+
+      expect(first.isError).toBe(true);
+      expect(replay.isError).toBe(true);
+      expect(replay.text).toContain("Google was not called again");
+      expect(appendVendorCalls).toBe(1);
+    } finally {
+      appendEffect = "applied";
+    }
+  });
+
+  test("fails closed when a protected adapter omits its effect signal", async () => {
+    await registerClient();
+    await connect(askerId, askerRefreshToken);
+    appendEffect = "missing";
+    appendVendorCalls = 0;
+    const input = {
+      ref: appendRef,
+      args: {
+        spreadsheetId: "sheet_1",
+        sheetName: "Research",
+        rows: [["possibly appended without a signal", 1]],
+      },
+      botId,
+      actorId: askerId,
+      runId: `append-missing-effect-${suite}`,
+      threadId: `thread-${suite}`,
+    };
+
+    try {
+      const first = await store.callTool(input);
+      const replay = await store.callTool(input);
+
+      expect(first.isError).toBe(true);
+      expect(first.text).toContain("outcome of this append is unknown");
+      expect(replay.isError).toBe(true);
+      expect(appendVendorCalls).toBe(1);
+    } finally {
+      appendEffect = "applied";
+    }
   });
 });
 

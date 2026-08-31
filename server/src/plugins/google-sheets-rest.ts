@@ -629,9 +629,12 @@ export async function callTool(
     const rows = rowsArg(args.rows);
     const inputOption = valueInputOption(args);
     if (!sheetName || !rows || !inputOption) {
-      return failure(
-        "An exact tab name and a bounded rectangular row set are required.",
-      );
+      return {
+        ...failure(
+          "An exact tab name and a bounded rectangular row set are required.",
+        ),
+        externalEffect: "none",
+      };
     }
     const range = `${quoteSheetName(sheetName)}!A1`;
     const result = await requestJson(
@@ -648,23 +651,29 @@ export async function callTool(
       },
     );
     if (!result.ok) {
-      return failure(
-        result.ambiguous
-          ? `${result.message} Do not retry this append automatically; read the target rows first to avoid duplicates.`
-          : result.message,
-      );
+      return {
+        ...failure(
+          result.ambiguous
+            ? `${result.message} Do not retry this append automatically; read the target rows first to avoid duplicates.`
+            : result.message,
+        ),
+        externalEffect: result.ambiguous ? "unknown" : "none",
+      };
     }
     const updates = asRecord(asRecord(result.body).updates);
-    return asResult(
-      [
-        "Google Sheets",
-        "",
-        `[${sheetName}](${spreadsheetLink(targetSpreadsheetId)})`,
-        `${String(updates.updatedRange ?? `${sheetName} (appended)`)}`,
-        `${safeCount(updates.updatedRows, rows.length)} rows added · ${safeCount(updates.updatedCells, rows.length * rows[0].length)} cells`,
-        `spreadsheetId: ${targetSpreadsheetId}`,
-      ].join("\n"),
-    );
+    return {
+      ...asResult(
+        [
+          "Google Sheets",
+          "",
+          `[${sheetName}](${spreadsheetLink(targetSpreadsheetId)})`,
+          `${String(updates.updatedRange ?? `${sheetName} (appended)`)}`,
+          `${safeCount(updates.updatedRows, rows.length)} rows added · ${safeCount(updates.updatedCells, rows.length * rows[0].length)} cells`,
+          `spreadsheetId: ${targetSpreadsheetId}`,
+        ].join("\n"),
+      ),
+      externalEffect: "applied",
+    };
   }
 
   if (toolName === "update_google_sheet_range") {

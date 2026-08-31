@@ -258,6 +258,13 @@ export type McpCallResult = {
   /** True when the server itself reported the call as an error rather than failing to answer. */
   isError: boolean;
   truncated: boolean;
+  /**
+   * Machine-readable effect boundary for non-idempotent built-in writes.
+   *
+   * Remote MCP servers do not provide this signal, so it is optional. The durable Google append
+   * path fails closed when its two protected tools omit it after dispatch.
+   */
+  externalEffect?: "none" | "applied" | "unknown";
 };
 
 /**

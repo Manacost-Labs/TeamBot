@@ -111,6 +111,7 @@ describe("validated writes", () => {
     });
 
     expect(result.isError).toBe(false);
+    expect(result.externalEffect).toBe("applied");
     expect(calls).toHaveLength(1);
     expect(calls[0].init?.method).toBe("POST");
     expect(decodeURIComponent(calls[0].url)).toContain(
@@ -135,6 +136,7 @@ describe("validated writes", () => {
     });
 
     expect(result.isError).toBe(true);
+    expect(result.externalEffect).toBe("none");
     expect(calls).toHaveLength(0);
   });
 
@@ -174,6 +176,7 @@ describe("validated writes", () => {
     });
 
     expect(result.isError).toBe(true);
+    expect(result.externalEffect).toBe("unknown");
     expect(result.text).toContain("Do not retry this append automatically");
     expect(calls).toBe(1);
   });
@@ -191,6 +194,7 @@ describe("validated writes", () => {
     });
 
     expect(result.isError).toBe(true);
+    expect(result.externalEffect).toBe("unknown");
     expect(result.text).toContain("Do not retry this append automatically");
   });
 
@@ -207,6 +211,7 @@ describe("validated writes", () => {
     });
 
     expect(result.isError).toBe(true);
+    expect(result.externalEffect).toBe("unknown");
     expect(result.text).toContain("Do not retry this append automatically");
     expect(result.text).not.toContain("do not echo");
   });

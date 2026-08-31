@@ -36,6 +36,11 @@ import {
   resolveServerUrl,
   serverCredentialKind,
 } from "./catalogue";
+import {
+  createGoogleAppendOperationStore,
+  planGoogleAppend,
+  type GoogleAppendClaim,
+} from "./google-append-idempotency";
 import { McpServerError } from "./mcp";
 import { registerDynamicClient } from "./oauth";
 import {
@@ -539,7 +544,11 @@ export type PluginStoreOptions = {
     connection: VendorToolConnection,
     toolName: string,
     args: Record<string, unknown>,
-  ) => Promise<{ text: string; isError: boolean }>;
+  ) => Promise<{
+    text: string;
+    isError: boolean;
+    externalEffect?: "none" | "applied" | "unknown";
+  }>;
   /** Trading a refresh token for a short-lived access token. Defaults to a real HTTP exchange. */
   exchangeRefreshToken?: (input: {
     tokenUrl: string;
@@ -557,6 +566,7 @@ export type PluginStoreOptions = {
 
 export function createPluginStore(options: PluginStoreOptions) {
   const { database, auditStore, credentials, encryptionKey } = options;
+  const googleAppendStore = createGoogleAppendOperationStore(database);
   /*
    * Held rather than resolved, because the transport is a property of the entry and is not known
    * until a call names one. An injected vendor still wins over both, which is what keeps a test able
@@ -2916,6 +2926,46 @@ export function createPluginStore(options: PluginStoreOptions) {
         throw new PluginRefusedError(verdict.reason, verdict.matched);
       }
 
+      const protectedGoogleAppend =
+        entry?.transport === "google-workspace-rest" &&
+        (toolName === "append_google_doc" ||
+          toolName === "append_google_sheet_rows");
+      const appendPlan = protectedGoogleAppend
+        ? planGoogleAppend(toolName, args)
+        : null;
+      if (protectedGoogleAppend && !appendPlan) {
+        const reason =
+          "Google append arguments could not be normalized for durable duplicate protection, so nothing was sent.";
+        await recordAuditEvent(auditStore, {
+          eventType: "mcp.call_rejected",
+          targetType: "mcp_tool",
+          targetId: input.ref,
+          payload: {
+            ...decided,
+            refusal: "append_identity_invalid",
+            reason,
+          },
+        });
+        throw new PluginRefusedError(reason, null);
+      }
+      if (appendPlan && !input.runId) {
+        const reason =
+          "Google append requires a trusted current run so an identical retry cannot write twice.";
+        await recordAuditEvent(auditStore, {
+          eventType: "mcp.call_rejected",
+          targetType: "mcp_tool",
+          targetId: input.ref,
+          payload: { ...decided, refusal: "missing_run_context", reason },
+        });
+        throw new PluginRefusedError(reason, null);
+      }
+
+      let appendClaim: Extract<GoogleAppendClaim, { kind: "claimed" }> | null =
+        null;
+      let appendDispatchBegan = false;
+      let appendOutcome: "succeeded" | "ambiguous" | "not_applied" | null =
+        null;
+
       /*
        * Attempt first, record second.
        *
@@ -2931,20 +2981,121 @@ export function createPluginStore(options: PluginStoreOptions) {
        * it did.
        */
       try {
+        if (appendPlan && input.runId) {
+          const claim = await googleAppendStore.claim({
+            actorId: input.actorId,
+            botId: input.botId,
+            runId: input.runId,
+            serverId,
+            plan: appendPlan,
+          });
+          if (claim.kind !== "claimed") {
+            const operation = {
+              id: claim.operationId,
+              targetId: appendPlan.targetId,
+              itemCount: appendPlan.itemCount,
+              cellCount: appendPlan.cellCount,
+              replayed: true,
+              outcome: claim.kind,
+            };
+            await recordAuditEvent(auditStore, {
+              eventType:
+                claim.kind === "succeeded"
+                  ? "mcp.call_succeeded"
+                  : "mcp.call_failed",
+              targetType: "mcp_tool",
+              targetId: input.ref,
+              payload: { ...decided, operation },
+            });
+            if (claim.kind === "succeeded") {
+              return {
+                text: `This identical append already succeeded in this run. Google was not called again. Operation id: ${claim.operationId}.`,
+                isError: false,
+              };
+            }
+            if (claim.kind === "ambiguous") {
+              return {
+                text: `The outcome of this append is unknown, so Google was not called again. Read the target before resolving it. Operation id: ${claim.operationId}.`,
+                isError: true,
+              };
+            }
+            return {
+              text: `This identical append is already in progress. Google was not called again. Operation id: ${claim.operationId}.`,
+              isError: true,
+            };
+          }
+          appendClaim = claim;
+        }
+
         const { token } = await connectionTokenFor(
           row,
           entry,
           input.actorId,
           toolName,
         );
+        if (appendClaim) {
+          appendDispatchBegan = await googleAppendStore.beginDispatch(
+            appendClaim.operationId,
+            appendClaim.leaseToken,
+          );
+          if (!appendDispatchBegan) {
+            await recordAuditEvent(auditStore, {
+              eventType: "mcp.call_failed",
+              targetType: "mcp_tool",
+              targetId: input.ref,
+              payload: {
+                ...decided,
+                operation: {
+                  id: appendClaim.operationId,
+                  targetId: appendPlan?.targetId,
+                  itemCount: appendPlan?.itemCount,
+                  cellCount: appendPlan?.cellCount,
+                  outcome: "claim_lost",
+                },
+                failure: "the pre-dispatch claim expired or was reclaimed",
+              },
+            });
+            return {
+              text: `This append lost its pre-dispatch claim and was not sent to Google. Operation id: ${appendClaim.operationId}.`,
+              isError: true,
+            };
+          }
+        }
         const vendor = injectedVendor ?? transportFor(entry).callTool;
         const result = await vendor(
           vendorToolConnection({ url: effectiveUrl(row, entry), token }, input),
           toolName,
           args,
         );
+        if (appendClaim) {
+          appendOutcome =
+            result.externalEffect === "applied" && !result.isError
+              ? "succeeded"
+              : result.externalEffect === "none" && result.isError
+                ? "not_applied"
+                : "ambiguous";
+          const completed = await googleAppendStore.complete(
+            appendClaim.operationId,
+            appendClaim.leaseToken,
+            appendOutcome,
+          );
+          if (!completed) {
+            throw new Error(
+              `Google append ${appendClaim.operationId} could not persist its external outcome.`,
+            );
+          }
+        }
+        const returnedResult =
+          appendClaim && appendOutcome === "ambiguous"
+            ? {
+                text: `The outcome of this append is unknown, so it must not be retried automatically. Read the target before resolving it. Operation id: ${appendClaim.operationId}.`,
+                isError: true,
+              }
+            : result;
         await recordAuditEvent(auditStore, {
-          eventType: result.isError ? "mcp.call_failed" : "mcp.call_succeeded",
+          eventType: returnedResult.isError
+            ? "mcp.call_failed"
+            : "mcp.call_succeeded",
           targetType: "mcp_tool",
           targetId: input.ref,
           /*
@@ -2959,16 +3110,54 @@ export function createPluginStore(options: PluginStoreOptions) {
            *
            * Capped, because the failure branch is not a promise about length.
            */
-          payload: result.isError
+          payload: returnedResult.isError
             ? {
                 ...decided,
+                ...(appendClaim && appendPlan
+                  ? {
+                      operation: {
+                        id: appendClaim.operationId,
+                        targetId: appendPlan.targetId,
+                        itemCount: appendPlan.itemCount,
+                        cellCount: appendPlan.cellCount,
+                        outcome: appendOutcome,
+                      },
+                    }
+                  : {}),
                 failure:
-                  result.text.slice(0, 400) || "the tool reported an error",
+                  returnedResult.text.slice(0, 400) ||
+                  "the tool reported an error",
               }
-            : decided,
+            : {
+                ...decided,
+                ...(appendClaim && appendPlan
+                  ? {
+                      operation: {
+                        id: appendClaim.operationId,
+                        targetId: appendPlan.targetId,
+                        itemCount: appendPlan.itemCount,
+                        cellCount: appendPlan.cellCount,
+                        outcome: appendOutcome,
+                      },
+                    }
+                  : {}),
+              },
         });
-        return { text: result.text, isError: result.isError };
+        return {
+          text: returnedResult.text,
+          isError: returnedResult.isError,
+        };
       } catch (error) {
+        if (appendClaim) {
+          appendOutcome = appendDispatchBegan ? "ambiguous" : "not_applied";
+          await googleAppendStore
+            .complete(
+              appendClaim.operationId,
+              appendClaim.leaseToken,
+              appendOutcome,
+            )
+            .catch(() => false);
+        }
         /*
          * Recorded, then rethrown unchanged. The caller's behaviour is unaffected — what changes is
          * that the failure now exists in the trail, which is where somebody asking "is this connector
@@ -2984,6 +3173,17 @@ export function createPluginStore(options: PluginStoreOptions) {
           targetId: input.ref,
           payload: {
             ...decided,
+            ...(appendClaim && appendPlan
+              ? {
+                  operation: {
+                    id: appendClaim.operationId,
+                    targetId: appendPlan.targetId,
+                    itemCount: appendPlan.itemCount,
+                    cellCount: appendPlan.cellCount,
+                    outcome: appendOutcome,
+                  },
+                }
+              : {}),
             failure: (error instanceof Error
               ? error.message
               : String(error)
