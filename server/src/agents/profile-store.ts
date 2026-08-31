@@ -199,6 +199,7 @@ function mapProfile(
     hasAuth: authFromConfiguration(row.configuration) !== null,
     model: modelOf(row.configuration),
     reasoningEffort: reasoningEffortOf(row.configuration),
+    reasoningCeiling: reasoningCeilingOf(row.configuration),
   };
 }
 
@@ -219,6 +220,7 @@ const REASONING_EFFORTS = new Set([
   "high",
   "xhigh",
   "max",
+  "adaptive",
 ]);
 
 function reasoningEffortOf(
@@ -229,6 +231,19 @@ function reasoningEffortOf(
     .reasoningEffort;
   return typeof effort === "string" && REASONING_EFFORTS.has(effort)
     ? (effort as NonNullable<AgentProfile["reasoningEffort"]>)
+    : null;
+}
+
+const ADAPTIVE_REASONING_CEILINGS = new Set(["low", "medium", "high", "xhigh"]);
+
+function reasoningCeilingOf(
+  configuration: unknown,
+): AgentProfile["reasoningCeiling"] {
+  if (!configuration || typeof configuration !== "object") return null;
+  const ceiling = (configuration as { reasoningCeiling?: unknown })
+    .reasoningCeiling;
+  return typeof ceiling === "string" && ADAPTIVE_REASONING_CEILINGS.has(ceiling)
+    ? (ceiling as NonNullable<AgentProfile["reasoningCeiling"]>)
     : null;
 }
 
@@ -469,6 +484,9 @@ export function createAgentProfileStore(
             ...(input.reasoningEffort
               ? { reasoningEffort: input.reasoningEffort }
               : {}),
+            ...(input.reasoningEffort === "adaptive"
+              ? { reasoningCeiling: input.reasoningCeiling ?? "high" }
+              : {}),
             ...(input.auth && vault
               ? {
                   auth: await storeAgentAuth({
@@ -488,7 +506,7 @@ export function createAgentProfileStore(
           ownerUserId: actor.id,
           title: input.title,
           roleDescription: input.roleDescription,
-          avatarSeed: id,
+          avatarSeed: input.avatarSeed ?? id,
           visibility: input.visibility,
         });
 
@@ -533,6 +551,9 @@ export function createAgentProfileStore(
             ...(input.reasoningEffort !== undefined
               ? { reasoningEffort: input.reasoningEffort }
               : {}),
+            ...(input.reasoningCeiling !== undefined
+              ? { reasoningCeiling: input.reasoningCeiling }
+              : {}),
             ...(input.auth && vault
               ? {
                   auth: await storeAgentAuth({
@@ -572,6 +593,7 @@ export function createAgentProfileStore(
             .set({
               title: input.title,
               roleDescription: input.roleDescription,
+              ...(input.avatarSeed ? { avatarSeed: input.avatarSeed } : {}),
               visibility: input.visibility,
               updatedAt,
             })
@@ -605,6 +627,9 @@ export function createAgentProfileStore(
             ...(source.model ? { model: source.model } : {}),
             ...(source.reasoningEffort
               ? { reasoningEffort: source.reasoningEffort }
+              : {}),
+            ...(source.reasoningCeiling
+              ? { reasoningCeiling: source.reasoningCeiling }
               : {}),
           },
         });

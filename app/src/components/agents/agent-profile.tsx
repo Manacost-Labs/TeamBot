@@ -130,6 +130,7 @@ export function AgentProfile({ agentId }: { agentId: string }) {
           allowCustomModel={currentUser.data?.role === "admin"}
           defaultValues={{
             name: profile.name,
+            avatarSeed: profile.avatarSeed,
             roleDescription: profile.roleDescription,
             title: profile.title,
             visibility: profile.visibility,
@@ -138,6 +139,7 @@ export function AgentProfile({ agentId }: { agentId: string }) {
             authValue: "",
             model: profile.model ?? "",
             reasoningEffort: profile.reasoningEffort ?? "",
+            reasoningCeiling: profile.reasoningCeiling ?? "high",
           }}
           hasAuth={profile.hasAuth}
           error={updateAgent.error}
@@ -164,7 +166,9 @@ export function AgentProfile({ agentId }: { agentId: string }) {
               <Tag>{profile.model ?? "Модель рабочего пространства"}</Tag>
               <Tag>
                 {profile.reasoningEffort
-                  ? `Рассуждение: ${profile.reasoningEffort}`
+                  ? profile.reasoningEffort === "adaptive"
+                    ? `Рассуждение: Adaptive · максимум ${profile.reasoningCeiling ?? "high"}`
+                    : `Рассуждение: ${profile.reasoningEffort}`
                   : "Глубина рассуждения по умолчанию"}
               </Tag>
             </div>

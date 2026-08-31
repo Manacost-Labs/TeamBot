@@ -7,7 +7,10 @@ export type AgentReasoningEffort =
   | "medium"
   | "high"
   | "xhigh"
-  | "max";
+  | "max"
+  | "adaptive";
+
+export type AgentAdaptiveReasoningCeiling = "low" | "medium" | "high" | "xhigh";
 
 export type AgentActor = {
   id: string;
@@ -33,6 +36,8 @@ export type AgentProfile = {
   model: string | null;
   /** Optional managed-runtime effort override. Null keeps the runtime default. */
   reasoningEffort: AgentReasoningEffort | null;
+  /** Maximum effort an adaptive employee may select. Null unless adaptive mode is enabled. */
+  reasoningCeiling: AgentAdaptiveReasoningCeiling | null;
   /**
    * Whether this agent holds a credential for calling tools back.
    *
@@ -65,4 +70,8 @@ export type CreateAgentInput = Pick<
   model?: string | null;
   /** Empty/absent keeps the managed runtime's bounded default. */
   reasoningEffort?: AgentReasoningEffort | null;
+  /** Explicit cost ceiling for adaptive reasoning. */
+  reasoningCeiling?: AgentAdaptiveReasoningCeiling | null;
+  /** Optional deterministic avatar seed; the server mints one when omitted. */
+  avatarSeed?: string;
 };

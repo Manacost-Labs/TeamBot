@@ -22,7 +22,10 @@ export type AgentInput = {
     | "high"
     | "xhigh"
     | "max"
+    | "adaptive"
     | null;
+  reasoningCeiling?: "low" | "medium" | "high" | "xhigh" | null;
+  avatarSeed?: string;
 };
 
 /** The sentence for every write here, since they all fail the same way to a reader. */

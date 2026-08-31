@@ -31,8 +31,10 @@ type AgentInputObject = {
   visibility?: unknown;
   endpoint?: unknown;
   auth?: unknown;
+  avatarSeed?: unknown;
   model?: unknown;
   reasoningEffort?: unknown;
+  reasoningCeiling?: unknown;
 };
 
 const REASONING_EFFORTS = new Set([
@@ -43,7 +45,9 @@ const REASONING_EFFORTS = new Set([
   "high",
   "xhigh",
   "max",
+  "adaptive",
 ]);
+const ADAPTIVE_REASONING_CEILINGS = new Set(["low", "medium", "high", "xhigh"]);
 const SELECTABLE_MODELS = new Set([
   "account-default",
   "gpt-5.6-luna",
@@ -90,6 +94,17 @@ export function parseAgentInput(
     "Role description must be text between 1 and 1000 characters.",
   );
   if (typeof roleDescription !== "string") return roleDescription;
+
+  let avatarSeed: string | undefined;
+  if (input.avatarSeed !== undefined && input.avatarSeed !== "") {
+    const parsedAvatarSeed = boundedText(
+      input.avatarSeed,
+      80,
+      "Avatar must be text between 1 and 80 characters.",
+    );
+    if (typeof parsedAvatarSeed !== "string") return parsedAvatarSeed;
+    avatarSeed = parsedAvatarSeed;
+  }
 
   if (typeof input.visibility !== "string") {
     return { ok: false, error: "Visibility must be public or private." };
@@ -166,11 +181,41 @@ export function parseAgentInput(
       return {
         ok: false,
         error:
-          "Reasoning effort must be none, minimal, low, medium, high, xhigh or max.",
+          "Reasoning effort must be none, minimal, low, medium, high, xhigh, max or adaptive.",
       };
     }
     reasoningEffort =
       input.reasoningEffort.trim() as CreateAgentInput["reasoningEffort"];
+  }
+
+  let reasoningCeiling: CreateAgentInput["reasoningCeiling"];
+  if (reasoningEffort === "adaptive") {
+    const candidate =
+      input.reasoningCeiling === undefined
+        ? "high"
+        : typeof input.reasoningCeiling === "string"
+          ? input.reasoningCeiling.trim()
+          : "";
+    if (!ADAPTIVE_REASONING_CEILINGS.has(candidate)) {
+      return {
+        ok: false,
+        error: "Adaptive reasoning ceiling must be low, medium, high or xhigh.",
+      };
+    }
+    reasoningCeiling = candidate as NonNullable<
+      CreateAgentInput["reasoningCeiling"]
+    >;
+  } else if (
+    input.reasoningCeiling !== undefined &&
+    input.reasoningCeiling !== null &&
+    input.reasoningCeiling !== ""
+  ) {
+    return {
+      ok: false,
+      error: "A reasoning ceiling is allowed only with adaptive reasoning.",
+    };
+  } else if (reasoningEffort !== undefined) {
+    reasoningCeiling = null;
   }
 
   return {
@@ -179,11 +224,13 @@ export function parseAgentInput(
       name,
       title,
       roleDescription,
+      ...(avatarSeed ? { avatarSeed } : {}),
       visibility,
       ...(endpoint ? { endpoint } : {}),
       ...(auth ? { auth } : {}),
       ...(model !== undefined ? { model } : {}),
       ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+      ...(reasoningCeiling !== undefined ? { reasoningCeiling } : {}),
     },
   };
 }
@@ -613,6 +660,7 @@ function agentDto(actor: AgentActor, agent: AgentProfile) {
     hasAuth: agent.hasAuth,
     model: agent.model,
     reasoningEffort: agent.reasoningEffort,
+    reasoningCeiling: agent.reasoningCeiling,
     // Whether one exists, never what it is.
     hasCallbackToken: agent.hasCallbackToken,
     canManage: canManageAgent(actor, agent),

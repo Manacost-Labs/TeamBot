@@ -3,6 +3,7 @@ import { HttpAgent } from "@ag-ui/client";
 import { BuiltInAgent } from "@copilotkit/runtime/v2";
 import { PROVENANCE_GUIDANCE } from "../../shared/bot-prompt";
 import {
+  adaptiveReasoningEffort,
   buildAgents,
   builtInAgentConfiguration,
   createRequestAgents,
@@ -142,6 +143,35 @@ describe("registered Copilot agents", () => {
         },
       }),
     ).not.toHaveProperty("reasoningEffort");
+    expect(
+      registeredAgentFromRow({
+        ...riskRow,
+        configuration: {
+          endpoint: "https://risk.internal:443/ag-ui",
+          reasoningEffort: "adaptive",
+          reasoningCeiling: "medium",
+        },
+      }),
+    ).toMatchObject({
+      reasoningEffort: "adaptive",
+      reasoningCeiling: "medium",
+    });
+  });
+
+  test("adaptive reasoning classifies the current task without crossing its ceiling", () => {
+    expect(adaptiveReasoningEffort("Найди дату релиза", "high")).toBe("low");
+    expect(adaptiveReasoningEffort("Подготовь обычный ответ", "high")).toBe(
+      "medium",
+    );
+    expect(
+      adaptiveReasoningEffort("Исследуй рынок и сравни источники", "high"),
+    ).toBe("high");
+    expect(
+      adaptiveReasoningEffort(
+        "Проведи глубокое исследование и исправь систему",
+        "medium",
+      ),
+    ).toBe("medium");
   });
 
   test("configures an OpenAI built-in agent", () => {
@@ -561,6 +591,33 @@ describe("standing agent roles", () => {
     expect(endpoint.requests.at(-1)?.forwardedProps).toMatchObject({
       openbotAgentModel: "gpt-5.6-luna",
       openbotAgentReasoningEffort: "xhigh",
+    });
+  });
+
+  test("resolves adaptive reasoning before the managed endpoint sees the run", async () => {
+    await using endpoint = fakeAgUiEndpoint();
+    const agents = await buildAgents(
+      [
+        {
+          ...remoteAgent(endpoint.url),
+          reasoningEffort: "adaptive",
+          reasoningCeiling: "medium",
+        },
+      ],
+      { provider: "openai", defaultModel: "gpt-5.6-terra" },
+      null,
+    );
+
+    agents.agent_expense?.setMessages([
+      userMessage("Проведи глубокое исследование и исправь систему"),
+    ]);
+    await agents.agent_expense?.runAgent();
+
+    expect(endpoint.requests.at(-1)?.forwardedProps).toMatchObject({
+      openbotAgentReasoningEffort: "medium",
+    });
+    expect(endpoint.requests.at(-1)?.forwardedProps).not.toMatchObject({
+      openbotAgentReasoningEffort: "adaptive",
     });
   });
 

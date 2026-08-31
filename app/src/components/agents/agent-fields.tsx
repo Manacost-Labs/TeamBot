@@ -1,5 +1,6 @@
 import { useForm } from "@tanstack/react-form";
 import { useState } from "react";
+import { AbstractAvatar } from "@/components/agents/abstract-avatar";
 import { Button } from "@/components/ui/button";
 import {
   Field,
@@ -105,6 +106,36 @@ export function AgentFields({
               </Field>
             );
           }}
+        </form.Field>
+        <form.Field name="avatarSeed">
+          {(field) => (
+            <Field>
+              <FieldLabel htmlFor={field.name}>Аватар</FieldLabel>
+              <div className="flex items-center gap-3">
+                <AbstractAvatar
+                  name={form.getFieldValue("name") || "Новый сотрудник"}
+                  seed={
+                    field.state.value ||
+                    form.getFieldValue("name") ||
+                    "new-agent"
+                  }
+                  size={48}
+                />
+                <Input
+                  id={field.name}
+                  name={field.name}
+                  onBlur={field.handleBlur}
+                  onChange={(event) => field.handleChange(event.target.value)}
+                  placeholder="researcher-blue"
+                  value={field.state.value}
+                />
+              </div>
+              <p className="text-muted-foreground text-sm">
+                Введите любое короткое слово: оно задаёт устойчивый внешний вид
+                без загрузки личного изображения.
+              </p>
+            </Field>
+          )}
         </form.Field>
         <form.Field name="title">
           {(field) => {
@@ -368,13 +399,49 @@ export function AgentFields({
                         <SelectItem value="high">Высокая</SelectItem>
                         <SelectItem value="xhigh">Очень высокая</SelectItem>
                         <SelectItem value="max">Максимальная</SelectItem>
+                        <SelectItem value="adaptive">
+                          Adaptive — по сложности задачи
+                        </SelectItem>
                       </SelectGroup>
                     </SelectContent>
                   </Select>
                   <p className="text-muted-foreground text-sm">
-                    Ограниченное значение передаётся управляемому Codex‑агенту
-                    отдельно от идентификатора модели.
+                    Adaptive выбирает глубину по текущей задаче и никогда не
+                    превышает установленный ниже предел.
                   </p>
+                  {field.state.value === "adaptive" ? (
+                    <form.Field name="reasoningCeiling">
+                      {(ceilingField) => (
+                        <Field className="mt-3">
+                          <FieldLabel htmlFor={ceilingField.name}>
+                            Максимум для Adaptive
+                          </FieldLabel>
+                          <Select
+                            onValueChange={(value) =>
+                              ceilingField.handleChange(
+                                value as AgentFormValues["reasoningCeiling"],
+                              )
+                            }
+                            value={ceilingField.state.value}
+                          >
+                            <SelectTrigger id={ceilingField.name}>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                <SelectItem value="low">Низкая</SelectItem>
+                                <SelectItem value="medium">Средняя</SelectItem>
+                                <SelectItem value="high">Высокая</SelectItem>
+                                <SelectItem value="xhigh">
+                                  Очень высокая
+                                </SelectItem>
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                        </Field>
+                      )}
+                    </form.Field>
+                  ) : null}
                 </Field>
               )}
             </form.Field>

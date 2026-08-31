@@ -14,7 +14,10 @@ import {
   COMPUTER_GUIDANCE,
   PROVENANCE_GUIDANCE,
 } from "../../shared/bot-prompt";
-import type { AgentActor } from "./agents/profile-types";
+import type {
+  AgentActor,
+  AgentAdaptiveReasoningCeiling,
+} from "./agents/profile-types";
 import { projectRunInputForModel } from "./attachments/model-images";
 import type { AgentFetch, StallGuard } from "./channels/stall-guard";
 import type { DeploymentConfig } from "./config";
@@ -67,6 +70,8 @@ type RegisteredRemoteAgent = {
   model?: string;
   /** Optional bounded Codex reasoning effort, forwarded only to the managed runtime. */
   reasoningEffort?: string;
+  /** Hard upper bound used only when reasoningEffort is adaptive. */
+  reasoningCeiling?: AgentAdaptiveReasoningCeiling;
   standingMessage: StandingRoleMessage;
   /** The key this agent sits behind, resolved from the vault at load time. Never logged. */
   headers?: Record<string, string>;
@@ -92,6 +97,13 @@ const MANAGED_REASONING_EFFORTS = new Set([
   "high",
   "xhigh",
   "max",
+  "adaptive",
+]);
+const ADAPTIVE_REASONING_CEILINGS = new Set<AgentAdaptiveReasoningCeiling>([
+  "low",
+  "medium",
+  "high",
+  "xhigh",
 ]);
 
 export type RegisteredAgent =
@@ -190,6 +202,15 @@ export function registeredAgentFromRow(
         ...(typeof configuration.reasoningEffort === "string" &&
         MANAGED_REASONING_EFFORTS.has(configuration.reasoningEffort.trim())
           ? { reasoningEffort: configuration.reasoningEffort.trim() }
+          : {}),
+        ...(typeof configuration.reasoningCeiling === "string" &&
+        ADAPTIVE_REASONING_CEILINGS.has(
+          configuration.reasoningCeiling as AgentAdaptiveReasoningCeiling,
+        )
+          ? {
+              reasoningCeiling:
+                configuration.reasoningCeiling as AgentAdaptiveReasoningCeiling,
+            }
           : {}),
         standingMessage: standingRoleMessage(row),
       }
@@ -290,6 +311,45 @@ export function builtInAgentConfiguration(
      */
     ...(tools.length > 0 ? { tools, maxSteps: TOOL_STEPS } : {}),
   };
+}
+
+const ADAPTIVE_EFFORT_ORDER = ["low", "medium", "high", "xhigh"] as const;
+
+/**
+ * Pick a bounded effort from the current request only.
+ *
+ * This is deliberately deterministic and content-free outside this function: no second model call,
+ * no prompt logging and no autonomous escape above the employee's configured ceiling.
+ */
+export function adaptiveReasoningEffort(
+  text: string,
+  ceiling: AgentAdaptiveReasoningCeiling = "high",
+): (typeof ADAPTIVE_EFFORT_ORDER)[number] {
+  const normalized = text.trim().toLocaleLowerCase("ru");
+  let requested: (typeof ADAPTIVE_EFFORT_ORDER)[number] = "medium";
+  if (
+    /\b(deep research|root cause|debug|repair|security audit|migration)\b|глубокое исследование|коренн(?:ая|ую) причин|отлад|почин|исправ|миграц|безопасност/.test(
+      normalized,
+    )
+  ) {
+    requested = "xhigh";
+  } else if (
+    /\b(research|investigat(?:e|ion)|analy[sz]e|compare|audit)\b|исслед|расслед|проанализ|сравни|аудит|проверь источ/.test(
+      normalized,
+    )
+  ) {
+    requested = "high";
+  } else if (
+    normalized.length <= 180 &&
+    (/^(?:what|who|when|where|find|look up|show)\b/.test(normalized) ||
+      /^(?:что|кто|когда|где|найди|покажи)(?:\s|$)/.test(normalized))
+  ) {
+    requested = "low";
+  }
+
+  const ceilingIndex = ADAPTIVE_EFFORT_ORDER.indexOf(ceiling);
+  const requestedIndex = ADAPTIVE_EFFORT_ORDER.indexOf(requested);
+  return ADAPTIVE_EFFORT_ORDER[Math.min(requestedIndex, ceilingIndex)] ?? "low";
 }
 
 /**
@@ -627,6 +687,13 @@ function remoteAgentWithStandingRole(
   ) => {
     const safeInput = projectRunInputForModel(input);
     const holdingsMessage = holdingsMessageFor(tools);
+    const reasoningEffort =
+      agent.reasoningEffort === "adaptive"
+        ? adaptiveReasoningEffort(
+            latestUserText(safeInput.messages),
+            agent.reasoningCeiling ?? "high",
+          )
+        : agent.reasoningEffort;
     return next.run({
       ...safeInput,
       messages: [
@@ -661,8 +728,8 @@ function remoteAgentWithStandingRole(
         ...(input.forwardedProps ?? {}),
         openbotBotId: agent.id,
         ...(agent.model ? { openbotAgentModel: agent.model } : {}),
-        ...(agent.reasoningEffort
-          ? { openbotAgentReasoningEffort: agent.reasoningEffort }
+        ...(reasoningEffort
+          ? { openbotAgentReasoningEffort: reasoningEffort }
           : {}),
         /*
          * Which of those tools this deployment runs, as opposed to the surface.

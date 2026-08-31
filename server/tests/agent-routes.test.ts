@@ -154,6 +154,12 @@ describe("agent input parser", () => {
       "r".repeat(1001),
       "Role description must be text between 1 and 1000 characters.",
     ],
+    ["avatarSeed", 12, "Avatar must be text between 1 and 80 characters."],
+    [
+      "avatarSeed",
+      "a".repeat(81),
+      "Avatar must be text between 1 and 80 characters.",
+    ],
     ["visibility", undefined, "Visibility must be public or private."],
     ["visibility", 1, "Visibility must be public or private."],
     ["visibility", "   ", "Visibility must be public or private."],
@@ -183,7 +189,7 @@ describe("agent input parser", () => {
     });
   });
 
-  test("trims every accepted field and ignores forged fields", () => {
+  test("trims every accepted field and ignores server-owned fields", () => {
     expect(
       parseAgentInput({
         name: "  Expense Manager  ",
@@ -205,6 +211,7 @@ describe("agent input parser", () => {
         name: "Expense Manager",
         title: "Finance Operations",
         roleDescription: "Reviews receipts.",
+        avatarSeed: "forged-avatar",
         visibility: "private",
         endpoint: "https://agents.example.com/ag-ui",
       },
@@ -224,6 +231,7 @@ describe("agent input parser", () => {
         ...validInput,
         model: "gpt-5.6-luna",
         reasoningEffort: "xhigh",
+        reasoningCeiling: null,
       },
     });
     expect(
@@ -254,7 +262,7 @@ describe("agent input parser", () => {
     ).toEqual({
       ok: false,
       error:
-        "Reasoning effort must be none, minimal, low, medium, high, xhigh or max.",
+        "Reasoning effort must be none, minimal, low, medium, high, xhigh, max or adaptive.",
     });
     expect(
       parseAgentInput({
@@ -264,7 +272,36 @@ describe("agent input parser", () => {
       }),
     ).toEqual({
       ok: true,
-      value: { ...validInput, model: null, reasoningEffort: null },
+      value: {
+        ...validInput,
+        model: null,
+        reasoningEffort: null,
+        reasoningCeiling: null,
+      },
+    });
+    expect(
+      parseAgentInput({
+        ...validInput,
+        reasoningEffort: "adaptive",
+        reasoningCeiling: "medium",
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        ...validInput,
+        reasoningEffort: "adaptive",
+        reasoningCeiling: "medium",
+      },
+    });
+    expect(
+      parseAgentInput({
+        ...validInput,
+        reasoningEffort: "adaptive",
+        reasoningCeiling: "max",
+      }),
+    ).toEqual({
+      ok: false,
+      error: "Adaptive reasoning ceiling must be low, medium, high or xhigh.",
     });
   });
 });
@@ -465,7 +502,7 @@ describe("agent lifecycle routes", () => {
     ]);
   });
 
-  test("never forwards forged create or update fields", async () => {
+  test("forwards editable presentation fields but never server-owned fields", async () => {
     const store = fakeStore();
     const app = appFor(store);
     const body = {
@@ -475,10 +512,10 @@ describe("agent lifecycle routes", () => {
       visibility: " private ",
       id: "forged-agent",
       ownerUserId: "attacker",
-      avatarSeed: "forged-avatar",
+      avatarSeed: "chosen-avatar",
       deletedAt: "now",
       systemOwned: true,
-      // A real field now, not a forged one; the rest of this list still is.
+      // Real editable fields now; the server-owned identity fields remain forged and are dropped.
       endpoint: "https://agents.example.com/ag-ui",
     };
 
@@ -494,9 +531,10 @@ describe("agent lifecycle routes", () => {
       expect(response.status).toBe(method === "POST" ? 201 : 200);
     }
 
-    // The endpoint reaches the store because it is a real field; everything else forged does not.
+    // Endpoint and avatar reach the store because they are editable; server-owned fields do not.
     const expected = {
       ...validInput,
+      avatarSeed: "chosen-avatar",
       endpoint: "https://agents.example.com/ag-ui",
     };
     expect(store.calls).toEqual([

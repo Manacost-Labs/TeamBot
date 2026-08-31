@@ -20,6 +20,10 @@ export const agentFormSchema = z.object({
     .trim()
     .min(1, "Role description is required.")
     .max(1000, "Role description must be 1000 characters or fewer."),
+  avatarSeed: z
+    .string()
+    .trim()
+    .max(80, "Avatar seed must be 80 characters or fewer."),
   visibility: z.enum(["public", "private"]),
   /**
    * The AG-UI endpoint this coworker runs on. Empty means the Bot in the box.
@@ -54,7 +58,9 @@ export const agentFormSchema = z.object({
     "high",
     "xhigh",
     "max",
+    "adaptive",
   ]),
+  reasoningCeiling: z.enum(["low", "medium", "high", "xhigh"]),
 });
 
 export type AgentFormValues = z.infer<typeof agentFormSchema>;
@@ -63,11 +69,13 @@ export const emptyAgentForm: AgentFormValues = {
   name: "",
   title: "",
   roleDescription: "",
+  avatarSeed: "",
   visibility: "private",
   endpoint: "",
   authValue: "",
   model: "",
   reasoningEffort: "",
+  reasoningCeiling: "high",
 };
 
 /** Convert form values to API input; omit an empty key so editing preserves the current credential. */
@@ -76,10 +84,15 @@ export function agentInputFrom(values: AgentFormValues) {
     name: values.name,
     title: values.title,
     roleDescription: values.roleDescription,
+    ...(values.avatarSeed.trim()
+      ? { avatarSeed: values.avatarSeed.trim() }
+      : {}),
     visibility: values.visibility,
     endpoint: values.endpoint,
     model: values.model || null,
     reasoningEffort: values.reasoningEffort || null,
+    reasoningCeiling:
+      values.reasoningEffort === "adaptive" ? values.reasoningCeiling : null,
     ...(values.authValue.trim()
       ? { auth: { header: "Authorization", value: values.authValue.trim() } }
       : {}),

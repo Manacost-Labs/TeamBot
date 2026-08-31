@@ -14,6 +14,23 @@ A coworker is a Bot with a durable profile and standing role. The role is sent w
 
 Package-provided agents are public and ownerless. User-created coworkers are owned by the creator.
 
+## Product editor
+
+Common coworker settings are managed on `/agents`; editing YAML is not required. The create screen
+offers eight ordinary defaults: Researcher, Editor, Developer, Data Monitor, SEO, Designer, Support
+and General Assistant. A template fills presentation, role, model and reasoning defaults only. It
+never grants tools, copies secrets or connects somebody's OAuth account.
+
+The editor controls name, deterministic avatar, title, standing role, model, visibility and the
+optional external AG-UI endpoint/key. Skills, exact tool grants, Google Drive/Docs/Sheets access and
+delegation remain explicit governed controls on the saved coworker's profile.
+
+Reasoning may use a fixed bounded effort or `Adaptive`. Adaptive classifies only the current user
+turn into low/medium/high/xhigh and clamps it to the configured ceiling before forwarding the run.
+It does not make a second model call, log the request or let the model select an unbounded effort.
+The managed provider is OpenAI in this deployment; administrators may enter supported custom model
+identifiers, while ordinary users choose from the published model list.
+
 ## Standing role
 
 Remote coworkers receive a system message derived from their title and role description:

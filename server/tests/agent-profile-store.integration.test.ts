@@ -284,7 +284,7 @@ describe("agent profile store integration", () => {
     expect(preference?.hiddenAt).toBeNull();
   });
 
-  test("takes the endpoint and ignores every field a caller must not set", async () => {
+  test("takes editable presentation/runtime fields and ignores server-owned fields", async () => {
     const owner = await createUser();
     const deploymentPackage = await createPackage();
     const source = await createProfileFixture({
@@ -315,7 +315,7 @@ describe("agent profile store integration", () => {
       model: "gpt-5.6-luna",
       reasoningEffort: "high",
       ownerUserId: "forged-owner",
-      avatarSeed: "forged-avatar",
+      avatarSeed: "chosen-avatar",
       packageId: deploymentPackage.id,
       deletedAt: new Date(),
     } as unknown as CreateAgentInput);
@@ -327,7 +327,7 @@ describe("agent profile store integration", () => {
       roleDescription: "Updated role description.",
       visibility: "public",
       ownerUserId: owner.id,
-      avatarSeed: source.avatarSeed,
+      avatarSeed: "chosen-avatar",
       systemOwned: false,
       deletedAt: null,
     });
@@ -354,7 +354,7 @@ describe("agent profile store integration", () => {
       ownerUserId: owner.id,
       title: "Updated Title",
       roleDescription: "Updated role description.",
-      avatarSeed: source.avatarSeed,
+      avatarSeed: "chosen-avatar",
       visibility: "public",
       deletedAt: null,
     });

@@ -31,7 +31,9 @@ export type AgentProfile = {
     | "high"
     | "xhigh"
     | "max"
+    | "adaptive"
     | null;
+  reasoningCeiling: "low" | "medium" | "high" | "xhigh" | null;
   /**
    * Whether this coworker holds a credential for calling tools back.
    *
