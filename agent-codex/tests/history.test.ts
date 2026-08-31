@@ -118,10 +118,8 @@ describe("Codex prompt translation", () => {
     } as unknown as RunAgentInput;
     expect(isYoutubeAnalystRun(youtube)).toBe(true);
     expect(permissionProfileFor(youtube)).toBe("youtube-analyst-agent");
-    expect(instructionsFor(youtube)).toContain(
-      "research-source youtube-transcript",
-    );
-    expect(instructionsFor(youtube)).toContain("Do not use YouTube Search");
+    expect(instructionsFor(youtube)).toContain("youtube_transcript_data");
+    expect(instructionsFor(youtube)).toContain("Do not run shell commands");
     expect(instructionsFor(youtube)).toContain("Captions");
     expect(instructionsFor(youtube)).toContain("create_artifact");
     expect(instructionsFor(youtube)).toContain("text/markdown");
@@ -139,6 +137,15 @@ describe("Codex prompt translation", () => {
       },
     } as unknown as RunAgentInput;
     expect(isYoutubeAnalystRun(forwarded)).toBe(true);
+  });
+
+  test("keeps the YouTube model sandbox offline", async () => {
+    const config = await Bun.file(
+      new URL("../config.toml", import.meta.url),
+    ).text();
+    const section = config.split("[permissions.youtube-analyst-agent]")[1];
+    expect(section).toContain("[permissions.youtube-analyst-agent.network]");
+    expect(section).toContain("enabled = false");
   });
 
   test("keeps higher-priority instructions out of the quoted transcript", () => {

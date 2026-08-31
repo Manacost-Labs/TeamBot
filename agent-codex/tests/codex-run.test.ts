@@ -4,12 +4,14 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { RunAgentInput } from "@ag-ui/core";
 import {
+  codexEnvironmentFor,
   codexToolName,
   modelFor,
   reasoningEffortFor,
   researchFinalisationIssue,
   runCodex,
   toolCallNames,
+  turnInputFor,
   workspaceFor,
   youtubeArtifactFinalisationIssue,
 } from "../src/codex-run";
@@ -69,6 +71,13 @@ describe("Codex dynamic tool names", () => {
     const input = {
       agentId:
         process.env.YOUTUBE_ANALYST_AGENT_ID?.trim() || "youtube-analyst",
+      messages: [
+        {
+          id: "user",
+          role: "user",
+          content: "https://www.youtube.com/watch?v=9TLANtoG9c8",
+        },
+      ],
       forwardedProps: { openbotAgentModel: "gpt-5.6-luna" },
     } as never;
     expect(modelFor(input)).toBe("gpt-5.6-luna");
@@ -76,6 +85,17 @@ describe("Codex dynamic tool names", () => {
     expect(workspaceFor(input)).toBe("/youtube-workspace");
     expect(youtubeArtifactFinalisationIssue(false)).toContain("artifact");
     expect(youtubeArtifactFinalisationIssue(true)).toBeNull();
+    expect(
+      codexEnvironmentFor(input, {
+        PATH: "/usr/bin",
+        AGENT_TOOL_TOKEN: "agent-secret",
+        MANAGED_AGENT_TOKEN: "managed-secret",
+        RESEARCH_SOURCE_GATEWAY_TOKEN: "gateway-secret",
+      }),
+    ).toEqual({ PATH: "/usr/bin" });
+    expect(turnInputFor(input, "<youtube_transcript_data />")).toContain(
+      "<youtube_transcript_data />",
+    );
   });
 
   it("requests finalisation when research ends as progress-only text", () => {

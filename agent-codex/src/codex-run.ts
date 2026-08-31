@@ -14,6 +14,7 @@ import {
   runAssertion,
   transcriptFor,
 } from "./history";
+import { youtubeTranscriptContext } from "./youtube-transcript-context";
 
 type JsonObject = Record<string, unknown>;
 type Notification = {
@@ -213,14 +214,19 @@ export async function runCodex(
     timing?: AgentExecutionTiming;
     spawn?: () => ChildProcessWithoutNullStreams;
     processExitGraceMs?: number;
+    youtubeContext?: (input: RunAgentInput) => Promise<string>;
   } = {},
 ): Promise<void> {
+  const youtubeContext = isYoutubeAnalystRun(input)
+    ? await (options.youtubeContext ?? youtubeTranscriptContext)(input)
+    : "";
   const client = new CodexProcess(
     input,
     callbacks,
     options.timing,
     options.spawn,
     options.processExitGraceMs,
+    youtubeContext,
   );
   try {
     await client.run();
@@ -262,6 +268,7 @@ class CodexProcess {
     spawnProcess: () => ChildProcessWithoutNullStreams = () =>
       spawnCodexProcess(input),
     private readonly processExitGraceMs = PROCESS_EXIT_GRACE_MS,
+    private readonly youtubeContext = "",
   ) {
     this.dataControlWorkflow = isDataControlRun(input)
       ? new DataControlWorkflow()
@@ -348,7 +355,12 @@ class CodexProcess {
 
     await this.request("turn/start", {
       threadId,
-      input: [{ type: "text", text: transcriptFor(this.input) }],
+      input: [
+        {
+          type: "text",
+          text: turnInputFor(this.input, this.youtubeContext),
+        },
+      ],
       effort: reasoningEffortFor(this.input),
       summary: REASONING_SUMMARY,
     });
@@ -619,9 +631,28 @@ function spawnCodexProcess(
 ): ChildProcessWithoutNullStreams {
   return spawn("codex", ["app-server"], {
     cwd: workspaceFor(input),
-    env: process.env,
+    env: codexEnvironmentFor(input),
     stdio: ["pipe", "pipe", "pipe"],
   });
+}
+
+export function turnInputFor(
+  input: RunAgentInput,
+  youtubeContext = "",
+): string {
+  return [transcriptFor(input), youtubeContext].filter(Boolean).join("\n\n");
+}
+
+export function codexEnvironmentFor(
+  input: RunAgentInput,
+  environment: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  if (!isYoutubeAnalystRun(input)) return environment;
+  const restricted = { ...environment };
+  delete restricted.AGENT_TOOL_TOKEN;
+  delete restricted.MANAGED_AGENT_TOKEN;
+  delete restricted.RESEARCH_SOURCE_GATEWAY_TOKEN;
+  return restricted;
 }
 
 async function callDeploymentTool(

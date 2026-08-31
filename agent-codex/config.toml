@@ -33,7 +33,7 @@ extends = ":read-only"
 enabled = false
 
 [permissions.youtube-analyst-agent]
-description = "Read-only YouTube transcript runtime with access to the internal source gateway."
+description = "Read-only YouTube summary runtime; the trusted adapter preloads transcripts."
 extends = ":read-only"
 
 [permissions.youtube-analyst-agent.filesystem]
@@ -43,7 +43,7 @@ extends = ":read-only"
 "~/.codex" = "deny"
 
 [permissions.youtube-analyst-agent.network]
-enabled = true
+enabled = false
 
 [permissions.data-control-agent]
 description = "Workspace-scoped repair runtime for the parser maintainer."
