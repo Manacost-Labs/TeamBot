@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   ARTIFACT_RESULT_SCHEMA,
   CREATE_ARTIFACT_TOOL_NAME,
+  REMOTE_CREATE_ARTIFACT_TOOL_NAME,
   parseArtifactResult,
   parseArtifactToolResult,
 } from "./artifact-contract";
@@ -45,7 +46,7 @@ describe("artifact v1 tool-result contract", () => {
     ).not.toBeNull();
   });
 
-  test("accepts only the exact first-party tool name", () => {
+  test("accepts only the exact first-party tool names", () => {
     const result = JSON.stringify(envelope);
     expect(parseArtifactToolResult(CREATE_ARTIFACT_TOOL_NAME, result)).toEqual(
       envelope,
@@ -56,9 +57,15 @@ describe("artifact v1 tool-result contract", () => {
         JSON.stringify(result),
       ),
     ).toEqual(envelope);
+    expect(
+      parseArtifactToolResult(REMOTE_CREATE_ARTIFACT_TOOL_NAME, result),
+    ).toEqual(envelope);
     expect(parseArtifactToolResult("mcp__other__create_artifact", result)).toBe(
       null,
     );
+    expect(
+      parseArtifactToolResult("openbot__other__create_artifact", result),
+    ).toBe(null);
   });
 
   test("rejects malformed JSON, ids, MIME types and non-positive sizes", () => {

@@ -1,6 +1,9 @@
-/** The one first-party tool whose result may become an artifact card. */
+/** Canonical first-party tool whose result may become an artifact card. */
 export const CREATE_ARTIFACT_TOOL_NAME =
   "mcp__artifacts__create_artifact" as const;
+/** Safe wire alias used by the remote Codex adapter because `mcp__` is reserved by AG-UI. */
+export const REMOTE_CREATE_ARTIFACT_TOOL_NAME =
+  "openbot__artifacts__create_artifact" as const;
 
 export const ARTIFACT_RESULT_SCHEMA = "openbot.artifact.v1" as const;
 
@@ -121,7 +124,7 @@ export function parseArtifactToolResult(
   toolName: string,
   result: string | undefined,
 ): ArtifactResult | null {
-  if (toolName !== CREATE_ARTIFACT_TOOL_NAME || result === undefined) {
+  if (!isCreateArtifactToolName(toolName) || result === undefined) {
     return null;
   }
   try {
@@ -133,6 +136,13 @@ export function parseArtifactToolResult(
   } catch {
     return null;
   }
+}
+
+export function isCreateArtifactToolName(toolName: string): boolean {
+  return (
+    toolName === CREATE_ARTIFACT_TOOL_NAME ||
+    toolName === REMOTE_CREATE_ARTIFACT_TOOL_NAME
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

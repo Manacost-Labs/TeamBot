@@ -328,6 +328,34 @@ describe("tenant YAML validation", () => {
     });
   });
 
+  test("ships the YouTube analyst with only the Markdown artifact skill", async () => {
+    const previousEndpoint = process.env.MANAGED_AGENT_AG_UI_URL;
+    process.env.MANAGED_AGENT_AG_UI_URL = "http://agent-codex.test/ag-ui";
+    const tenantPackage = await loadTenantPackage(
+      new URL("../../examples/chatgpt", import.meta.url).pathname,
+    ).finally(() => {
+      if (previousEndpoint === undefined) {
+        delete process.env.MANAGED_AGENT_AG_UI_URL;
+      } else {
+        process.env.MANAGED_AGENT_AG_UI_URL = previousEndpoint;
+      }
+    });
+    const youtube = tenantPackage.agents.find(
+      (agent) => agent.id === "youtube-analyst",
+    );
+    const skill = tenantPackage.skills.find(
+      (entry) => entry.slug === "youtube-summary",
+    );
+    const work = tenantPackage.channels.find(
+      (channel) => channel.id === "work",
+    );
+
+    expect(youtube?.type).toBe("remote_ag_ui");
+    expect(youtube?.skills).toEqual(["youtube-summary"]);
+    expect(skill?.tools).toEqual(["artifacts/create_artifact"]);
+    expect(work?.permittedAgents).toContain("youtube-analyst");
+  });
+
   test("accepts the complete fintech package and normalizes agent types", () => {
     const tenantPackage = validateTenantPackage({
       brand: `tenant:\n  id: fintech\n  product_name: Ledgerline\nskin:\n  stylesheet: theme.css`,

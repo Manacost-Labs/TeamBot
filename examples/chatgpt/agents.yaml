@@ -17,6 +17,15 @@ agents:
     # Model and reasoning effort are separate Codex settings; Luna supports xhigh.
     model: gpt-5.6-luna
     skills: [data-control]
+  - id: youtube-analyst
+    name: YouTube-аналитик
+    title: Пересказ видео в Markdown
+    role_description: Получает переданные ссылки YouTube, делает расшифровку через подключённый API, убирает разговорный и рекламный мусор и возвращает структурированный Markdown-файл.
+    avatar_seed: youtube-analyst
+    type: remote-ag-ui
+    endpoint: ${MANAGED_AGENT_AG_UI_URL:-}
+    model: gpt-5.6-luna
+    skills: [youtube-summary]
   - id: heartpulse-control
     name: Контроль HearthPulse
     title: Проверка отображения Battlegrounds

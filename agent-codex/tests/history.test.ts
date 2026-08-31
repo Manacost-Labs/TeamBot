@@ -5,6 +5,7 @@ import {
   instructionsFor,
   isHeartPulseControlRun,
   isResearchRun,
+  isYoutubeAnalystRun,
   permissionProfileFor,
   transcriptFor,
 } from "../src/history";
@@ -98,6 +99,46 @@ describe("Codex prompt translation", () => {
     expect(instructionsFor(research)).toContain("private chain-of-thought");
     expect(shouldExposeReasoning(research)).toBe(false);
     expect(shouldExposeReasoning(input)).toBe(true);
+  });
+
+  test("gives YouTube-аналитик a narrow transcript-to-Markdown workflow", () => {
+    const youtube = {
+      ...input,
+      agentId:
+        process.env.YOUTUBE_ANALYST_AGENT_ID?.trim() || "youtube-analyst",
+      messages: [
+        { id: "u1", role: "user", content: "https://youtu.be/old-video" },
+        { id: "a1", role: "assistant", content: "Old result" },
+        {
+          id: "u2",
+          role: "user",
+          content: "https://www.youtube.com/watch?v=current",
+        },
+      ],
+    } as unknown as RunAgentInput;
+    expect(isYoutubeAnalystRun(youtube)).toBe(true);
+    expect(permissionProfileFor(youtube)).toBe("youtube-analyst-agent");
+    expect(instructionsFor(youtube)).toContain(
+      "research-source youtube-transcript",
+    );
+    expect(instructionsFor(youtube)).toContain("Do not use YouTube Search");
+    expect(instructionsFor(youtube)).toContain("Captions");
+    expect(instructionsFor(youtube)).toContain("create_artifact");
+    expect(instructionsFor(youtube)).toContain("text/markdown");
+    expect(instructionsFor(youtube)).toContain("ending in `.md`");
+    expect(transcriptFor(youtube)).toContain("watch?v=current");
+    expect(transcriptFor(youtube)).not.toContain("old-video");
+    expect(shouldExposeReasoning(youtube)).toBe(false);
+
+    const forwarded = {
+      ...input,
+      agentId: "managed-agent",
+      forwardedProps: {
+        openbotBotId:
+          process.env.YOUTUBE_ANALYST_AGENT_ID?.trim() || "youtube-analyst",
+      },
+    } as unknown as RunAgentInput;
+    expect(isYoutubeAnalystRun(forwarded)).toBe(true);
   });
 
   test("keeps higher-priority instructions out of the quoted transcript", () => {

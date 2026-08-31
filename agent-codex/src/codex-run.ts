@@ -9,6 +9,7 @@ import {
   isDataControlRun,
   isHeartPulseControlRun,
   isResearchRun,
+  isYoutubeAnalystRun,
   permissionProfileFor,
   runAssertion,
   transcriptFor,
@@ -125,10 +126,23 @@ export function researchFinalisationIssue(text: string): string | null {
 const RESEARCH_FINALISATION_PROMPT =
   "Finalise the research now. The previous response was only a progress log, not a result. Do not repeat the plan. Use the available first-party `research-source stats-api` for HSReplay/HSGuru data before claiming access is unavailable. Return a Markdown answer with `## Результат`, verified findings or an explicit `Результат не получен` explanation, freshness/limitations, and `## Источники`. For a substantial run, ensure a validated `/research-runs/.../report.md` exists and include its exact path.";
 
+const YOUTUBE_ARTIFACT_FINALISATION_PROMPT =
+  "Create the required deliverable now. Call the governed `create_artifact` tool exactly once with the completed report as inline content, MIME `text/markdown`, and a safe filename ending in `.md`. Even when every transcript failed, create a Markdown status report with the original links and exact limitations. Do not print the report or tool JSON in chat.";
+
+export function youtubeArtifactFinalisationIssue(
+  artifactCreated: boolean,
+): string | null {
+  return artifactCreated
+    ? null
+    : "The YouTube run ended without the required Markdown artifact.";
+}
+
 const HEARTPULSE_WORKSPACE = "/workspace-heartpulse";
 const RESEARCH_WORKSPACE = "/research-runs";
+const YOUTUBE_WORKSPACE = "/youtube-workspace";
 
 export function workspaceFor(input: RunAgentInput): string {
+  if (isYoutubeAnalystRun(input)) return YOUTUBE_WORKSPACE;
   if (isResearchRun(input)) return RESEARCH_WORKSPACE;
   return isHeartPulseControlRun(input) ? HEARTPULSE_WORKSPACE : "/workspace";
 }
@@ -167,7 +181,9 @@ export function reasoningEffortFor(input: RunAgentInput): string {
   // parser/UI repairs. The model id and effort are independent Codex settings;
   // keeping this fallback here prevents the invalid `gpt-5.6-luna-xhigh` model name.
   if (
-    (isDataControlRun(input) || isHeartPulseControlRun(input)) &&
+    (isDataControlRun(input) ||
+      isHeartPulseControlRun(input) ||
+      isYoutubeAnalystRun(input)) &&
     modelFor(input) === "gpt-5.6-luna"
   ) {
     return "xhigh";
@@ -222,6 +238,8 @@ class CodexProcess {
   private correctionTurns = 0;
   private researchCorrectionTurns = 0;
   private researchText = "";
+  private youtubeArtifactCreated = false;
+  private youtubeArtifactCorrectionTurns = 0;
 
   constructor(
     private readonly input: RunAgentInput,
@@ -479,6 +497,27 @@ class CodexProcess {
             );
             return;
           }
+          const youtubeIssue = isYoutubeAnalystRun(this.input)
+            ? youtubeArtifactFinalisationIssue(this.youtubeArtifactCreated)
+            : null;
+          if (youtubeIssue && this.youtubeArtifactCorrectionTurns < 1) {
+            this.youtubeArtifactCorrectionTurns += 1;
+            void this.request("turn/start", {
+              threadId: this.threadId,
+              input: [
+                { type: "text", text: YOUTUBE_ARTIFACT_FINALISATION_PROMPT },
+              ],
+              effort: reasoningEffortFor(this.input),
+              summary: REASONING_SUMMARY,
+            }).catch((error) => this.failRun(error));
+            return;
+          }
+          if (youtubeIssue) {
+            this.failRun(
+              new Error(`${youtubeIssue} The run was not marked complete.`),
+            );
+            return;
+          }
           this.turnCompleted = true;
           this.finish();
         }
@@ -528,14 +567,34 @@ class CodexProcess {
      * the original governed name, which is kept separately above.
      */
     this.callbacks.onToolStart(callId, eventName, args);
-    const result = await callDeploymentTool(this.input, deploymentName, args);
-    this.dataControlWorkflow?.recordToolResult(deploymentName, args, result);
-    this.callbacks.onToolResult(callId, result);
+    const duplicateYoutubeArtifact =
+      isYoutubeAnalystRun(this.input) &&
+      deploymentName === "mcp__artifacts__create_artifact" &&
+      this.youtubeArtifactCreated;
+    const result = duplicateYoutubeArtifact
+      ? {
+          text: "Refused. YouTube-аналитик already created the one artifact allowed for this run.",
+          isError: true,
+        }
+      : await callDeploymentTool(this.input, deploymentName, args);
+    if (
+      isYoutubeAnalystRun(this.input) &&
+      deploymentName === "mcp__artifacts__create_artifact" &&
+      !result.isError
+    ) {
+      this.youtubeArtifactCreated = true;
+    }
+    this.dataControlWorkflow?.recordToolResult(
+      deploymentName,
+      args,
+      result.text,
+    );
+    this.callbacks.onToolResult(callId, result.text);
     this.write({
       id,
       result: {
-        contentItems: [{ type: "inputText", text: result }],
-        success: !result.startsWith("Refused."),
+        contentItems: [{ type: "inputText", text: result.text }],
+        success: !result.isError,
       },
     });
   }
@@ -555,13 +614,23 @@ async function callDeploymentTool(
   input: RunAgentInput,
   name: string,
   args: JsonObject,
-): Promise<string> {
+): Promise<{ text: string; isError: boolean }> {
   if (!deploymentToolNames(input).has(name))
-    return "Refused. This tool is not governed by this OpenBot deployment.";
+    return {
+      text: "Refused. This tool is not governed by this OpenBot deployment.",
+      isError: true,
+    };
   if (!TOOL_TOKEN)
-    return "Refused. The Codex adapter has no deployment tool credential.";
+    return {
+      text: "Refused. The Codex adapter has no deployment tool credential.",
+      isError: true,
+    };
   const run = runAssertion(input);
-  if (!run) return "Refused. This run has no signed OpenBot assertion.";
+  if (!run)
+    return {
+      text: "Refused. This run has no signed OpenBot assertion.",
+      isError: true,
+    };
 
   try {
     const response = await fetch(TOOL_URL, {
@@ -572,12 +641,21 @@ async function callDeploymentTool(
       },
       body: JSON.stringify({ name, args, run }),
     });
-    const body = (await response.json()) as { text?: string };
-    return (
-      body.text ?? `The tool returned HTTP ${response.status} without a result.`
-    );
+    const body = (await response.json()) as {
+      text?: string;
+      isError?: boolean;
+    };
+    return {
+      text:
+        body.text ??
+        `The tool returned HTTP ${response.status} without a result.`,
+      isError: !response.ok || body.isError !== false,
+    };
   } catch (error) {
-    return `The tool could not be called: ${error instanceof Error ? error.message : "unknown error"}`;
+    return {
+      text: `The tool could not be called: ${error instanceof Error ? error.message : "unknown error"}`,
+      isError: true,
+    };
   }
 }
 

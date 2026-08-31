@@ -11,6 +11,7 @@ import {
   runCodex,
   toolCallNames,
   workspaceFor,
+  youtubeArtifactFinalisationIssue,
 } from "../src/codex-run";
 import {
   createAgentExecutionTiming,
@@ -62,6 +63,19 @@ describe("Codex dynamic tool names", () => {
     expect(modelFor(input)).toBe("gpt-5.6-luna");
     expect(reasoningEffortFor(input)).toBe("xhigh");
     expect(workspaceFor(input)).toBe("/research-runs");
+  });
+
+  it("uses a read-only YouTube workspace and requires a Markdown artifact", () => {
+    const input = {
+      agentId:
+        process.env.YOUTUBE_ANALYST_AGENT_ID?.trim() || "youtube-analyst",
+      forwardedProps: { openbotAgentModel: "gpt-5.6-luna" },
+    } as never;
+    expect(modelFor(input)).toBe("gpt-5.6-luna");
+    expect(reasoningEffortFor(input)).toBe("xhigh");
+    expect(workspaceFor(input)).toBe("/youtube-workspace");
+    expect(youtubeArtifactFinalisationIssue(false)).toContain("artifact");
+    expect(youtubeArtifactFinalisationIssue(true)).toBeNull();
   });
 
   it("requests finalisation when research ends as progress-only text", () => {

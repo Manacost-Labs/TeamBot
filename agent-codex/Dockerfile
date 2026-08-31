@@ -18,9 +18,9 @@ COPY agent-codex/src/research-source.mjs /usr/local/bin/research-source
 COPY agent-codex/config.toml /home/bun/.codex/config.toml
 COPY shared /app/shared
 
-RUN mkdir -p /workspace /research-runs /home/bun/.codex \
+RUN mkdir -p /workspace /youtube-workspace /research-runs /home/bun/.codex \
   && chmod 0555 /usr/local/bin/research-source \
-  && chown -R bun:bun /workspace /research-runs /home/bun/.codex /app
+  && chown -R bun:bun /workspace /youtube-workspace /research-runs /home/bun/.codex /app
 
 USER bun
 ENV PORT=4202

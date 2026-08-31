@@ -6,6 +6,8 @@ export {
   type ArtifactMimeType,
   type ArtifactResult,
   CREATE_ARTIFACT_TOOL_NAME,
+  isCreateArtifactToolName,
   parseArtifactResult,
   parseArtifactToolResult,
+  REMOTE_CREATE_ARTIFACT_TOOL_NAME,
 } from "../../../../shared/artifact-contract";

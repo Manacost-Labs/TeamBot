@@ -32,6 +32,19 @@ extends = ":read-only"
 [permissions.openbot-agent.network]
 enabled = false
 
+[permissions.youtube-analyst-agent]
+description = "Read-only YouTube transcript runtime with access to the internal source gateway."
+extends = ":read-only"
+
+[permissions.youtube-analyst-agent.filesystem]
+":minimal" = "read"
+":workspace_roots" = "read"
+"/youtube-workspace" = "read"
+"~/.codex" = "deny"
+
+[permissions.youtube-analyst-agent.network]
+enabled = true
+
 [permissions.data-control-agent]
 description = "Workspace-scoped repair runtime for the parser maintainer."
 extends = ":read-only"

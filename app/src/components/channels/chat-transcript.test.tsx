@@ -221,62 +221,68 @@ describe("transcript windowing", () => {
     ).toBeTruthy();
   });
 
-  test("renders artifact v1 only for the exact first-party tool and trusts server metadata", async () => {
-    const attachmentId = "69bb8eb0-1ac8-4c67-aeca-2362e2f507cd";
-    globalThis.fetch = (async () =>
-      Response.json({
-        attachment: {
-          id: attachmentId,
-          name: "authoritative.md",
+  test.each([
+    "mcp__artifacts__create_artifact",
+    "openbot__artifacts__create_artifact",
+  ])(
+    "renders artifact v1 for the governed tool %s and trusts server metadata",
+    async (toolName) => {
+      const attachmentId = "69bb8eb0-1ac8-4c67-aeca-2362e2f507cd";
+      globalThis.fetch = (async () =>
+        Response.json({
+          attachment: {
+            id: attachmentId,
+            name: "authoritative.md",
+            mimeType: "text/markdown",
+            size: 73,
+            messageId: "artifact:69bb8eb0-1ac8-4c67-aeca-2362e2f507ca",
+            source: "agent_generated",
+          },
+        })) as unknown as typeof fetch;
+      const result = JSON.stringify({
+        schema: "openbot.artifact.v1",
+        artifact: {
+          attachmentId,
+          filename: "untrusted.md",
           mimeType: "text/markdown",
-          size: 73,
-          messageId: "artifact:69bb8eb0-1ac8-4c67-aeca-2362e2f507ca",
-          source: "agent_generated",
+          size: 1,
+          title: "Edited article",
         },
-      })) as unknown as typeof fetch;
-    const result = JSON.stringify({
-      schema: "openbot.artifact.v1",
-      artifact: {
-        attachmentId,
-        filename: "untrusted.md",
-        mimeType: "text/markdown",
-        size: 1,
-        title: "Edited article",
-      },
-    });
+      });
 
-    const view = render(
-      <ChatTranscript
-        conversationKey="channel-a"
-        messages={[
-          {
-            id: "assistant-tool",
-            role: "assistant",
-            toolCalls: [
-              {
-                id: "artifact-call",
-                type: "function",
-                function: {
-                  name: "mcp__artifacts__create_artifact",
-                  arguments: "{}",
+      const view = render(
+        <ChatTranscript
+          conversationKey="channel-a"
+          messages={[
+            {
+              id: "assistant-tool",
+              role: "assistant",
+              toolCalls: [
+                {
+                  id: "artifact-call",
+                  type: "function",
+                  function: {
+                    name: toolName,
+                    arguments: "{}",
+                  },
                 },
-              },
-            ],
-          },
-          {
-            id: "artifact-result",
-            role: "tool",
-            toolCallId: "artifact-call",
-            content: result,
-          },
-        ]}
-      />,
-    );
+              ],
+            },
+            {
+              id: "artifact-result",
+              role: "tool",
+              toolCallId: "artifact-call",
+              content: result,
+            },
+          ]}
+        />,
+      );
 
-    await view.findByText(/authoritative\.md/);
-    expect(view.getByTestId("artifact-card")).toBeTruthy();
-    expect(view.queryByText(/untrusted\.md/)).toBeNull();
-  });
+      await view.findByText(/authoritative\.md/);
+      expect(view.getByTestId("artifact-card")).toBeTruthy();
+      expect(view.queryByText(/untrusted\.md/)).toBeNull();
+    },
+  );
 
   test("keeps matching JSON from another tool and malformed artifact results as ordinary output", () => {
     let fetches = 0;
@@ -312,6 +318,14 @@ describe("transcript windowing", () => {
                 },
               },
               {
+                id: "foreign-remote-call",
+                type: "function",
+                function: {
+                  name: "openbot__other__create_artifact",
+                  arguments: "{}",
+                },
+              },
+              {
                 id: "malformed-call",
                 type: "function",
                 function: {
@@ -332,6 +346,12 @@ describe("transcript windowing", () => {
             role: "tool",
             toolCallId: "malformed-call",
             content: "not-json",
+          },
+          {
+            id: "foreign-remote-result",
+            role: "tool",
+            toolCallId: "foreign-remote-call",
+            content: envelope,
           },
         ]}
       />,

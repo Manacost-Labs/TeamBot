@@ -29,7 +29,7 @@ import {
 } from "@/components/ui/message-scroller";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  CREATE_ARTIFACT_TOOL_NAME,
+  isCreateArtifactToolName,
   parseArtifactToolResult,
 } from "@/lib/artifacts/contract";
 import { attachmentDownloadUrl } from "@/lib/attachments/api";
@@ -517,7 +517,7 @@ const TranscriptToolCall = memo(function TranscriptToolCall({
 
   useEffect(() => {
     if (
-      name === CREATE_ARTIFACT_TOOL_NAME &&
+      isCreateArtifactToolName(name) &&
       live &&
       result === undefined &&
       !timingStarted.current
