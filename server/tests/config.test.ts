@@ -171,6 +171,24 @@ describe("deployment configuration", () => {
     ).toThrow("ARTIFACT_RENDERER_TOKEN must be at least 32 characters");
   });
 
+  test("configures only a plain internal PDF extractor address", () => {
+    expect(
+      loadConfig({
+        ...baseEnvironment,
+        PDF_EXTRACTOR_URL: " http://pdf-extractor:8080/internal ",
+      }).pdfExtractor,
+    ).toEqual({ baseUrl: "http://pdf-extractor:8080/internal" });
+    expect(
+      loadConfig({ ...baseEnvironment, PDF_EXTRACTOR_URL: "" }).pdfExtractor,
+    ).toBeUndefined();
+    expect(() =>
+      loadConfig({
+        ...baseEnvironment,
+        PDF_EXTRACTOR_URL: "http://user:pass@pdf-extractor:8080",
+      }),
+    ).toThrow("plain HTTP(S)");
+  });
+
   test("refuses a URL with no token", () => {
     const environment: Record<string, string | undefined> = {
       ...baseEnvironment,

@@ -3,6 +3,7 @@ import {
   type ConversationAttachmentTools,
   createConversationAttachmentTools,
 } from "../src/attachments/tool-facade";
+import type { PdfExtractor } from "../src/attachments/pdf-extractor-client";
 import type {
   ConversationAttachmentToolStore,
   TrustedAttachmentToolContext,
@@ -63,8 +64,13 @@ function fakeStore(
 function tools(
   overrides: Partial<ConversationAttachmentToolStore> = {},
   limits: Parameters<typeof createConversationAttachmentTools>[1] = {},
+  pdfExtractor?: PdfExtractor,
 ): ConversationAttachmentTools {
-  return createConversationAttachmentTools(fakeStore(overrides), limits);
+  return createConversationAttachmentTools(
+    fakeStore(overrides),
+    limits,
+    pdfExtractor,
+  );
 }
 
 describe("conversation attachment tool envelopes", () => {
@@ -251,6 +257,84 @@ describe("bounded text extraction", () => {
       },
     });
     expect(opened).toBe(0);
+  });
+
+  test("reads an authorized PDF through the byte-only extractor and preserves paging", async () => {
+    let opened = 0;
+    let extracted = 0;
+    const pdfAttachment = {
+      ...attachment,
+      name: "report.pdf",
+      mimeType: "application/pdf",
+      size: 12,
+    };
+    const extractor: PdfExtractor = {
+      async extractText(input) {
+        extracted += 1;
+        expect(input.size).toBe(pdfAttachment.size);
+        expect(input.signal).toBeInstanceOf(AbortSignal);
+        return { text: "A😀БC", truncated: false };
+      },
+    };
+    const facade = tools(
+      {
+        async textSource() {
+          return {
+            attachment: pdfAttachment,
+            async openStream() {
+              opened += 1;
+              return streamOf("%PDF-1.7\n");
+            },
+          };
+        },
+      },
+      {},
+      extractor,
+    );
+
+    expect(
+      await facade.readAttachmentText(context, {
+        attachmentId: attachment.id,
+        maxChars: 2,
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        attachment: pdfAttachment,
+        text: "A😀",
+        cursor: 0,
+        nextCursor: 2,
+        truncated: true,
+      },
+    });
+    expect(opened).toBe(1);
+    expect(extracted).toBe(1);
+  });
+
+  test("does not open bytes or call the extractor before conversation authorization", async () => {
+    let extracted = 0;
+    const facade = tools(
+      {
+        async textSource(receivedContext) {
+          expect(receivedContext).toEqual(context);
+          return null;
+        },
+      },
+      {},
+      {
+        async extractText() {
+          extracted += 1;
+          return { text: "private", truncated: false };
+        },
+      },
+    );
+
+    expect(
+      await facade.readAttachmentText(context, {
+        attachmentId: attachment.id,
+      }),
+    ).toEqual(notFound);
+    expect(extracted).toBe(0);
   });
 
   test("bounds a stalled reader with a content-free unavailable result and cancels it", async () => {

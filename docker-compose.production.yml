@@ -69,6 +69,26 @@ services:
     networks:
       - artifact-render
 
+  pdf-extractor:
+    build:
+      context: ./pdf-extractor
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    environment:
+      PORT: "8080"
+    read_only: true
+    tmpfs:
+      - /tmp:size=67108864,mode=1777
+    mem_limit: 384m
+    pids_limit: 64
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - pdf-extract
+
   openbot:
     image: openbot-work:local
     build:
@@ -86,6 +106,7 @@ services:
       ATTACHMENT_MAX_BYTES: ${ATTACHMENT_MAX_BYTES:-26214400}
       ARTIFACT_RENDERER_URL: http://artifact-renderer:8080
       ARTIFACT_RENDERER_TOKEN: ${ARTIFACT_RENDERER_TOKEN:?ARTIFACT_RENDERER_TOKEN is required}
+      PDF_EXTRACTOR_URL: http://pdf-extractor:8080
       OPENBOT_SINGLE_USER: "true"
       OPENBOT_PUBLIC_URL: https://work-origin.kolodahearthstone.com
       OPENBOT_APP_URL: https://work-origin.kolodahearthstone.com
@@ -109,6 +130,8 @@ services:
         condition: service_completed_successfully
       artifact-renderer:
         condition: service_healthy
+      pdf-extractor:
+        condition: service_healthy
       agent-computer:
         condition: service_healthy
       agent-codex:
@@ -118,6 +141,7 @@ services:
     networks:
       - app
       - artifact-render
+      - pdf-extract
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -265,4 +289,6 @@ volumes:
 networks:
   app:
   artifact-render:
+    internal: true
+  pdf-extract:
     internal: true

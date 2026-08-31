@@ -147,6 +147,11 @@ export type ArtifactRendererConfig = {
   token: string;
 };
 
+export type PdfExtractorConfig = {
+  /** Internal byte-only service address. It is never exposed to the browser or model. */
+  baseUrl: string;
+};
+
 export type DeploymentConfig = {
   databaseUrl: string;
   keyEncryptionKey: string;
@@ -209,6 +214,8 @@ export type DeploymentConfig = {
   attachments: AttachmentStorageConfig;
   /** Isolated Markdown-to-PDF renderer. Absent leaves PDF creation unavailable. */
   artifactRenderer?: ArtifactRendererConfig;
+  /** Isolated PDF-to-text extractor. Absent leaves PDF attachments unreadable. */
+  pdfExtractor?: PdfExtractorConfig;
   runtime: RuntimeCapabilities;
   /**
    * How long a Bot's stream may say nothing before this deployment ends the turn, in milliseconds.
@@ -423,6 +430,17 @@ function artifactRendererConfig(
     throw new Error("ARTIFACT_RENDERER_TOKEN must be at least 32 characters");
   }
   return address && token ? { baseUrl: address.toString(), token } : undefined;
+}
+
+function pdfExtractorConfig(
+  environment: Environment,
+): PdfExtractorConfig | undefined {
+  const address = optionalHttpUrl(environment, "PDF_EXTRACTOR_URL");
+  if (!address) return undefined;
+  if (address.username || address.password || address.search || address.hash) {
+    throw new Error("PDF_EXTRACTOR_URL must be a plain HTTP(S) address");
+  }
+  return { baseUrl: address.toString() };
 }
 
 function oauthClient(
@@ -910,6 +928,7 @@ export function loadConfig(
   const auth = authConfig(environment, google);
   const managedAgent = managedAgentConfig(environment);
   const artifactRenderer = artifactRendererConfig(environment);
+  const pdfExtractor = pdfExtractorConfig(environment);
   const workerSharedSecret = optional(environment, "WORKER_SHARED_SECRET");
 
   return {
@@ -931,6 +950,7 @@ export function loadConfig(
       optional(environment, "TENANT_PACKAGE_DIR") ?? "../examples/fintech",
     attachments: attachmentStorageConfig(environment),
     ...(artifactRenderer ? { artifactRenderer } : {}),
+    ...(pdfExtractor ? { pdfExtractor } : {}),
     runtime: runtimeCapabilities(environment),
     agentStallTimeoutMs: agentStallTimeoutMs(environment),
     auditRetentionDays: auditRetentionDays(environment),

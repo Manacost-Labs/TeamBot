@@ -1,4 +1,5 @@
 import { AttachmentQueryError } from "./store";
+import type { PdfExtractor } from "./pdf-extractor-client";
 import type {
   ConversationAttachmentMetadata,
   ConversationAttachmentPage,
@@ -437,6 +438,40 @@ async function extractTextPage(options: {
   };
 }
 
+function extractStringPage(options: {
+  text: string;
+  truncated: boolean;
+  cursor: number;
+  maxChars: number;
+  maxTotalTextCodePoints: number;
+}): { text: string; nextCursor: number | null; truncated: boolean } {
+  const pageEnd = Math.min(
+    options.maxTotalTextCodePoints,
+    options.cursor + options.maxChars,
+  );
+  const page: string[] = [];
+  let codePoints = 0;
+  let hasMore = false;
+  for (const character of options.text) {
+    if (codePoints >= pageEnd) {
+      hasMore = true;
+      break;
+    }
+    if (codePoints >= options.cursor) page.push(character);
+    codePoints += 1;
+  }
+  const extractedEnd = options.cursor + page.length;
+  const truncated = hasMore || options.truncated;
+  return {
+    text: page.join(""),
+    nextCursor:
+      truncated && extractedEnd < options.maxTotalTextCodePoints
+        ? extractedEnd
+        : null,
+    truncated,
+  };
+}
+
 /**
  * Stable, content-safe methods ready to be wrapped as a first-party builtin
  * plugin. Trusted run context is a separate parameter from model-controlled
@@ -445,6 +480,7 @@ async function extractTextPage(options: {
 export function createConversationAttachmentTools(
   store: ConversationAttachmentToolStore,
   requestedLimits: ConversationAttachmentToolLimits = {},
+  pdfExtractor?: PdfExtractor,
 ): ConversationAttachmentTools {
   const timeoutMs = boundedPositiveLimit(
     requestedLimits.textReadTimeoutMs,
@@ -517,21 +553,42 @@ export function createConversationAttachmentTools(
           );
           scope.signal.throwIfAborted();
           if (!source) return NOT_FOUND;
-          if (!TEXT_MIME_TYPES.has(source.attachment.mimeType)) {
+          const isPdf = source.attachment.mimeType === "application/pdf";
+          if (!TEXT_MIME_TYPES.has(source.attachment.mimeType) && !isPdf) {
             return UNSUPPORTED_MEDIA_TYPE;
           }
+          if (isPdf && !pdfExtractor) return UNSUPPORTED_MEDIA_TYPE;
           const stream = await source.openStream(scope.signal);
           if (scope.signal.aborted) {
             await stream.cancel(scope.signal.reason).catch(() => undefined);
             throw scope.signal.reason;
           }
-          const page = await extractTextPage({
-            stream,
-            cursor,
-            maxChars,
-            maxTotalTextCodePoints,
-            signal: scope.signal,
-          });
+          let page: {
+            text: string;
+            nextCursor: number | null;
+            truncated: boolean;
+          };
+          if (isPdf) {
+            if (!pdfExtractor) return UNSUPPORTED_MEDIA_TYPE;
+            page = extractStringPage({
+              ...(await pdfExtractor.extractText({
+                stream,
+                size: source.attachment.size,
+                signal: scope.signal,
+              })),
+              cursor,
+              maxChars,
+              maxTotalTextCodePoints,
+            });
+          } else {
+            page = await extractTextPage({
+              stream,
+              cursor,
+              maxChars,
+              maxTotalTextCodePoints,
+              signal: scope.signal,
+            });
+          }
           return success({
             attachment: source.attachment,
             text: page.text,

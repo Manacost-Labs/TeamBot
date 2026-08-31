@@ -29,6 +29,7 @@ import {
   processAttachmentBlobLifecycle,
 } from "./attachments/lifecycle";
 import { createAttachmentModelInputPreparer } from "./attachments/model-images";
+import { createPdfExtractor } from "./attachments/pdf-extractor-client";
 import { createAttachmentStore } from "./attachments/store";
 import { createConversationAttachmentTools } from "./attachments/tool-facade";
 import { createConversationAttachmentToolStore } from "./attachments/tool-store";
@@ -204,8 +205,15 @@ const conversationAttachmentStore = createConversationAttachmentToolStore({
   metadata: attachmentStore,
   blobs: attachmentBlobs,
 });
+const pdfExtractor = config.pdfExtractor
+  ? createPdfExtractor(config.pdfExtractor)
+  : undefined;
 useConversationAttachmentTools(
-  createConversationAttachmentTools(conversationAttachmentStore),
+  createConversationAttachmentTools(
+    conversationAttachmentStore,
+    undefined,
+    pdfExtractor,
+  ),
 );
 useGoogleDriveFileBridge(
   createGoogleDriveFileBridge({
