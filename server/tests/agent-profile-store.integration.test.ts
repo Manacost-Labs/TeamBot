@@ -24,6 +24,10 @@ import {
   channels,
   deploymentPackages,
   intelligenceChannelMappings,
+  pluginGrants,
+  routineRuns,
+  routines,
+  skills,
   users,
 } from "../src/db/schema";
 import { TEST_POOL } from "./support/database";
@@ -556,9 +560,130 @@ describe("agent profile store integration", () => {
     expect(duplicatePreferences).toHaveLength(0);
   });
 
-  test("duplicates no channel membership or Intelligence mapping from the source", async () => {
+  test("copies skill and MCP grants, including Google, but not Bot handoff grants", async () => {
     const owner = await createUser();
+    const admin = await createUser("admin");
     const source = await createProfileFixture({ owner, visibility: "public" });
+    const skillSlug = id("skill");
+    await database.insert(skills).values({
+      id: skillSlug,
+      slug: skillSlug,
+      ownerUserId: owner.id,
+      title: "Source skill",
+      summary: "Copied with the employee.",
+      instructions: "Use the source skill.",
+      origin: "yours",
+    });
+    await database.insert(pluginGrants).values([
+      {
+        kind: "skill",
+        ref: skillSlug,
+        agentId: source.agentId,
+        grantedBy: admin.id,
+      },
+      {
+        kind: "mcp",
+        ref: "google-drive/search_files",
+        agentId: source.agentId,
+        grantedBy: admin.id,
+      },
+      {
+        kind: "mcp",
+        ref: "knowledge/search",
+        agentId: source.agentId,
+        grantedBy: admin.id,
+      },
+      {
+        kind: "bot",
+        ref: id("handoff-target"),
+        agentId: source.agentId,
+        grantedBy: admin.id,
+      },
+    ]);
+
+    const duplicate = await store.duplicate(admin, source.agentId);
+    createdAgentIds.push(duplicate.id);
+    const copied = await database
+      .select({ kind: pluginGrants.kind, ref: pluginGrants.ref })
+      .from(pluginGrants)
+      .where(eq(pluginGrants.agentId, duplicate.id));
+
+    expect(
+      copied.sort((left, right) =>
+        `${left.kind}:${left.ref}`.localeCompare(`${right.kind}:${right.ref}`),
+      ),
+    ).toEqual([
+      { kind: "mcp", ref: "google-drive/search_files" },
+      { kind: "mcp", ref: "knowledge/search" },
+      { kind: "skill", ref: skillSlug },
+    ]);
+  });
+
+  test("fails closed instead of expanding an admin-granted MCP capability", async () => {
+    const owner = await createUser();
+    const source = await createProfileFixture({ owner });
+    await database.insert(pluginGrants).values({
+      kind: "mcp",
+      ref: "admin-only/dangerous_write",
+      agentId: source.agentId,
+      grantedBy: "workspace-admin",
+    });
+
+    const outcome = await store.duplicate(owner, source.agentId).then(
+      (duplicate) => ({ duplicate }),
+      (error: unknown) => ({ error }),
+    );
+    if ("duplicate" in outcome && outcome.duplicate) {
+      createdAgentIds.push(outcome.duplicate.id);
+    }
+
+    expect("error" in outcome ? outcome.error : undefined).toBeInstanceOf(
+      AgentNotManageableError,
+    );
+  });
+
+  test("does not let a public custom model bypass the create policy", async () => {
+    const owner = await createUser();
+    const caller = await createUser();
+    const source = await createProfileFixture({
+      owner,
+      visibility: "public",
+      configuration: {
+        endpoint: "https://seed.example.test/ag-ui",
+        model: "admin-only-model",
+      },
+    });
+
+    const outcome = await store.duplicate(caller, source.agentId).then(
+      (duplicate) => ({ duplicate }),
+      (error: unknown) => ({ error }),
+    );
+    if ("duplicate" in outcome && outcome.duplicate) {
+      createdAgentIds.push(outcome.duplicate.id);
+    }
+
+    expect("error" in outcome ? outcome.error : undefined).toMatchObject({
+      name: "CustomAgentModelError",
+    });
+  });
+
+  test("duplicates no conversations, credentials, schedules or run history", async () => {
+    const owner = await createUser();
+    const source = await createProfileFixture({
+      owner,
+      visibility: "public",
+      configuration: {
+        endpoint: "https://seed.example.test/ag-ui",
+        auth: { header: "Authorization", credentialId: randomUUID() },
+      },
+    });
+    await database
+      .update(agentProfiles)
+      .set({
+        callbackTokenHash: "source-callback-token-hash",
+        callbackTokenIssuedAt: new Date(),
+      })
+      .where(eq(agentProfiles.agentId, source.agentId));
     const channelId = id("channel");
     await database.insert(channels).values({
       id: channelId,
@@ -573,6 +698,23 @@ describe("agent profile store integration", () => {
       userId: owner.id,
       channelId,
       threadId: id("thread"),
+    });
+    const routineId = id("routine");
+    await database.insert(routines).values({
+      id: routineId,
+      ownerUserId: owner.id,
+      agentId: source.agentId,
+      channelId,
+      instruction: "Run only for the source.",
+      cron: "0 9 * * 1-5",
+      timezone: "UTC",
+      nextRunAt: new Date(Date.now() + 60_000),
+    });
+    await database.insert(routineRuns).values({
+      id: id("routine-run"),
+      routineId,
+      finishedAt: new Date(),
+      status: "succeeded",
     });
     createdChannelIds.push(channelId);
 
@@ -599,9 +741,16 @@ describe("agent profile store integration", () => {
       .select()
       .from(channelAgents)
       .where(eq(channelAgents.agentId, duplicate.id));
+    const duplicateRoutines = await database
+      .select()
+      .from(routines)
+      .where(eq(routines.agentId, duplicate.id));
     expect(sourceMappings).not.toHaveLength(0);
     expect(duplicateChannelAgents).toHaveLength(0);
     expect(duplicateMappings).toHaveLength(0);
+    expect(duplicateRoutines).toHaveLength(0);
+    expect(duplicate.hasAuth).toBe(false);
+    expect(duplicate.hasCallbackToken).toBe(false);
   });
 
   test("soft deletes a profile from reads and lists while retaining its raw rows", async () => {

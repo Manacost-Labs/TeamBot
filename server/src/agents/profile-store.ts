@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, isNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import type { CredentialStore } from "../credentials";
 import type { Database } from "../db/client";
 import {
@@ -6,6 +6,9 @@ import {
   agentProfiles,
   agents,
   deploymentPackages,
+  mcpTools,
+  pluginGrants,
+  skills,
 } from "../db/schema";
 import {
   authFromConfiguration,
@@ -256,6 +259,87 @@ async function findAccessibleProfile(
     ),
   );
   return row ? mapProfile(row) : null;
+}
+
+/**
+ * Copy only grants the caller could grant to the new caller-owned Bot themselves.
+ *
+ * Administrators may copy every skill and MCP grant. A regular user may copy their own skills and
+ * currently advertised Google tools, whose calls still run with that user's own OAuth credential.
+ * Any other source grant makes duplication fail closed instead of turning a public/admin-configured
+ * profile into a privilege-escalation path. Bot-to-Bot handoff grants are intentionally not selected.
+ */
+async function grantsForDuplicate(
+  executor: DatabaseExecutor,
+  actor: AgentActor,
+  sourceAgentId: string,
+): Promise<Array<{ kind: "mcp" | "skill"; ref: string }>> {
+  const sourceGrants = (
+    await executor
+      .select({ kind: pluginGrants.kind, ref: pluginGrants.ref })
+      .from(pluginGrants)
+      .where(
+        and(
+          eq(pluginGrants.agentId, sourceAgentId),
+          inArray(pluginGrants.kind, ["mcp", "skill"]),
+        ),
+      )
+  ).map((grant) => ({
+    kind: grant.kind as "mcp" | "skill",
+    ref: grant.ref,
+  }));
+  if (actor.role === "admin" || sourceGrants.length === 0) {
+    return sourceGrants;
+  }
+
+  const skillRefs = sourceGrants
+    .filter((grant) => grant.kind === "skill")
+    .map((grant) => grant.ref);
+  const ownedSkills =
+    skillRefs.length === 0
+      ? []
+      : await executor
+          .select({ slug: skills.slug })
+          .from(skills)
+          .where(
+            and(
+              eq(skills.ownerUserId, actor.id),
+              inArray(skills.slug, skillRefs),
+            ),
+          );
+  const allowedSkills = new Set(ownedSkills.map((skill) => skill.slug));
+
+  const googleRefs = sourceGrants
+    .filter(
+      (grant) => grant.kind === "mcp" && grant.ref.startsWith("google-drive/"),
+    )
+    .map((grant) => grant.ref);
+  const googleToolNames = googleRefs.map((ref) =>
+    ref.slice("google-drive/".length),
+  );
+  const googleTools =
+    googleToolNames.length === 0
+      ? []
+      : await executor
+          .select({ name: mcpTools.name })
+          .from(mcpTools)
+          .where(
+            and(
+              eq(mcpTools.serverId, "google-drive"),
+              inArray(mcpTools.name, googleToolNames),
+            ),
+          );
+  const allowedGoogle = new Set(
+    googleTools.map((tool) => `google-drive/${tool.name}`),
+  );
+
+  const refused = sourceGrants.some((grant) =>
+    grant.kind === "skill"
+      ? !allowedSkills.has(grant.ref)
+      : !allowedGoogle.has(grant.ref),
+  );
+  if (refused) throw new AgentNotManageableError(sourceAgentId);
+  return sourceGrants;
 }
 
 async function lockProfileMutationRows(executor: DatabaseExecutor, id: string) {
@@ -509,6 +593,8 @@ export function createAgentProfileStore(
         if (!managedConfiguration) {
           throw new ManagedAgentUnavailableError();
         }
+        assertModelAllowed(actor, source.model);
+        const grants = await grantsForDuplicate(transaction, actor, id);
         const duplicateId = newAgentId();
         await transaction.insert(agents).values({
           id: duplicateId,
@@ -530,6 +616,15 @@ export function createAgentProfileStore(
           avatarSeed: source.avatarSeed,
           visibility: "private",
         });
+        if (grants.length > 0) {
+          await transaction.insert(pluginGrants).values(
+            grants.map((grant) => ({
+              ...grant,
+              agentId: duplicateId,
+              grantedBy: actor.id,
+            })),
+          );
+        }
 
         const duplicate = await findAccessibleProfile(
           transaction,
