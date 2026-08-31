@@ -44,6 +44,7 @@ export type RoutineUpdate = {
   instruction: string;
   cron: string;
   timezone: string;
+  overlapPolicy: "skip" | "queue_one" | "allow_overlap";
 };
 
 export function updateRoutineMutationOptions(queryClient: QueryClient) {

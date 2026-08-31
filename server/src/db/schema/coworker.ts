@@ -12,6 +12,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { agents, users } from "./core";
 
@@ -84,6 +85,12 @@ export const routineRunStatus = pgEnum("routine_run_status", [
   "skipped",
 ]);
 
+export const routineOverlapPolicy = pgEnum("routine_overlap_policy", [
+  "skip",
+  "queue_one",
+  "allow_overlap",
+]);
+
 export const routineWorkerHeartbeatStatus = pgEnum(
   "routine_worker_heartbeat_status",
   ["succeeded", "failed"],
@@ -132,6 +139,18 @@ export const routines = pgTable(
     /** IANA zone the cron is read in. UTC when the person never said otherwise. */
     timezone: text("timezone").notNull().default("UTC"),
     enabled: boolean("enabled").notNull().default(true),
+    /**
+     * `allow_overlap` is reserved in storage for forward compatibility, but the current runtime
+     * refuses selecting it because every routine writes one exclusively locked channel thread.
+     */
+    overlapPolicy: routineOverlapPolicy("overlap_policy")
+      .notNull()
+      .default("skip"),
+    /** The single occurrence retained by queue_one while another run owns the routine. */
+    queuedFiringKey: text("queued_firing_key"),
+    queuedScheduledFor: timestamp("queued_scheduled_for", {
+      withTimezone: true,
+    }),
     /** The sweep's read target. Recomputed on every write and CAS-advanced by the sweep. */
     nextRunAt: timestamp("next_run_at", { withTimezone: true }).notNull(),
     /**
@@ -167,8 +186,11 @@ export const routineRuns = pgTable(
     status: routineRunStatus("status"),
     /** The refusal or the throw, capped like audit payloads. Never shown raw to a person. */
     error: text("error"),
+    /** Work-item identity. Null for manual runs; unique for scheduled at-most-once dispatch. */
+    firingKey: text("firing_key"),
   },
   (table) => [
     index("routine_runs_by_routine_idx").on(table.routineId, table.startedAt),
+    uniqueIndex("routine_runs_firing_key_unique").on(table.firingKey),
   ],
 );

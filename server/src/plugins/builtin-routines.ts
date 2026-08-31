@@ -1,11 +1,13 @@
 import {
   MAX_RUN_ERROR,
+  ROUTINE_OVERLAP_POLICIES,
   type Routine,
   RoutineNotFoundError,
   type RoutinePatch,
   RoutineRefusedError,
   type RoutineStore,
   type RoutineSummary,
+  type SupportedRoutineOverlapPolicy,
 } from "../routines/store";
 import { MAX_RESULT_CHARS, type McpCallResult, type McpTool } from "./mcp";
 
@@ -120,6 +122,12 @@ const TOOLS: readonly McpTool[] = Object.freeze([
           description:
             "Where the reply is posted. Omit for the one channel you share with this person.",
         },
+        overlapPolicy: {
+          type: "string",
+          enum: [...ROUTINE_OVERLAP_POLICIES],
+          description:
+            "What happens when a scheduled run is still active: `skip` (default) or `queue_one`.",
+        },
       },
       required: ["instruction", "cron"],
     },
@@ -178,6 +186,11 @@ const TOOLS: readonly McpTool[] = Object.freeze([
           type: "boolean",
           description:
             "False switches it off without deleting it; true switches it back on.",
+        },
+        overlapPolicy: {
+          type: "string",
+          enum: [...ROUTINE_OVERLAP_POLICIES],
+          description: "Change overlap handling to `skip` or `queue_one`.",
         },
       },
       required: ["id"],
@@ -257,6 +270,20 @@ function stringArg(
   return typeof value === "string" && value.trim() !== "" ? value : undefined;
 }
 
+function overlapPolicyArg(
+  args: Record<string, unknown>,
+): SupportedRoutineOverlapPolicy | undefined {
+  const value = args.overlapPolicy;
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== "string" ||
+    !ROUTINE_OVERLAP_POLICIES.includes(value as SupportedRoutineOverlapPolicy)
+  ) {
+    throw new RoutineRefusedError("Overlap policy must be skip or queue_one.");
+  }
+  return value as SupportedRoutineOverlapPolicy;
+}
+
 /** The target channel as something a person would recognise. A broken one is named as broken. */
 function channelOf(summary: RoutineSummary): string {
   if (summary.channelDeleted) {
@@ -295,6 +322,7 @@ function inWords(summary: RoutineSummary): string {
     lastRunOf(summary),
     // The model needs this to change or delete the routine later, and it cannot derive it.
     `id: ${summary.id}`,
+    `overlap: ${summary.overlapPolicy ?? "skip"}`,
   ];
   if (!summary.enabled) parts.push("switched off");
   return `"${summary.instruction}" — ${parts.join(" · ")}`;
@@ -394,6 +422,7 @@ export async function callTool(
         // zone nobody chose on a routine that then fires at the wrong hour for ever.
         timezone: stringArg(args, "timezone"),
         channelId: stringArg(args, "channelId"),
+        overlapPolicy: overlapPolicyArg(args),
       });
       return await describeWritten(
         tools,
@@ -431,6 +460,8 @@ export async function callTool(
       const channelId = stringArg(args, "channelId");
       if (channelId !== undefined) patch.channelId = channelId;
       if (typeof args.enabled === "boolean") patch.enabled = args.enabled;
+      const overlapPolicy = overlapPolicyArg(args);
+      if (overlapPolicy !== undefined) patch.overlapPolicy = overlapPolicy;
 
       // An empty patch is not a change, and sending it would answer "changed" having changed
       // nothing — which a model will report to somebody as done.

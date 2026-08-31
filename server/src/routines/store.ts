@@ -72,6 +72,13 @@ export const MAX_ENABLED_ROUTINES = 20;
 export const MAX_INSTRUCTION_CODE_POINTS = 2000;
 /** Capped like audit payloads, because a failure is not a promise about length. */
 export const MAX_RUN_ERROR = 400;
+export const ROUTINE_OVERLAP_POLICIES = ["skip", "queue_one"] as const;
+export type SupportedRoutineOverlapPolicy =
+  (typeof ROUTINE_OVERLAP_POLICIES)[number];
+/** `allow_overlap` can exist in storage for forward compatibility, but is not an accepted input. */
+export type RoutineOverlapPolicy =
+  | SupportedRoutineOverlapPolicy
+  | "allow_overlap";
 /**
  * How far back the failure count looks.
  *
@@ -89,6 +96,8 @@ const NO_CHANNEL_AT_ALL =
 const INSTRUCTION_EMPTY = "A routine needs an instruction to carry out.";
 const INSTRUCTION_TOO_LONG = `An instruction can be at most ${MAX_INSTRUCTION_CODE_POINTS} characters.`;
 const TOO_MANY_ENABLED = `You already have ${MAX_ENABLED_ROUTINES} routines switched on. Switch one off before adding another.`;
+const ALLOW_OVERLAP_UNAVAILABLE =
+  "Allow overlap is unavailable while this routine writes to one exclusively locked conversation. Choose skip or queue one.";
 
 /** How many names an ambiguity refusal reads out before it gives up and says "and others". */
 const MAX_NAMED_CHANNELS = 5;
@@ -105,6 +114,7 @@ export type Routine = {
   cron: string;
   timezone: string;
   enabled: boolean;
+  overlapPolicy: RoutineOverlapPolicy;
   nextRunAt: Date;
   lastRunAt: Date | null;
   createdAt: Date;
@@ -130,6 +140,7 @@ export type RoutineSummary = {
   cron: string;
   timezone: string;
   enabled: boolean;
+  overlapPolicy?: RoutineOverlapPolicy;
   nextRunAt: Date;
   channelId: string;
   /** The target channel's name, or null when the row is gone entirely rather than soft-deleted. */
@@ -157,6 +168,7 @@ export type RoutineInput = {
   instruction: string;
   cron: string;
   timezone?: string;
+  overlapPolicy?: SupportedRoutineOverlapPolicy;
 };
 
 /**
@@ -180,6 +192,7 @@ export type RoutinePatch = Partial<{
   timezone: string;
   channelId: string;
   enabled: boolean;
+  overlapPolicy: SupportedRoutineOverlapPolicy;
 }>;
 
 export type RoutineStore = {
@@ -224,8 +237,26 @@ export type RoutineStore = {
    * clock caught up — so the sweep passes `now` here and one advance makes the clock current.
    */
   advanceNextRun(id: string, from: Date, computeFrom?: Date): Promise<boolean>;
-  /** Open a scheduled run, or record a skip when the previous run is still active. */
-  insertRun(routineId: string): Promise<{ runId: string; skipped?: boolean }>;
+  /** Open a scheduled run, or deterministically skip/reserve/deduplicate an overlap. */
+  insertRun(
+    routineId: string,
+    firing?: {
+      key: string;
+      scheduledFor: Date;
+      /** The original occurrence retained in the routine's durable queue-one slot. */
+      queuedSourceKey?: string;
+    },
+  ): Promise<{
+    runId: string;
+    skipped?: boolean;
+    queued?: boolean;
+    duplicate?: boolean;
+    obsolete?: boolean;
+  }>;
+  /** Queue-one reservations ready to become idempotent work items, oldest first. */
+  queuedRoutines?(
+    limit: number,
+  ): Promise<{ id: string; firingKey: string; scheduledFor: Date }[]>;
   /**
    * The runner's read: an opened run row, joined to the routine it fires.
    *
@@ -294,10 +325,20 @@ function toRoutine(row: RoutineRow): Routine {
     cron: row.cron,
     timezone: row.timezone,
     enabled: row.enabled,
+    overlapPolicy: row.overlapPolicy,
     nextRunAt: row.nextRunAt,
     lastRunAt: row.lastRunAt,
     createdAt: row.createdAt,
   };
+}
+
+function validOverlapPolicy(
+  policy: RoutineOverlapPolicy,
+): SupportedRoutineOverlapPolicy {
+  if (policy === "allow_overlap") {
+    throw new RoutineRefusedError(ALLOW_OVERLAP_UNAVAILABLE);
+  }
+  return policy;
 }
 
 /** Trim, then measure in code points like channel activity does — not in UTF-16 units. */
@@ -405,10 +446,51 @@ export function createRoutineStore(database: Database): RoutineStore {
     handle: Transaction,
     routineId: string,
     overlap: "record-skip" | "refuse",
-  ): Promise<{ runId: string; skipped?: boolean }> {
+    firing?: {
+      key: string;
+      scheduledFor: Date;
+      queuedSourceKey?: string;
+    },
+  ): Promise<{
+    runId: string;
+    skipped?: boolean;
+    queued?: boolean;
+    duplicate?: boolean;
+    obsolete?: boolean;
+  }> {
     await handle.execute(
       sql`select pg_advisory_xact_lock(hashtext(${`routine-run-${routineId}`}))`,
     );
+
+    const [routine] = await handle
+      .select({
+        enabled: routines.enabled,
+        overlapPolicy: routines.overlapPolicy,
+        queuedFiringKey: routines.queuedFiringKey,
+      })
+      .from(routines)
+      .where(eq(routines.id, routineId))
+      .limit(1);
+    if (!routine) throw new RoutineNotFoundError();
+
+    // The authenticated firing read happens before this transaction. Re-check under the same
+    // per-routine lock used by pause, so a pause that committed first cannot be followed by a
+    // queued or newly opened run from the stale read.
+    if (firing && !routine.enabled) {
+      return { runId: firing.key, obsolete: true };
+    }
+
+    if (firing) {
+      const [sameFiring] = await handle
+        .select({ id: routineRuns.id })
+        .from(routineRuns)
+        .where(eq(routineRuns.firingKey, firing.key))
+        .limit(1);
+      if (sameFiring) {
+        return { runId: sameFiring.id, duplicate: true };
+      }
+    }
+
     const open = await handle
       .select({ id: routineRuns.id })
       .from(routineRuns)
@@ -416,28 +498,102 @@ export function createRoutineStore(database: Database): RoutineStore {
         and(eq(routineRuns.routineId, routineId), isNull(routineRuns.status)),
       )
       .limit(1);
-    if (open.length > 0 && overlap === "refuse") {
+    if (
+      overlap === "refuse" &&
+      (open.length > 0 || routine.queuedFiringKey !== null)
+    ) {
       throw new RoutineOverlapError();
     }
 
+    if (firing?.queuedSourceKey) {
+      if (
+        routine.overlapPolicy !== "queue_one" ||
+        routine.queuedFiringKey !== firing.queuedSourceKey
+      ) {
+        return { runId: firing.key, obsolete: true };
+      }
+      // Manual openings refuse while the reservation exists, and later scheduled occurrences are
+      // collapsed into it under this same lock. Seeing another active row is therefore a recovery
+      // anomaly, not permission to create a second run.
+      if (open.length > 0) {
+        return { runId: firing.key, queued: true };
+      }
+      const runId = `routine_run_${crypto.randomUUID()}`;
+      const [row] = await handle
+        .insert(routineRuns)
+        .values({ id: runId, routineId, firingKey: firing.key })
+        .returning({ id: routineRuns.id });
+      if (!row) throw new Error("inserting a routine run returned no row");
+      await handle
+        .update(routines)
+        .set({
+          queuedFiringKey: null,
+          queuedScheduledFor: null,
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(routines.id, routineId),
+            eq(routines.queuedFiringKey, firing.queuedSourceKey),
+          ),
+        );
+      return { runId: row.id };
+    } else if (open.length > 0 && firing) {
+      if (routine.overlapPolicy === "queue_one") {
+        if (routine.queuedFiringKey === null) {
+          await handle
+            .update(routines)
+            .set({
+              queuedFiringKey: firing.key,
+              queuedScheduledFor: firing.scheduledFor,
+              updatedAt: sql`now()`,
+            })
+            .where(eq(routines.id, routineId));
+          return { runId: firing.key, queued: true };
+        }
+        // One reservation already exists. This occurrence is intentionally collapsed, with a
+        // finished ledger row so the owner can see that it did not become another deferred run.
+      }
+      // `allow_overlap` is refused at every supported write boundary. A hand-edited legacy row
+      // fails closed here as skip rather than weakening the channel's exclusive thread lock.
+    } else if (
+      firing &&
+      routine.overlapPolicy === "queue_one" &&
+      routine.queuedFiringKey !== null
+    ) {
+      // The deferred occurrence has priority even in the small gap between being offered and being
+      // claimed. A newer scheduled occurrence cannot jump ahead of it.
+    } else {
+      const runId = `routine_run_${crypto.randomUUID()}`;
+      const [row] = await handle
+        .insert(routineRuns)
+        .values({
+          id: runId,
+          routineId,
+          ...(firing ? { firingKey: firing.key } : {}),
+        })
+        .returning({ id: routineRuns.id });
+      if (!row) throw new Error("inserting a routine run returned no row");
+      return { runId: row.id };
+    }
+
     const runId = `routine_run_${crypto.randomUUID()}`;
-    const skipped = open.length > 0;
     const [row] = await handle
       .insert(routineRuns)
       .values({
         id: runId,
         routineId,
-        ...(skipped
-          ? {
-              status: "skipped" as const,
-              finishedAt: sql`now()`,
-              error: "another run was already running",
-            }
-          : {}),
+        ...(firing ? { firingKey: firing.key } : {}),
+        status: "skipped" as const,
+        finishedAt: sql`now()`,
+        error:
+          routine.overlapPolicy === "queue_one"
+            ? "one deferred run was already queued"
+            : "another run was already running",
       })
       .returning({ id: routineRuns.id });
     if (!row) throw new Error("inserting a routine run returned no row");
-    return { runId: row.id, ...(skipped ? { skipped: true } : {}) };
+    return { runId: row.id, skipped: true };
   }
 
   /**
@@ -594,21 +750,22 @@ export function createRoutineStore(database: Database): RoutineStore {
       );
     }
     if (patch.enabled !== undefined) values.enabled = patch.enabled;
-
-    const enabling = patch.enabled === true && !existing.enabled;
-
-    const cron = patch.cron ?? existing.cron;
-    const timezone = patch.timezone ?? existing.timezone;
-    if (patch.cron !== undefined) values.cron = patch.cron;
-    if (patch.timezone !== undefined) values.timezone = timezone;
-    /*
-     * Recomputed for a new cron, a new zone, and for switching back on. That last one is the subtle
-     * case: a routine switched off in June still holds June's `next_run_at`, and enabling it without
-     * recomputing hands the sweep a firing that was due months ago.
-     */
-    if (patch.cron !== undefined || patch.timezone !== undefined || enabling) {
-      values.nextRunAt = nextRunFor(cron, timezone, new Date());
+    if (patch.enabled === false) {
+      // Pausing cancels the one deferred occurrence. Resuming recomputes the next schedule from now;
+      // it must not resurrect work that was waiting before the person paused it.
+      values.queuedFiringKey = null;
+      values.queuedScheduledFor = null;
     }
+    if (patch.overlapPolicy !== undefined) {
+      values.overlapPolicy = validOverlapPolicy(patch.overlapPolicy);
+      if (patch.overlapPolicy !== "queue_one") {
+        values.queuedFiringKey = null;
+        values.queuedScheduledFor = null;
+      }
+    }
+
+    if (patch.cron !== undefined) values.cron = patch.cron;
+    if (patch.timezone !== undefined) values.timezone = patch.timezone;
 
     /*
      * The cap is re-counted inside the lock, in the same transaction as the write. Counting outside
@@ -616,6 +773,34 @@ export function createRoutineStore(database: Database): RoutineStore {
      * before either committed.
      */
     const [row] = await withEnabledCapLock(ownerUserId, async (transaction) => {
+      // Serialize pause/policy changes with scheduled openings and queue-one promotion. Without
+      // this shared lock a pause could clear the reservation and an already-waiting firing could
+      // write it back immediately afterwards, resurrecting work the person just cancelled.
+      await transaction.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`routine-run-${id}`}))`,
+      );
+      const [current] = await transaction
+        .select()
+        .from(routines)
+        .where(and(eq(routines.id, id), eq(routines.ownerUserId, ownerUserId)))
+        .limit(1);
+      if (!current) throw new RoutineNotFoundError();
+
+      const enabling = patch.enabled === true && !current.enabled;
+      const cron = patch.cron ?? current.cron;
+      const timezone = patch.timezone ?? current.timezone;
+      /*
+       * Recomputed for a new cron, a new zone, and for switching back on. That last one is the
+       * subtle case: a routine switched off in June still holds June's `next_run_at`, and enabling
+       * it without recomputing hands the sweep a firing that was due months ago.
+       */
+      if (
+        patch.cron !== undefined ||
+        patch.timezone !== undefined ||
+        enabling
+      ) {
+        values.nextRunAt = nextRunFor(cron, timezone, new Date());
+      }
       if (
         enabling &&
         (await countEnabled(transaction, ownerUserId)) >= MAX_ENABLED_ROUTINES
@@ -689,6 +874,7 @@ export function createRoutineStore(database: Database): RoutineStore {
               instruction,
               cron: input.cron,
               timezone,
+              overlapPolicy: validOverlapPolicy(input.overlapPolicy ?? "skip"),
               nextRunAt,
             })
             .returning();
@@ -764,6 +950,7 @@ export function createRoutineStore(database: Database): RoutineStore {
           cron: routine.cron,
           timezone: routine.timezone,
           enabled: routine.enabled,
+          overlapPolicy: routine.overlapPolicy,
           nextRunAt: routine.nextRunAt,
           channelId: routine.channelId,
           channelName,
@@ -913,10 +1100,34 @@ export function createRoutineStore(database: Database): RoutineStore {
       return moved.length > 0;
     },
 
-    async insertRun(routineId) {
+    async insertRun(routineId, firing) {
       return await database.transaction((transaction) =>
-        openRun(transaction, routineId, "record-skip"),
+        openRun(transaction, routineId, "record-skip", firing),
       );
+    },
+
+    async queuedRoutines(limit) {
+      const boundedLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
+      const rows = await database.execute(sql`
+        select r.id,
+               r.queued_firing_key as "firingKey",
+               r.queued_scheduled_for as "scheduledFor"
+        from routines r
+        where r.enabled = true
+          and r.overlap_policy = 'queue_one'
+          and r.queued_firing_key is not null
+          and r.queued_scheduled_for is not null
+          and not exists (
+            select 1 from routine_runs rr
+            where rr.routine_id = r.id and rr.status is null
+          )
+        order by r.queued_scheduled_for asc, r.id asc
+        limit ${boundedLimit}
+      `);
+      const selected = (
+        Array.isArray(rows) ? rows : ((rows as { rows?: unknown[] }).rows ?? [])
+      ) as { id: string; firingKey: string; scheduledFor: Date }[];
+      return selected;
     },
 
     async runContext(runId) {

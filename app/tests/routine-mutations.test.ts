@@ -45,6 +45,7 @@ test("editing PATCHes only the editable schedule fields", async () => {
     instruction: "Prepare the report.",
     cron: "0 8 * * 1-5",
     timezone: "Europe/Warsaw",
+    overlapPolicy: "queue_one",
   });
 
   expect(requests[0]?.url).toBe("/api/routines/routine%2Fone");
@@ -53,6 +54,7 @@ test("editing PATCHes only the editable schedule fields", async () => {
     instruction: "Prepare the report.",
     cron: "0 8 * * 1-5",
     timezone: "Europe/Warsaw",
+    overlapPolicy: "queue_one",
   });
 });
 

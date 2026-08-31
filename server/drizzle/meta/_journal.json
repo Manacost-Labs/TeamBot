@@ -204,6 +204,13 @@
       "when": 1788175423189,
       "tag": "0028_calm_warstar",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1788179095974,
+      "tag": "0029_lazy_firestar",
+      "breakpoints": true
     }
   ]
 }

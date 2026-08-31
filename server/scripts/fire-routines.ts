@@ -19,6 +19,7 @@ import { createRoutineStore } from "../src/routines/store";
 import {
   dispatchClaimedRoutines,
   offerDueRoutines,
+  offerQueuedRoutines,
   ROUTINE_FIRE_KIND,
 } from "../src/routines/sweep";
 import { createWorkQueue } from "../src/work/queue";
@@ -102,6 +103,7 @@ try {
    * Neither half needs the other to have run — another replica's offer is claimed here just the same.
    */
   const { offered } = await offerDueRoutines(options);
+  const { offered: queued } = await offerQueuedRoutines(options);
   const report = await dispatchClaimedRoutines(options);
   /*
    * Sweep what is done with for a day. NOT OPTIONAL.
@@ -121,6 +123,7 @@ try {
     JSON.stringify({
       type: "routine-sweep",
       offered,
+      queued,
       considered: report.considered,
       fired: report.fired,
       skipped: report.skipped,

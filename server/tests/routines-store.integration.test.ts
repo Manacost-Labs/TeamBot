@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
+import postgres from "postgres";
 import { createAgentProfileStore } from "../src/agents/profile-store";
 import type { AgentActor } from "../src/agents/profile-types";
 import { createChannelStore } from "../src/channels/routes";
@@ -21,6 +22,7 @@ import {
   MAX_INSTRUCTION_CODE_POINTS,
   MAX_RUN_ERROR,
   RoutineNotFoundError,
+  RoutineOverlapError,
   RoutineRefusedError,
 } from "../src/routines/store";
 import { TEST_POOL } from "./support/database";
@@ -1033,6 +1035,160 @@ describe("opening and closing a run", () => {
     const [summary] = await store.listFor(owner.id);
     expect(summary?.lastRun?.status).toBe("succeeded");
     expect(summary?.lastRun?.finishedAt).toBeInstanceOf(Date);
+  });
+});
+
+describe("overlap policies", () => {
+  test("defaults to skip and persists queue_one through the owner-scoped update", async () => {
+    const { owner, routine } = await makeRoutine();
+    expect(routine.overlapPolicy).toBe("skip");
+
+    const updated = await store.update(owner.id, routine.id, {
+      overlapPolicy: "queue_one",
+    });
+    expect(updated.overlapPolicy).toBe("queue_one");
+    expect((await store.listFor(owner.id))[0]?.overlapPolicy).toBe("queue_one");
+  });
+
+  test("retains exactly one overlap, promotes it after the active run, and deduplicates its retry", async () => {
+    const { owner, routine } = await makeRoutine();
+    await store.update(owner.id, routine.id, { overlapPolicy: "queue_one" });
+    const active = await store.insertRun(routine.id);
+    const firstAt = new Date("2026-08-31T09:00:00.000Z");
+    const secondAt = new Date("2026-08-31T09:15:00.000Z");
+
+    const retained = await store.insertRun(routine.id, {
+      key: `${routine.id}:2026-08-31T09:00Z`,
+      scheduledFor: firstAt,
+    });
+    const collapsed = await store.insertRun(routine.id, {
+      key: `${routine.id}:2026-08-31T09:15Z`,
+      scheduledFor: secondAt,
+    });
+    expect(retained.queued).toBe(true);
+    expect(collapsed.skipped).toBe(true);
+    expect(await store.queuedRoutines?.(10)).toEqual([]);
+
+    await expect(
+      store.insertManualRun?.(owner.id, routine.id),
+    ).rejects.toBeInstanceOf(RoutineOverlapError);
+    await store.finishRun(active.runId, "succeeded");
+
+    expect(await store.queuedRoutines?.(10)).toEqual([
+      {
+        id: routine.id,
+        firingKey: `${routine.id}:2026-08-31T09:00Z`,
+        scheduledFor: firstAt,
+      },
+    ]);
+
+    const promotedKey = `queue-one:${routine.id}:2026-08-31T09:00Z`;
+    const promoted = await store.insertRun(routine.id, {
+      key: promotedKey,
+      scheduledFor: firstAt,
+      queuedSourceKey: `${routine.id}:2026-08-31T09:00Z`,
+    });
+    expect(promoted.queued).toBeUndefined();
+    expect(await store.queuedRoutines?.(10)).toEqual([]);
+
+    const duplicate = await store.insertRun(routine.id, {
+      key: promotedKey,
+      scheduledFor: firstAt,
+      queuedSourceKey: `${routine.id}:2026-08-31T09:00Z`,
+    });
+    expect(duplicate).toEqual({ runId: promoted.runId, duplicate: true });
+  });
+
+  test("refuses allow_overlap rather than weakening the conversation thread lock", async () => {
+    const { owner, agentId, channel, routine } = await makeRoutine();
+    await expect(
+      store.update(owner.id, routine.id, { overlapPolicy: "allow_overlap" }),
+    ).rejects.toThrow(/exclusively locked conversation/);
+    await expect(
+      store.create({
+        ownerUserId: owner.id,
+        agentId,
+        channelId: channel.id,
+        instruction: "Run concurrently.",
+        cron: DAILY,
+        overlapPolicy: "allow_overlap",
+      }),
+    ).rejects.toBeInstanceOf(RoutineRefusedError);
+  });
+
+  test("pausing cancels a deferred occurrence instead of resurrecting it on resume", async () => {
+    const { owner, routine } = await makeRoutine();
+    await store.update(owner.id, routine.id, { overlapPolicy: "queue_one" });
+    const active = await store.insertRun(routine.id);
+    await store.insertRun(routine.id, {
+      key: `${routine.id}:2026-08-31T09:00Z`,
+      scheduledFor: new Date("2026-08-31T09:00:00.000Z"),
+    });
+
+    await store.setEnabled(owner.id, routine.id, false);
+    await store.finishRun(active.runId, "succeeded");
+    expect(await store.queuedRoutines?.(10)).toEqual([]);
+
+    await store.setEnabled(owner.id, routine.id, true);
+    expect(await store.queuedRoutines?.(10)).toEqual([]);
+  });
+
+  test("pause and a colliding firing serialize on one routine lock", async () => {
+    const { owner, routine } = await makeRoutine();
+    await store.update(owner.id, routine.id, { overlapPolicy: "queue_one" });
+    const active = await store.insertRun(routine.id);
+    const blocker = postgres(databaseUrl, { max: 1 });
+    let pause: Promise<void> | undefined;
+    let collision: ReturnType<typeof store.insertRun> | undefined;
+    let unlocked = false;
+
+    const waitForBlockedLocks = async (minimum: number) => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const [row] = await blocker<{ waiting: number }[]>`
+          select count(*)::int as waiting
+          from pg_stat_activity
+          where datname = current_database()
+            and pid <> pg_backend_pid()
+            and wait_event_type = 'Lock'
+            and wait_event = 'advisory'
+        `;
+        if ((row?.waiting ?? 0) >= minimum) return;
+        await Bun.sleep(5);
+      }
+      throw new Error(`expected ${minimum} advisory lock waiter(s)`);
+    };
+
+    try {
+      const [locked] = await blocker`
+        select pg_try_advisory_lock(hashtext(${`routine-run-${routine.id}`})) as held
+      `;
+      expect(locked?.held).toBe(true);
+
+      pause = store.setEnabled(owner.id, routine.id, false);
+      await waitForBlockedLocks(1);
+      collision = store.insertRun(routine.id, {
+        key: `${routine.id}:2026-08-31T09:00Z`,
+        scheduledFor: new Date("2026-08-31T09:00:00.000Z"),
+      });
+      await waitForBlockedLocks(2);
+      await blocker`
+        select pg_advisory_unlock(hashtext(${`routine-run-${routine.id}`}))
+      `;
+      unlocked = true;
+      await Promise.all([pause, collision]);
+    } finally {
+      if (!unlocked) {
+        await blocker`
+          select pg_advisory_unlock(hashtext(${`routine-run-${routine.id}`}))
+        `.catch(() => undefined);
+      }
+      await Promise.allSettled([pause, collision].filter(Boolean));
+      await blocker.end({ timeout: 5 }).catch(() => undefined);
+    }
+
+    await store.finishRun(active.runId, "succeeded");
+    expect(await store.queuedRoutines?.(10)).toEqual([]);
+    expect((await store.listFor(owner.id))[0]?.enabled).toBe(false);
   });
 });
 

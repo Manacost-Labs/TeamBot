@@ -307,6 +307,7 @@ export function RoutinesList() {
                   instruction: editing.instruction,
                   cron: editing.cron,
                   timezone: editing.timezone,
+                  overlapPolicy: editing.overlapPolicy,
                 },
                 { onSuccess: () => setEditing(null) },
               );
@@ -407,6 +408,45 @@ export function RoutinesList() {
                   value={editing?.instruction ?? ""}
                 />
               </label>
+              <label className="grid gap-2 text-sm" htmlFor="routine-overlap">
+                <span className="font-medium">
+                  Если предыдущий запуск ещё идёт
+                </span>
+                <Select
+                  onValueChange={(value) =>
+                    setEditing((current) =>
+                      current
+                        ? {
+                            ...current,
+                            overlapPolicy: value as EditDraft["overlapPolicy"],
+                          }
+                        : current,
+                    )
+                  }
+                  value={editing?.overlapPolicy ?? "skip"}
+                >
+                  <SelectTrigger className="w-full" id="routine-overlap">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="skip">
+                        Пропустить новый запуск
+                      </SelectItem>
+                      <SelectItem value="queue_one">
+                        Поставить один запуск в очередь
+                      </SelectItem>
+                      <SelectItem disabled value="allow_overlap">
+                        Запускать параллельно — недоступно для одного диалога
+                      </SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <span className="text-muted-foreground text-xs">
+                  В очереди сохраняется только один запуск; следующие
+                  пересечения пропускаются.
+                </span>
+              </label>
               <div className="rounded-lg border p-3 text-muted-foreground text-xs">
                 <p>Сотрудник: {editing?.agentId}</p>
                 <p>
@@ -415,7 +455,12 @@ export function RoutinesList() {
                     ? "удалён"
                     : (editing?.channel.name ?? "без названия")}
                 </p>
-                <p>При пересечении: пропустить новый запуск</p>
+                <p>
+                  При пересечении:{" "}
+                  {editing?.overlapPolicy === "queue_one"
+                    ? "поставить один запуск в очередь"
+                    : "пропустить новый запуск"}
+                </p>
               </div>
               {updateRoutine.error ? (
                 <p className="text-destructive text-sm" role="alert">

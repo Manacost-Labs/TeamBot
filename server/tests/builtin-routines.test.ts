@@ -504,6 +504,18 @@ describe("beyond-spec validation refusals", () => {
     expect(result.text).toBe("Say what to change about that routine.");
     expect(calls).toHaveLength(0);
   });
+
+  test("allow_overlap is not advertised as an accepted single-thread policy", async () => {
+    const calls = recordingTools();
+    const result = await callTool(CONNECTION, "update_routine", {
+      id: "routine_1",
+      overlapPolicy: "allow_overlap",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toBe("Overlap policy must be skip or queue_one.");
+    expect(calls).toHaveLength(0);
+  });
 });
 
 describe("what the store said", () => {

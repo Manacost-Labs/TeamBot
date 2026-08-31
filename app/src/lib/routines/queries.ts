@@ -29,7 +29,7 @@ export type RoutineRecord = {
     status: "succeeded" | "failed" | "skipped" | null;
     at: string | null;
   } | null;
-  overlapPolicy: "skip";
+  overlapPolicy: "skip" | "queue_one" | "allow_overlap";
 };
 
 export type RoutineRunRecord = {

@@ -293,6 +293,53 @@ describe("GET /health", () => {
 });
 
 describe("PATCH /:id", () => {
+  test("accepts queue_one as an editable owner-scoped policy", async () => {
+    const updates: unknown[] = [];
+    const store = fakeStore({
+      async update(ownerUserId, id, patch) {
+        updates.push([ownerUserId, id, patch]);
+        return {} as never;
+      },
+    });
+    const response = await appFor(store).request(
+      "http://openbot.test/routine-1",
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ overlapPolicy: "queue_one" }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(updates).toEqual([
+      [actor.id, "routine-1", { overlapPolicy: "queue_one" }],
+    ]);
+  });
+
+  test("rejects reserved allow_overlap before the store is touched", async () => {
+    let updates = 0;
+    const store = fakeStore({
+      async update() {
+        updates += 1;
+        return {} as never;
+      },
+    });
+    const response = await appFor(store).request(
+      "http://openbot.test/routine-1",
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ overlapPolicy: "allow_overlap" }),
+      },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await json(response)).toEqual({
+      error: "overlapPolicy must be skip or queue_one.",
+    });
+    expect(updates).toBe(0);
+  });
+
   test("updates through the owner and audits field names without field contents", async () => {
     const updates: unknown[] = [];
     const events: AuditEventInput[] = [];

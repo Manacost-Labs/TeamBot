@@ -5,13 +5,16 @@ import { recordAuditEvent } from "../audit";
 import type { AppVariables } from "../auth/guards";
 import type { RoutineRunner } from "./runner";
 import {
+  ROUTINE_OVERLAP_POLICIES,
   RoutineNotFoundError,
   RoutineOverlapError,
+  type RoutineOverlapPolicy,
   type RoutinePatch,
   RoutineRefusedError,
   type RoutineRunOutcome,
   type RoutineStore,
   type RoutineSummary,
+  type SupportedRoutineOverlapPolicy,
 } from "./store";
 
 export type { RoutineStore } from "./store";
@@ -239,7 +242,7 @@ type RoutineDto = {
   enabled: boolean;
   nextRunAt: string;
   lastRun: { status: RoutineRunOutcome | null; at: string | null } | null;
-  overlapPolicy: "skip";
+  overlapPolicy: RoutineOverlapPolicy;
 };
 
 function routineDto(routine: RoutineSummary): RoutineDto {
@@ -263,7 +266,7 @@ function routineDto(routine: RoutineSummary): RoutineDto {
           at: routine.lastRun.finishedAt?.toISOString() ?? null,
         }
       : null,
-    overlapPolicy: "skip",
+    overlapPolicy: routine.overlapPolicy ?? "skip",
   };
 }
 
@@ -282,6 +285,7 @@ function parsePatch(input: unknown): ParsedPatch {
     "timezone",
     "channelId",
     "enabled",
+    "overlapPolicy",
   ]);
   const unknown = Object.keys(body).find((key) => !allowed.has(key));
   if (unknown)
@@ -305,6 +309,20 @@ function parsePatch(input: unknown): ParsedPatch {
       return { ok: false, error: "enabled must be true or false." };
     }
     patch.enabled = body.enabled;
+  }
+  if (body.overlapPolicy !== undefined) {
+    if (
+      typeof body.overlapPolicy !== "string" ||
+      !ROUTINE_OVERLAP_POLICIES.includes(
+        body.overlapPolicy as SupportedRoutineOverlapPolicy,
+      )
+    ) {
+      return {
+        ok: false,
+        error: "overlapPolicy must be skip or queue_one.",
+      };
+    }
+    patch.overlapPolicy = body.overlapPolicy as SupportedRoutineOverlapPolicy;
   }
   if (Object.keys(patch).length === 0) {
     return { ok: false, error: "Say what to change about that routine." };

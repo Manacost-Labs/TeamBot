@@ -244,6 +244,36 @@ export async function offerDueRoutines(
 }
 
 /**
+ * Turn each durable queue-one reservation whose active run has ended into one idempotent work item.
+ *
+ * The source occurrence remains on the routine until `insertRun` opens it. Several sweep replicas
+ * therefore offer the same key and converge in `work_items`; none can create a second reservation.
+ */
+export async function offerQueuedRoutines(
+  options: RoutineSweepOptions,
+): Promise<{ offered: string[] }> {
+  if (!options.routineStore.queuedRoutines) return { offered: [] };
+  const queued = await options.routineStore.queuedRoutines(
+    options.limit ?? DEFAULT_LIMIT,
+  );
+  const offered: string[] = [];
+  for (const routine of queued) {
+    const key = `queue-one:${routine.firingKey}`;
+    const result = await options.queue.offer({
+      kind: ROUTINE_FIRE_KIND,
+      key,
+      payload: {
+        routineId: routine.id,
+        scheduledFor: routine.scheduledFor.toISOString(),
+        queuedSourceKey: routine.firingKey,
+      },
+    });
+    if (result !== "refused") offered.push(routine.id);
+  }
+  return { offered };
+}
+
+/**
  * Phase two: claimed items become dispatched firings, with the queue's booleans honoured.
  *
  * EVERY BRANCH HERE IS ABOUT THE GAP BETWEEN THE OFFER AND THE FIRING. Another replica decided this
@@ -383,9 +413,14 @@ export async function dispatchClaimedRoutines(
        */
       const now = options.now?.() ?? new Date();
       const stamp = item.payload.scheduledFor;
+      const queuedSourceKey =
+        typeof item.payload.queuedSourceKey === "string"
+          ? item.payload.queuedSourceKey
+          : undefined;
       const scheduledFor =
         typeof stamp === "string" ? new Date(stamp) : undefined;
       if (
+        queuedSourceKey === undefined &&
         scheduledFor &&
         !Number.isNaN(scheduledFor.getTime()) &&
         now.getTime() - scheduledFor.getTime() > graceMs
@@ -402,7 +437,40 @@ export async function dispatchClaimedRoutines(
        * DISPATCH failures only, and a turn that failed is final for this firing — the fatigue rule
        * owns that, not this loop.
        */
-      const opened = await options.routineStore.insertRun(routineId);
+      const opened = await options.routineStore.insertRun(routineId, {
+        key: item.key,
+        scheduledFor:
+          scheduledFor && !Number.isNaN(scheduledFor.getTime())
+            ? scheduledFor
+            : now,
+        ...(queuedSourceKey ? { queuedSourceKey } : {}),
+      });
+      if (opened.queued) {
+        const reason = queuedSourceKey
+          ? "the deferred run is still waiting for the active run"
+          : "one run was queued behind the active run";
+        if (queuedSourceKey) {
+          await options.queue.release({
+            kind: ROUTINE_FIRE_KIND,
+            key: item.key,
+            owner: options.owner,
+            delayMs: DISPATCH_RETRY_DELAY_MS,
+            reason,
+          });
+        } else {
+          await finishOrSay(options, item.key, routineId, reason);
+        }
+        report.skipped.push({ routineId, reason });
+        continue;
+      }
+      if (opened.duplicate || opened.obsolete) {
+        const reason = opened.duplicate
+          ? "this firing was already opened"
+          : "the deferred run was cancelled before dispatch";
+        await finishOrSay(options, item.key, routineId, reason);
+        report.skipped.push({ routineId, reason });
+        continue;
+      }
       if (opened.skipped) {
         const reason = "the previous run was still active";
         await finishOrSay(options, item.key, routineId, reason);

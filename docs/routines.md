@@ -61,6 +61,26 @@ because the clock had already moved on before that firing was attempted. A serve
 loses more than that: every occurrence whose stamp ages past the grace window while nothing can
 carry it out is skipped, not just the one that was in flight.
 
+## Overlap policy
+
+Every routine defaults to **skip**: if its previous run is still active, the new occurrence is
+recorded as skipped and no second turn starts. The edit dialog and the conversational tools can
+change this to **queue one**. In that mode the first overlapping occurrence is retained durably;
+later overlaps collapse into it, and the worker offers that one retained firing after the active run
+ends. Pausing the routine cancels the retained firing, and a manual **Run now** remains a 409-style
+refusal while either an active or retained run exists.
+
+Scheduled work items and run rows carry the same firing identity. A retry can therefore recognize a
+run it already opened and finish without dispatching the turn twice. The retained slot lives on the
+routine row, is updated under the existing per-routine advisory lock, and contains only an internal
+work key and scheduled timestamp — never the instruction or credentials.
+
+The storage enum reserves **allow overlap**, but the current API and tools refuse selecting it and
+the visual editor shows it as unavailable. A routine writes one durable conversation thread, whose
+platform lock is exclusive; pretending to overlap would only create a second run that fails that lock.
+True overlap requires an explicit product decision about separate thread identity, not a weakened
+lock in the scheduler.
+
 ## The worker requirement
 
 Nothing above happens without a second process. The API server answers `/internal/routines/run` when
