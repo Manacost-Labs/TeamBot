@@ -67,6 +67,22 @@ Attachment bytes, workspace, browser profiles и research reports не вход�
 
 ## Deployment в приватном Compose-контуре
 
+### Ключи источников главного аналитика
+
+Три provider key, доступные аналитику через отдельный `research-sources` gateway, задаются
+интерактивно. Значения не отображаются и атомарно записываются только в игнорируемый Git файл
+`.env` с правами `0600`:
+
+```sh
+cd /srv/projects/web/work.kolodahearthstone.com
+./scripts/configure-research-secrets.sh
+```
+
+Helper запрашивает `RESEARCH_REDDITAPIS_KEY`, `RESEARCH_GETXAPI_KEY` и
+`RESEARCH_TINYFISH_API_KEY`. Первый-party `stats-api` использует разрешённые read-only endpoints и
+отдельного ключа не требует. После ротации пересоздайте `research-sources` и `agent-codex`; не
+передавайте provider keys непосредственно в model-facing контейнер.
+
 Сначала соберите образы, затем замените сервисы и дождитесь health checks:
 
 ```sh
