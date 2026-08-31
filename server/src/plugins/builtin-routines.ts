@@ -126,7 +126,7 @@ const TOOLS: readonly McpTool[] = Object.freeze([
           type: "string",
           enum: [...ROUTINE_OVERLAP_POLICIES],
           description:
-            "What happens when a scheduled run is still active: `skip` (default) or `queue_one`.",
+            "What happens when a scheduled run is still active: `skip` (default), `queue_one`, or `allow_overlap`.",
         },
       },
       required: ["instruction", "cron"],
@@ -190,7 +190,8 @@ const TOOLS: readonly McpTool[] = Object.freeze([
         overlapPolicy: {
           type: "string",
           enum: [...ROUTINE_OVERLAP_POLICIES],
-          description: "Change overlap handling to `skip` or `queue_one`.",
+          description:
+            "Change overlap handling to `skip`, `queue_one`, or `allow_overlap`.",
         },
       },
       required: ["id"],
@@ -279,7 +280,9 @@ function overlapPolicyArg(
     typeof value !== "string" ||
     !ROUTINE_OVERLAP_POLICIES.includes(value as SupportedRoutineOverlapPolicy)
   ) {
-    throw new RoutineRefusedError("Overlap policy must be skip or queue_one.");
+    throw new RoutineRefusedError(
+      "Overlap policy must be skip, queue_one, or allow_overlap.",
+    );
   }
   return value as SupportedRoutineOverlapPolicy;
 }

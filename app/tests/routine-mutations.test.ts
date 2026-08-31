@@ -35,13 +35,15 @@ function queryClientRecorder() {
   };
 }
 
-test("editing PATCHes only the editable schedule fields", async () => {
+test("editing PATCHes every visual schedule field, including human-selected targets", async () => {
   const requests = capture();
   const { queryClient } = queryClientRecorder();
   const options = updateRoutineMutationOptions(queryClient);
 
   await options.mutationFn?.({
     id: "routine/one",
+    agentId: "researcher",
+    channelId: "content-planning",
     instruction: "Prepare the report.",
     cron: "0 8 * * 1-5",
     timezone: "Europe/Warsaw",
@@ -51,6 +53,8 @@ test("editing PATCHes only the editable schedule fields", async () => {
   expect(requests[0]?.url).toBe("/api/routines/routine%2Fone");
   expect(requests[0]?.init?.method).toBe("PATCH");
   expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({
+    agentId: "researcher",
+    channelId: "content-planning",
     instruction: "Prepare the report.",
     cron: "0 8 * * 1-5",
     timezone: "Europe/Warsaw",

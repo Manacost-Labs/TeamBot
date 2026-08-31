@@ -41,6 +41,8 @@ export function deleteRoutineMutationOptions(queryClient: QueryClient) {
 
 export type RoutineUpdate = {
   id: string;
+  agentId: string;
+  channelId: string;
   instruction: string;
   cron: string;
   timezone: string;

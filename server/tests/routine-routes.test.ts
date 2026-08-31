@@ -316,11 +316,11 @@ describe("PATCH /:id", () => {
     ]);
   });
 
-  test("rejects reserved allow_overlap before the store is touched", async () => {
-    let updates = 0;
+  test("accepts employee, target channel, and allow_overlap in one visual edit", async () => {
+    const updates: unknown[] = [];
     const store = fakeStore({
-      async update() {
-        updates += 1;
+      async update(ownerUserId, id, patch) {
+        updates.push([ownerUserId, id, patch]);
         return {} as never;
       },
     });
@@ -329,15 +329,26 @@ describe("PATCH /:id", () => {
       {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ overlapPolicy: "allow_overlap" }),
+        body: JSON.stringify({
+          agentId: "agent-2",
+          channelId: "channel-2",
+          overlapPolicy: "allow_overlap",
+        }),
       },
     );
 
-    expect(response.status).toBe(400);
-    expect(await json(response)).toEqual({
-      error: "overlapPolicy must be skip or queue_one.",
-    });
-    expect(updates).toBe(0);
+    expect(response.status).toBe(200);
+    expect(updates).toEqual([
+      [
+        actor.id,
+        "routine-1",
+        {
+          agentId: "agent-2",
+          channelId: "channel-2",
+          overlapPolicy: "allow_overlap",
+        },
+      ],
+    ]);
   });
 
   test("updates through the owner and audits field names without field contents", async () => {
@@ -401,7 +412,7 @@ describe("PATCH /:id", () => {
     }).request("http://openbot.test/routine-1", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agentId: "somebody-else" }),
+      body: JSON.stringify({ ownerUserId: "somebody-else" }),
     });
 
     expect(response.status).toBe(400);

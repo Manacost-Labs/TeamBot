@@ -139,10 +139,7 @@ export const routines = pgTable(
     /** IANA zone the cron is read in. UTC when the person never said otherwise. */
     timezone: text("timezone").notNull().default("UTC"),
     enabled: boolean("enabled").notNull().default(true),
-    /**
-     * `allow_overlap` is reserved in storage for forward compatibility, but the current runtime
-     * refuses selecting it because every routine writes one exclusively locked channel thread.
-     */
+    /** Every firing may skip, retain one successor, or be admitted and wait for the channel writer. */
     overlapPolicy: routineOverlapPolicy("overlap_policy")
       .notNull()
       .default("skip"),

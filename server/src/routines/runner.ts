@@ -31,6 +31,8 @@ export type TurnRunner = (input: {
   agentId: string;
   threadId: string; // the owner's thread for the routine's channel
   instruction: string; // the user message of this turn
+  /** Admit the firing, but wait for the canonical thread's one safe writer if it is busy. */
+  waitForThreadLock?: boolean;
 }) => Promise<{ replyText: string }>;
 
 export type RoutineRunner = { run(routineRunId: string): Promise<void> };
@@ -78,7 +80,14 @@ export function createRoutineRunner(options: {
      */
     if (!context) return;
 
-    const { routineId, ownerUserId, agentId, channelId, instruction } = context;
+    const {
+      routineId,
+      ownerUserId,
+      agentId,
+      channelId,
+      instruction,
+      overlapPolicy,
+    } = context;
     // Everything below is done AS the owner: their channel, their thread, their grants.
     const owner: AgentActor = { id: ownerUserId, role: "user" };
 
@@ -133,6 +142,7 @@ export function createRoutineRunner(options: {
         agentId,
         threadId: channel.threadId,
         instruction,
+        waitForThreadLock: overlapPolicy === "allow_overlap",
       }));
     } catch (error) {
       const reason = reasonOf(error);

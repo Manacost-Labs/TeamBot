@@ -4,8 +4,8 @@ import {
   IconPlayerPlay,
   IconTrash,
 } from "@tabler/icons-react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import {
   PageEmpty,
   PageRows,
@@ -41,6 +41,8 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { agentListQueryOptions } from "@/lib/agents/queries";
+import { channelListQueryOptions } from "@/lib/channels/queries";
 import { relativeTime } from "@/lib/relative-time";
 import {
   deleteRoutineMutationOptions,
@@ -48,6 +50,10 @@ import {
   setRoutineEnabledMutationOptions,
   updateRoutineMutationOptions,
 } from "@/lib/routines/mutations";
+import {
+  routineAgentOptions,
+  routineChannelOptions,
+} from "@/lib/routines/options";
 import {
   type RoutineRecord,
   routineRunsQueryOptions,
@@ -104,14 +110,12 @@ const schedulePresets = [
 
 type EditDraft = Pick<
   RoutineRecord,
-  | "id"
-  | "agentId"
-  | "instruction"
-  | "cron"
-  | "timezone"
-  | "channel"
-  | "overlapPolicy"
->;
+  "id" | "agentId" | "instruction" | "cron" | "timezone" | "overlapPolicy"
+> & {
+  channelId: string;
+  channelName: string | null;
+  channelGone: boolean;
+};
 
 function durationLabel(durationMs: number | null): string {
   if (durationMs === null) return "выполняется";
@@ -126,6 +130,9 @@ function durationLabel(durationMs: number | null): string {
  */
 export function RoutinesList() {
   const routines = useQuery(routinesQueryOptions());
+  const visibleAgents = useQuery(agentListQueryOptions());
+  const hiddenAgents = useQuery(agentListQueryOptions(true));
+  const channels = useInfiniteQuery(channelListQueryOptions());
   const setEnabled = useMutation(setRoutineEnabledMutationOptions(queryClient));
   const deleteRoutine = useMutation(deleteRoutineMutationOptions(queryClient));
   const updateRoutine = useMutation(updateRoutineMutationOptions(queryClient));
@@ -137,6 +144,35 @@ export function RoutinesList() {
   const history = useQuery(routineRunsQueryOptions(historyId));
   const rows = routines.data ?? [];
   const confirming = rows.find((row) => row.id === confirmingId) ?? null;
+  const allAgents = [
+    ...(visibleAgents.data ?? []),
+    ...(hiddenAgents.data ?? []),
+  ].filter(
+    (agent, index, agents) =>
+      agents.findIndex((candidate) => candidate.id === agent.id) === index,
+  );
+  const employeeOptions = routineAgentOptions(allAgents);
+  const targetChannelOptions = routineChannelOptions(
+    channels.data ?? [],
+    editing?.agentId ?? "",
+  );
+  const channelOptionsComplete =
+    !channels.isPending &&
+    !channels.hasNextPage &&
+    !channels.isFetchingNextPage;
+
+  // The roster is paged for normal navigation. While the editor is open, exhaust those owner-
+  // scoped pages so an older but valid target is not silently absent from the selector.
+  useEffect(() => {
+    if (editing && channels.hasNextPage && !channels.isFetchingNextPage) {
+      void channels.fetchNextPage();
+    }
+  }, [
+    channels.fetchNextPage,
+    channels.hasNextPage,
+    channels.isFetchingNextPage,
+    editing,
+  ]);
 
   return (
     <PageSection>
@@ -241,7 +277,9 @@ export function RoutinesList() {
                           instruction: routine.instruction,
                           cron: routine.cron,
                           timezone: routine.timezone,
-                          channel: routine.channel,
+                          channelId: routine.channel.id,
+                          channelName: routine.channel.name,
+                          channelGone: routine.channel.gone,
                           overlapPolicy: routine.overlapPolicy,
                         });
                       }}
@@ -304,6 +342,8 @@ export function RoutinesList() {
               updateRoutine.mutate(
                 {
                   id: editing.id,
+                  agentId: editing.agentId,
+                  channelId: editing.channelId,
                   instruction: editing.instruction,
                   cron: editing.cron,
                   timezone: editing.timezone,
@@ -321,6 +361,112 @@ export function RoutinesList() {
               </DialogDescription>
             </DialogHeader>
             <DialogBody>
+              <label className="grid gap-2 text-sm" htmlFor="routine-agent">
+                <span className="font-medium">Сотрудник</span>
+                <Select
+                  onValueChange={(agentId) => {
+                    if (agentId === null) return;
+                    const compatible = routineChannelOptions(
+                      channels.data ?? [],
+                      agentId,
+                    );
+                    setEditing((current) => {
+                      if (!current) return current;
+                      const channelId = compatible.some(
+                        (option) => option.value === current.channelId,
+                      )
+                        ? current.channelId
+                        : (compatible[0]?.value ?? "");
+                      const channel = (channels.data ?? []).find(
+                        (candidate) => candidate.id === channelId,
+                      );
+                      return {
+                        ...current,
+                        agentId,
+                        channelId,
+                        channelName: channel?.name ?? null,
+                        channelGone: channel === undefined,
+                      };
+                    });
+                  }}
+                  value={editing?.agentId ?? ""}
+                >
+                  <SelectTrigger className="w-full" id="routine-agent">
+                    <SelectValue placeholder="Выберите сотрудника" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {editing &&
+                      !employeeOptions.some(
+                        (option) => option.value === editing.agentId,
+                      ) ? (
+                        <SelectItem disabled value={editing.agentId}>
+                          Недоступный сотрудник · {editing.agentId}
+                        </SelectItem>
+                      ) : null}
+                      {employeeOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </label>
+              <label className="grid gap-2 text-sm" htmlFor="routine-channel">
+                <span className="font-medium">Целевой диалог</span>
+                <Select
+                  onValueChange={(channelId) => {
+                    if (channelId === null) return;
+                    const channel = (channels.data ?? []).find(
+                      (candidate) => candidate.id === channelId,
+                    );
+                    setEditing((current) =>
+                      current
+                        ? {
+                            ...current,
+                            channelId,
+                            channelName: channel?.name ?? null,
+                            channelGone: channel === undefined,
+                          }
+                        : current,
+                    );
+                  }}
+                  value={editing?.channelId ?? ""}
+                >
+                  <SelectTrigger className="w-full" id="routine-channel">
+                    <SelectValue placeholder="Выберите диалог" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {editing?.channelId &&
+                      !targetChannelOptions.some(
+                        (option) => option.value === editing.channelId,
+                      ) ? (
+                        <SelectItem disabled value={editing.channelId}>
+                          {editing.channelName ?? "Недоступный диалог"} ·
+                          {editing.channelGone || channelOptionsComplete
+                            ? "недоступен"
+                            : "загружается"}
+                        </SelectItem>
+                      ) : null}
+                      {targetChannelOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                {editing &&
+                channelOptionsComplete &&
+                targetChannelOptions.length === 0 ? (
+                  <span className="text-destructive text-xs" role="alert">
+                    Нет активного диалога с этим сотрудником. Сначала создайте
+                    диалог.
+                  </span>
+                ) : null}
+              </label>
               <label className="grid gap-2 text-sm" htmlFor="routine-preset">
                 <span className="font-medium">Готовый вариант</span>
                 <Select
@@ -436,32 +582,20 @@ export function RoutinesList() {
                       <SelectItem value="queue_one">
                         Поставить один запуск в очередь
                       </SelectItem>
-                      <SelectItem disabled value="allow_overlap">
-                        Запускать параллельно — недоступно для одного диалога
+                      <SelectItem value="allow_overlap">
+                        Разрешить все пересекающиеся запуски
                       </SelectItem>
                     </SelectGroup>
                   </SelectContent>
                 </Select>
                 <span className="text-muted-foreground text-xs">
-                  В очереди сохраняется только один запуск; следующие
-                  пересечения пропускаются.
+                  {editing?.overlapPolicy === "allow_overlap"
+                    ? "Каждый запуск будет принят. Записи в один диалог выполняются по очереди, чтобы не повредить историю."
+                    : editing?.overlapPolicy === "queue_one"
+                      ? "В очереди сохраняется один запуск; следующие пересечения пропускаются."
+                      : "Новый запуск пропускается, пока предыдущий не завершён."}
                 </span>
               </label>
-              <div className="rounded-lg border p-3 text-muted-foreground text-xs">
-                <p>Сотрудник: {editing?.agentId}</p>
-                <p>
-                  Диалог:{" "}
-                  {editing?.channel.gone
-                    ? "удалён"
-                    : (editing?.channel.name ?? "без названия")}
-                </p>
-                <p>
-                  При пересечении:{" "}
-                  {editing?.overlapPolicy === "queue_one"
-                    ? "поставить один запуск в очередь"
-                    : "пропустить новый запуск"}
-                </p>
-              </div>
               {updateRoutine.error ? (
                 <p className="text-destructive text-sm" role="alert">
                   {updateRoutine.error.message}
@@ -476,7 +610,15 @@ export function RoutinesList() {
               >
                 Отмена
               </Button>
-              <Button disabled={updateRoutine.isPending} type="submit">
+              <Button
+                disabled={
+                  updateRoutine.isPending ||
+                  !editing?.agentId ||
+                  !editing.channelId ||
+                  editing.channelGone
+                }
+                type="submit"
+              >
                 {updateRoutine.isPending ? "Сохраняем…" : "Сохранить"}
               </Button>
             </DialogFooter>

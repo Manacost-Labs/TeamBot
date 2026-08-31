@@ -93,7 +93,7 @@ function harness(options: {
   history?: HistoryRow[];
   historyFails?: () => Error;
   /** What the acquire call does. A thunk that throws, for the same reason `renew` is one. */
-  acquireFails?: () => Error;
+  acquireFails?: () => Error | undefined;
   drive?: Driver;
   /**
    * What a renew does. A thunk that THROWS rather than one that returns a rejected promise: a
@@ -108,6 +108,9 @@ function harness(options: {
   abortGraceMs?: number;
   heartbeatMs?: number;
   lockTtlSeconds?: number;
+  lockWaitTimeoutMs?: number;
+  lockRetryMs?: number;
+  waitForThreadLock?: boolean;
 }) {
   const order: string[] = [];
   const calls = {
@@ -156,7 +159,8 @@ function harness(options: {
       ttlSeconds?: number;
     }) => {
       order.push("acquire");
-      if (options.acquireFails) throw options.acquireFails();
+      const acquireError = options.acquireFails?.();
+      if (acquireError) throw acquireError;
       calls.acquired.push(params);
       return { threadId: params.threadId, runId: params.runId, joinToken: "t" };
     },
@@ -219,6 +223,12 @@ function harness(options: {
     ...(options.lockTtlSeconds === undefined
       ? {}
       : { lockTtlSeconds: options.lockTtlSeconds }),
+    ...(options.lockWaitTimeoutMs === undefined
+      ? {}
+      : { lockWaitTimeoutMs: options.lockWaitTimeoutMs }),
+    ...(options.lockRetryMs === undefined
+      ? {}
+      : { lockRetryMs: options.lockRetryMs }),
   });
 
   const run = () =>
@@ -227,6 +237,7 @@ function harness(options: {
       agentId,
       threadId: THREAD_ID,
       instruction: INSTRUCTION,
+      waitForThreadLock: options.waitForThreadLock ?? false,
     });
 
   return { run, agent, calls, order };
@@ -713,6 +724,163 @@ describe("cleanup only runs for a lock that was actually taken", () => {
     // And no heartbeat was ever scheduled: still nothing, even after it would have ticked.
     await wait(20);
     expect(calls.renewed).toEqual([]);
+  });
+});
+
+describe("allow_overlap waits safely for the canonical thread", () => {
+  test("retries only 409 lock conflicts, then reads fresh history after the lock is acquired", async () => {
+    let attempts = 0;
+    const { run, calls, order } = harness({
+      waitForThreadLock: true,
+      lockRetryMs: 1,
+      lockWaitTimeoutMs: 50,
+      acquireFails: () => {
+        attempts += 1;
+        if (attempts >= 3) return undefined;
+        const error = new Error("thread busy");
+        (error as Error & { status: number }).status = 409;
+        return error;
+      },
+    });
+
+    await run();
+
+    expect(attempts).toBe(3);
+    expect(calls.acquired).toHaveLength(1);
+    expect(order.lastIndexOf("acquire")).toBeLessThan(
+      order.indexOf("getThreadMessages"),
+    );
+    expect(calls.cleaned).toHaveLength(1);
+  });
+
+  test("does not retry an unavailable lock service", async () => {
+    let attempts = 0;
+    const { run } = harness({
+      waitForThreadLock: true,
+      lockRetryMs: 1,
+      lockWaitTimeoutMs: 50,
+      acquireFails: () => {
+        attempts += 1;
+        const error = new Error("lock service unavailable");
+        (error as Error & { status: number }).status = 503;
+        return error;
+      },
+    });
+
+    await expect(run()).rejects.toThrow("lock service unavailable");
+    expect(attempts).toBe(1);
+  });
+
+  test("bounds a busy-channel wait and never reads history or cleans up an unowned lock", async () => {
+    const { run, calls, order } = harness({
+      waitForThreadLock: true,
+      lockRetryMs: 1,
+      lockWaitTimeoutMs: 4,
+      acquireFails: () => {
+        const conflict = new Error("thread busy");
+        (conflict as Error & { status: number }).status = 409;
+        return conflict;
+      },
+    });
+
+    await expect(run()).rejects.toThrow("waited 0s");
+    expect(order).not.toContain("getThreadMessages");
+    expect(calls.cleaned).toEqual([]);
+  });
+
+  test("two concurrent invocations share the platform lock and never collide in the local runner", async () => {
+    const order: string[] = [];
+    let heldBy: string | null = null;
+    let activeLocalRuns = 0;
+    let maximumLocalRuns = 0;
+    let answerNumber = 0;
+
+    const intelligence = {
+      getOrCreateThread: async () => ({ created: false }),
+      getThreadMessages: async () => {
+        order.push(`history:${heldBy}`);
+        return { messages: [] };
+      },
+      ɵacquireThreadLock: async (params: { runId: string }) => {
+        if (heldBy !== null) {
+          const conflict = new Error("thread busy");
+          (conflict as Error & { status: number }).status = 409;
+          throw conflict;
+        }
+        heldBy = params.runId;
+        order.push(`acquire:${params.runId}`);
+        return {};
+      },
+      ɵrenewThreadLock: async () => ({}),
+      ɵcleanupThreadLock: async (params: { runId: string }) => {
+        expect(heldBy).toBe(params.runId);
+        order.push(`cleanup:${params.runId}`);
+        heldBy = null;
+      },
+    };
+
+    const runner = {
+      run: (request: { agent: FakeAgent }) => {
+        activeLocalRuns += 1;
+        maximumLocalRuns = Math.max(maximumLocalRuns, activeLocalRuns);
+        if (activeLocalRuns > 1) {
+          throw new Error("local runner fast-path collision");
+        }
+        return {
+          subscribe(observer: Observer) {
+            setTimeout(() => {
+              answerNumber += 1;
+              request.agent.messages = [
+                ...request.agent.messages,
+                {
+                  id: `assistant_parallel_${answerNumber}`,
+                  role: "assistant",
+                  content: `answer ${answerNumber}`,
+                },
+              ] as typeof request.agent.messages;
+              activeLocalRuns -= 1;
+              observer.complete();
+            }, 10);
+            return { unsubscribe: () => undefined };
+          },
+        };
+      },
+      stop: async () => true,
+    };
+
+    const runTurn = createTurnRunner({
+      // biome-ignore lint/suspicious/noExplicitAny: focused structural concurrency fake.
+      intelligence: intelligence as any,
+      // biome-ignore lint/suspicious/noExplicitAny: focused structural concurrency fake.
+      runner: runner as any,
+      buildAgentFor: async () => new FakeAgent({ agentId: AGENT_ID }),
+      heartbeatMs: 1_000,
+      lockRetryMs: 1,
+      lockWaitTimeoutMs: 200,
+      turnTimeoutMs: 200,
+    });
+    const input = {
+      ownerUserId: OWNER,
+      agentId: AGENT_ID,
+      threadId: THREAD_ID,
+      instruction: INSTRUCTION,
+      waitForThreadLock: true,
+    };
+
+    const replies = await Promise.all([runTurn(input), runTurn(input)]);
+
+    expect(replies.map((reply) => reply.replyText).sort()).toEqual([
+      "answer 1",
+      "answer 2",
+    ]);
+    expect(maximumLocalRuns).toBe(1);
+    const acquiredRunIds = order
+      .filter((event) => event.startsWith("acquire:"))
+      .map((event) => event.slice("acquire:".length));
+    expect(acquiredRunIds).toHaveLength(2);
+    expect(order.indexOf(`cleanup:${acquiredRunIds[0]}`)).toBeLessThan(
+      order.indexOf(`history:${acquiredRunIds[1]}`),
+    );
   });
 });
 

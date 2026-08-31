@@ -283,6 +283,7 @@ function parsePatch(input: unknown): ParsedPatch {
     "instruction",
     "cron",
     "timezone",
+    "agentId",
     "channelId",
     "enabled",
     "overlapPolicy",
@@ -296,6 +297,7 @@ function parsePatch(input: unknown): ParsedPatch {
     "instruction",
     "cron",
     "timezone",
+    "agentId",
     "channelId",
   ] as const) {
     if (body[field] === undefined) continue;
@@ -319,7 +321,7 @@ function parsePatch(input: unknown): ParsedPatch {
     ) {
       return {
         ok: false,
-        error: "overlapPolicy must be skip or queue_one.",
+        error: "overlapPolicy must be skip, queue_one, or allow_overlap.",
       };
     }
     patch.overlapPolicy = body.overlapPolicy as SupportedRoutineOverlapPolicy;

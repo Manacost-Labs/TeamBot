@@ -72,13 +72,14 @@ export const MAX_ENABLED_ROUTINES = 20;
 export const MAX_INSTRUCTION_CODE_POINTS = 2000;
 /** Capped like audit payloads, because a failure is not a promise about length. */
 export const MAX_RUN_ERROR = 400;
-export const ROUTINE_OVERLAP_POLICIES = ["skip", "queue_one"] as const;
+export const ROUTINE_OVERLAP_POLICIES = [
+  "skip",
+  "queue_one",
+  "allow_overlap",
+] as const;
 export type SupportedRoutineOverlapPolicy =
   (typeof ROUTINE_OVERLAP_POLICIES)[number];
-/** `allow_overlap` can exist in storage for forward compatibility, but is not an accepted input. */
-export type RoutineOverlapPolicy =
-  | SupportedRoutineOverlapPolicy
-  | "allow_overlap";
+export type RoutineOverlapPolicy = SupportedRoutineOverlapPolicy;
 /**
  * How far back the failure count looks.
  *
@@ -96,9 +97,6 @@ const NO_CHANNEL_AT_ALL =
 const INSTRUCTION_EMPTY = "A routine needs an instruction to carry out.";
 const INSTRUCTION_TOO_LONG = `An instruction can be at most ${MAX_INSTRUCTION_CODE_POINTS} characters.`;
 const TOO_MANY_ENABLED = `You already have ${MAX_ENABLED_ROUTINES} routines switched on. Switch one off before adding another.`;
-const ALLOW_OVERLAP_UNAVAILABLE =
-  "Allow overlap is unavailable while this routine writes to one exclusively locked conversation. Choose skip or queue one.";
-
 /** How many names an ambiguity refusal reads out before it gives up and says "and others". */
 const MAX_NAMED_CHANNELS = 5;
 
@@ -184,9 +182,11 @@ export type RoutineRunContext = {
   agentId: string;
   channelId: string;
   instruction: string;
+  overlapPolicy: RoutineOverlapPolicy;
 };
 
 export type RoutinePatch = Partial<{
+  agentId: string;
   instruction: string;
   cron: string;
   timezone: string;
@@ -335,9 +335,6 @@ function toRoutine(row: RoutineRow): Routine {
 function validOverlapPolicy(
   policy: RoutineOverlapPolicy,
 ): SupportedRoutineOverlapPolicy {
-  if (policy === "allow_overlap") {
-    throw new RoutineRefusedError(ALLOW_OVERLAP_UNAVAILABLE);
-  }
   return policy;
 }
 
@@ -436,11 +433,12 @@ function nameThem(candidates: { id: string; name: string }[]): string {
 
 export function createRoutineStore(database: Database): RoutineStore {
   /**
-   * Open exactly one run per routine at a time.
+   * Apply one routine's overlap policy while opening an idempotent run row.
    *
    * The advisory lock is shared by scheduled and manual openings. It closes the race where a click
-   * and a worker both observe no open row and start two turns on the same channel thread. Scheduled
-   * overlap is a finished `skipped` ledger row; an explicit click gets a 409-shaped error instead.
+   * and a worker both decide against the same active set. `allow_overlap` admits every occurrence;
+   * its turns still take the canonical channel's cross-replica single-writer lock in `run-turn.ts`,
+   * so no two writers can corrupt one transcript.
    */
   async function openRun(
     handle: Transaction,
@@ -500,6 +498,7 @@ export function createRoutineStore(database: Database): RoutineStore {
       .limit(1);
     if (
       overlap === "refuse" &&
+      routine.overlapPolicy !== "allow_overlap" &&
       (open.length > 0 || routine.queuedFiringKey !== null)
     ) {
       throw new RoutineOverlapError();
@@ -538,7 +537,11 @@ export function createRoutineStore(database: Database): RoutineStore {
           ),
         );
       return { runId: row.id };
-    } else if (open.length > 0 && firing) {
+    } else if (
+      open.length > 0 &&
+      firing &&
+      routine.overlapPolicy !== "allow_overlap"
+    ) {
       if (routine.overlapPolicy === "queue_one") {
         if (routine.queuedFiringKey === null) {
           await handle
@@ -554,8 +557,6 @@ export function createRoutineStore(database: Database): RoutineStore {
         // One reservation already exists. This occurrence is intentionally collapsed, with a
         // finished ledger row so the owner can see that it did not become another deferred run.
       }
-      // `allow_overlap` is refused at every supported write boundary. A hand-edited legacy row
-      // fails closed here as skip rather than weakening the channel's exclusive thread lock.
     } else if (
       firing &&
       routine.overlapPolicy === "queue_one" &&
@@ -742,11 +743,13 @@ export function createRoutineStore(database: Database): RoutineStore {
     if (patch.instruction !== undefined) {
       values.instruction = validInstruction(patch.instruction);
     }
-    if (patch.channelId !== undefined) {
+    if (patch.agentId !== undefined || patch.channelId !== undefined) {
+      const agentId = patch.agentId ?? existing.agentId;
+      values.agentId = agentId;
       values.channelId = await resolveChannel(
         ownerUserId,
-        existing.agentId,
-        patch.channelId,
+        agentId,
+        patch.channelId ?? existing.channelId,
       );
     }
     if (patch.enabled !== undefined) values.enabled = patch.enabled;
@@ -1143,6 +1146,7 @@ export function createRoutineStore(database: Database): RoutineStore {
           agentId: routines.agentId,
           channelId: routines.channelId,
           instruction: routines.instruction,
+          overlapPolicy: routines.overlapPolicy,
         })
         .from(routineRuns)
         .innerJoin(routines, eq(routines.id, routineRuns.routineId))

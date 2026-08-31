@@ -688,10 +688,10 @@ describe("changing a routine", () => {
     expect(summary?.schedule).toBe("Every day at 09:00");
   });
 
-  test("re-resolves the channel when a new one is named", async () => {
+  test("atomically re-resolves the employee and target channel selected in the editor", async () => {
     const { owner, agentId, channel } = await setUp();
     const secondAgentId = await createAgent(owner, "Second Bot");
-    const other = await createChannel(owner, [agentId, secondAgentId]);
+    const other = await createChannel(owner, [secondAgentId]);
     const routine = await store.create({
       ownerUserId: owner.id,
       agentId,
@@ -701,9 +701,15 @@ describe("changing a routine", () => {
     });
 
     const moved = await store.update(owner.id, routine.id, {
+      agentId: secondAgentId,
       channelId: other.id,
     });
+    expect(moved.agentId).toBe(secondAgentId);
     expect(moved.channelId).toBe(other.id);
+
+    await expect(
+      store.update(owner.id, routine.id, { agentId }),
+    ).rejects.toBeInstanceOf(RoutineRefusedError);
 
     const stranger = await createUser();
     const strangerAgentId = await createAgent(stranger, "Their Bot");
@@ -1099,21 +1105,43 @@ describe("overlap policies", () => {
     expect(duplicate).toEqual({ runId: promoted.runId, duplicate: true });
   });
 
-  test("refuses allow_overlap rather than weakening the conversation thread lock", async () => {
+  test("allow_overlap admits every scheduled and manual occurrence as its own run", async () => {
     const { owner, agentId, channel, routine } = await makeRoutine();
-    await expect(
-      store.update(owner.id, routine.id, { overlapPolicy: "allow_overlap" }),
-    ).rejects.toThrow(/exclusively locked conversation/);
-    await expect(
-      store.create({
-        ownerUserId: owner.id,
-        agentId,
-        channelId: channel.id,
-        instruction: "Run concurrently.",
-        cron: DAILY,
-        overlapPolicy: "allow_overlap",
-      }),
-    ).rejects.toBeInstanceOf(RoutineRefusedError);
+    const updated = await store.update(owner.id, routine.id, {
+      overlapPolicy: "allow_overlap",
+    });
+    expect(updated.overlapPolicy).toBe("allow_overlap");
+
+    const first = await store.insertRun(routine.id, {
+      key: `${routine.id}:2026-08-31T09:00Z`,
+      scheduledFor: new Date("2026-08-31T09:00:00.000Z"),
+    });
+    const second = await store.insertRun(routine.id, {
+      key: `${routine.id}:2026-08-31T09:15Z`,
+      scheduledFor: new Date("2026-08-31T09:15:00.000Z"),
+    });
+    const manual = await store.insertManualRun?.(owner.id, routine.id);
+
+    expect(first.skipped).toBeUndefined();
+    expect(second.skipped).toBeUndefined();
+    expect(manual?.runId).toBeString();
+    const open = await database
+      .select({ id: routineRuns.id })
+      .from(routineRuns)
+      .where(eq(routineRuns.routineId, routine.id));
+    expect(open.map((row) => row.id).sort()).toEqual(
+      [first.runId, second.runId, manual?.runId].sort(),
+    );
+
+    const created = await store.create({
+      ownerUserId: owner.id,
+      agentId,
+      channelId: channel.id,
+      instruction: "Run concurrently.",
+      cron: DAILY,
+      overlapPolicy: "allow_overlap",
+    });
+    expect(created.overlapPolicy).toBe("allow_overlap");
   });
 
   test("pausing cancels a deferred occurrence instead of resurrecting it on resume", async () => {
@@ -1337,6 +1365,7 @@ describe("the runner's read of one firing", () => {
       agentId,
       channelId: channel.id,
       instruction: "Post the standup summary.",
+      overlapPolicy: "skip",
     });
   });
 

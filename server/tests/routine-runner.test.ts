@@ -34,6 +34,7 @@ const CONTEXT: RoutineRunContext = {
   agentId: "bot_helper",
   channelId: "channel_1",
   instruction: "Post the standup summary.",
+  overlapPolicy: "skip",
 };
 
 const CHANNEL: AgentChannel = {
@@ -153,6 +154,7 @@ describe("createRoutineRunner", () => {
         agentId: CONTEXT.agentId,
         threadId: CHANNEL.threadId,
         instruction: CONTEXT.instruction,
+        waitForThreadLock: false,
       },
     ]);
     // The count, not merely that one happened: a second record would ring a second unread dot.
@@ -167,6 +169,17 @@ describe("createRoutineRunner", () => {
       { runId: RUN_ID, status: "succeeded", error: undefined },
     ]);
     expect(recorded.enabled).toEqual([]);
+  });
+
+  test("lets allow_overlap firings wait for the channel's single-writer thread lock", async () => {
+    const { runner, recorded } = harness({
+      context: { ...CONTEXT, overlapPolicy: "allow_overlap" },
+    });
+
+    await runner.run(RUN_ID);
+
+    expect(recorded.turns[0]).toMatchObject({ waitForThreadLock: true });
+    expect(recorded.finished[0]?.status).toBe("succeeded");
   });
 
   test("records a thrown turn as a failure carrying its message", async () => {

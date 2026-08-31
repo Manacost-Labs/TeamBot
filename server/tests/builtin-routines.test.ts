@@ -505,16 +505,20 @@ describe("beyond-spec validation refusals", () => {
     expect(calls).toHaveLength(0);
   });
 
-  test("allow_overlap is not advertised as an accepted single-thread policy", async () => {
+  test("allow_overlap is accepted by the conversational update tool", async () => {
     const calls = recordingTools();
     const result = await callTool(CONNECTION, "update_routine", {
       id: "routine_1",
       overlapPolicy: "allow_overlap",
     });
 
-    expect(result.isError).toBe(true);
-    expect(result.text).toBe("Overlap policy must be skip or queue_one.");
-    expect(calls).toHaveLength(0);
+    expect(result.isError).toBe(false);
+    expect(calls).toContainEqual({
+      method: "update",
+      ownerUserId: CONNECTION.actorId,
+      id: "routine_1",
+      patch: { overlapPolicy: "allow_overlap" },
+    });
   });
 });
 
