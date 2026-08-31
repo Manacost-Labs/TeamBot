@@ -89,6 +89,26 @@ describe("Codex dynamic tool names", () => {
     ).toBeNull();
   });
 
+  it("does not mark an analyst update with promised follow-up work as complete", () => {
+    expect(
+      researchFinalisationIssue(
+        [
+          "Первый статистический срез доступен. Теперь проверяю конкретные списки карт и парные матчапы.",
+          "Параллельно проверяю актуальные списки и независимые практические разборы.",
+          "Осталось оформить доказательства, контраргументы и финальную проверку.",
+        ].join("\n\n"),
+      ),
+    ).toContain("progress");
+  });
+
+  it("allows a bounded final result that describes completed verification", () => {
+    expect(
+      researchFinalisationIssue(
+        "## Результат\nПроверка завершена: Pure Paladin имеет 54,6% побед.\n\n## Источники\n- API snapshot",
+      ),
+    ).toBeNull();
+  });
+
   it("does not accept an HSReplay/HSGuru access failure without the first-party API", () => {
     expect(
       researchFinalisationIssue(
@@ -161,6 +181,21 @@ describe("Codex process timing", () => {
       "codex_turn_started",
     ]);
     expect(JSON.stringify(records)).not.toContain("Do not log me");
+  });
+
+  it("keeps a research run open for a finalisation turn after an incomplete update", async () => {
+    const turnInputs: string[] = [];
+    const input = {
+      ...processInput(),
+      agentId: process.env.RESEARCH_AGENT_ID?.trim() || "research-analyst",
+    } as RunAgentInput;
+
+    await runCodex(input, emptyCallbacks, {
+      spawn: () => researchFinalisationProcess(turnInputs),
+    });
+
+    expect(turnInputs).toHaveLength(2);
+    expect(turnInputs[1]).toContain("Finalise the research now");
   });
 
   it("rejects an initialize request when the child process fails before spawn", async () => {
@@ -258,6 +293,62 @@ function fakeCodexProcess(
           })}\n`,
         );
       }
+    });
+  });
+  return child as unknown as ChildProcessWithoutNullStreams;
+}
+
+function researchFinalisationProcess(turnInputs: string[]) {
+  const child = new EventEmitter() as EventEmitter & {
+    stdin: PassThrough;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    killed: boolean;
+    kill(signal?: NodeJS.Signals): boolean;
+  };
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.killed = false;
+  child.kill = (signal = "SIGTERM") => {
+    child.killed = true;
+    queueMicrotask(() => child.emit("exit", 0, signal));
+    return true;
+  };
+  queueMicrotask(() => child.emit("spawn"));
+  child.stdin.on("data", (chunk) => {
+    const request = JSON.parse(String(chunk)) as {
+      id?: number;
+      method?: string;
+      params?: { input?: Array<{ text?: string }> };
+    };
+    if (request.id === undefined) return;
+    const result =
+      request.method === "thread/start"
+        ? { thread: { id: "codex-research-thread" } }
+        : {};
+    queueMicrotask(() => {
+      child.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
+      if (request.method !== "turn/start") return;
+      turnInputs.push(request.params?.input?.[0]?.text ?? "");
+      const finalising = turnInputs.length > 1;
+      child.stdout.write(
+        `${JSON.stringify({
+          method: "item/agentMessage/delta",
+          params: {
+            itemId: `answer-${turnInputs.length}`,
+            delta: finalising
+              ? "## Результат\nПроверка завершена.\n\n## Источники\n- API snapshot"
+              : "Теперь проверяю списки. Осталось оформить доказательства и финальную проверку.",
+          },
+        })}\n`,
+      );
+      child.stdout.write(
+        `${JSON.stringify({
+          method: "turn/completed",
+          params: { turn: { status: "completed" } },
+        })}\n`,
+      );
     });
   });
   return child as unknown as ChildProcessWithoutNullStreams;

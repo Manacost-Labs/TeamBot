@@ -69,6 +69,14 @@ const RESEARCH_PROGRESS_MARKERS = [
   "final pass",
 ];
 
+const RESEARCH_PENDING_WORK_PATTERNS = [
+  /(?:теперь|сейчас|далее|дальше|параллельно)\s+(?:я\s+)?(?:проверя|ищу|собира|сопоставля|анализиру|изуча|оформля|перехож)/,
+  /(?:осталось|оста[её]тся|предстоит)\s+(?:ещ[её]\s+)?(?:проверить|оформить|собрать|сопоставить|подготовить|провести|добавить|завершить)/,
+  /(?:продолжаю|продолжу)\s+(?:провер|исслед|собира|анализ|поиск|оформ)/,
+  /(?:now|still|next|in parallel)\s+(?:i\s+(?:am|'m|will)\s+)?(?:check|research|collect|compare|analy[sz]|review|prepare|finali[sz])(?:e|ing)?/,
+  /(?:i still need to|what remains is to|work remains to)\s+(?:check|research|collect|compare|analy[sz]e|review|prepare|finali[sz]e)/,
+];
+
 const RESEARCH_RESULT_MARKERS = [
   "## результат",
   "## findings",
@@ -106,7 +114,13 @@ export function researchFinalisationIssue(text: string): string | null {
   const hasResultMarker = RESEARCH_RESULT_MARKERS.some((marker) =>
     normalized.includes(marker),
   );
-  if (progressMarkers.length >= 2 && !hasResultMarker) {
+  const explicitlyHasPendingWork = RESEARCH_PENDING_WORK_PATTERNS.some(
+    (pattern) => pattern.test(normalized),
+  );
+  if (
+    (progressMarkers.length >= 2 || explicitlyHasPendingWork) &&
+    !hasResultMarker
+  ) {
     return "The previous response only described research progress and did not deliver a result.";
   }
 
