@@ -302,6 +302,15 @@ counts и A→B→A защищают архитектуру, а wall-clock за�
 сборки. Если цель не достигнута, релизный отчёт должен назвать фактический p95 и bottleneck, а не
 скрывать его увеличением timeout.
 
+Канонический локальный browser gate запускается командой `bun scripts/runtime-performance.ts`. Он
+собирает minified production fixture с настоящим transcript, выполняет в Chromium по 30 warm/cold,
+first-delta и 50/200/500 rich-history измерений и падает при превышении p95. Последняя зафиксированная
+методика и результаты находятся в [`runtime-performance-evidence.ru.md`](runtime-performance-evidence.ru.md).
+Машиночитаемый content-free снимок хранится в
+[`runtime-performance-evidence.json`](runtime-performance-evidence.json).
+Этот gate исключает auth/provider/network latency и поэтому дополняет, а не заменяет production
+telemetry ниже.
+
 Браузер отправляет эти DOM-границы автоматически небольшими batches на
 `POST /api/telemetry/workspace`. Тело содержит только operation, allowlisted phase, случайный UUID
 trace и монотонный `elapsedMs`; channel/user/message IDs и содержимое переписки не отправляются.

@@ -1,0 +1,106 @@
+{
+  "schema": "teambot.runtime-performance.v1",
+  "generatedAt": "2026-08-31T14:58:56.891Z",
+  "revision": {
+    "commit": "c8e0c8426b1fb5d48d986f26cdc7184c3b695d3a",
+    "worktreeDirty": true
+  },
+  "method": {
+    "build": "Vite production mode, minified",
+    "browser": "chromium 151.0.7922.173",
+    "chromiumExecutable": "/usr/bin/chromium",
+    "externalRequests": 0,
+    "fixtureIndexBytes": 422,
+    "iterationsPerScenario": 30,
+    "warmupsPerScenario": 4,
+    "paintBoundary": "React commit followed by two requestAnimationFrame callbacks",
+    "scope": "Local production UI bundle and real Chromium; excludes authentication, provider and network latency",
+    "viewport": "1440x900 @ 1x"
+  },
+  "machine": {
+    "cpu": "AMD Ryzen 7 9700X 8-Core Processor",
+    "logicalCpuCount": 16,
+    "totalMemoryBytes": 67012898816
+  },
+  "results": [
+    {
+      "id": "warm_switch",
+      "label": "warm cached channel click → useful transcript paint",
+      "samples": 30,
+      "targetP95Ms": 100,
+      "p50Ms": 30,
+      "p95Ms": 33.9,
+      "p99Ms": 36.3,
+      "maxMs": 36.3,
+      "mountedRowsMin": 60,
+      "mountedRowsMax": 60,
+      "passed": true
+    },
+    {
+      "id": "cold_switch",
+      "label": "cold channel click → useful transcript paint",
+      "samples": 30,
+      "targetP95Ms": 300,
+      "p50Ms": 30.1,
+      "p95Ms": 35.7,
+      "p99Ms": 36.3,
+      "maxMs": 36.3,
+      "mountedRowsMin": 60,
+      "mountedRowsMax": 60,
+      "passed": true
+    },
+    {
+      "id": "first_delta",
+      "label": "accepted first text delta → visible transcript paint",
+      "samples": 30,
+      "targetP95Ms": 500,
+      "p50Ms": 30.2,
+      "p95Ms": 30.6,
+      "p99Ms": 33.1,
+      "maxMs": 33.1,
+      "mountedRowsMin": 42,
+      "mountedRowsMax": 42,
+      "passed": true
+    },
+    {
+      "id": "history_50",
+      "label": "50-message rich history → useful transcript paint",
+      "samples": 30,
+      "targetP95Ms": 300,
+      "p50Ms": 30,
+      "p95Ms": 30.6,
+      "p99Ms": 34.6,
+      "maxMs": 34.6,
+      "mountedRowsMin": 42,
+      "mountedRowsMax": 42,
+      "passed": true
+    },
+    {
+      "id": "history_200",
+      "label": "200-message rich history → useful transcript paint",
+      "samples": 30,
+      "targetP95Ms": 300,
+      "p50Ms": 29.9,
+      "p95Ms": 31.5,
+      "p99Ms": 32,
+      "maxMs": 32,
+      "mountedRowsMin": 60,
+      "mountedRowsMax": 60,
+      "passed": true
+    },
+    {
+      "id": "history_500",
+      "label": "500-message rich history → useful transcript paint",
+      "samples": 30,
+      "targetP95Ms": 300,
+      "p50Ms": 30,
+      "p95Ms": 33.6,
+      "p99Ms": 47,
+      "maxMs": 47,
+      "mountedRowsMin": 60,
+      "mountedRowsMax": 60,
+      "passed": true
+    }
+  ],
+  "passed": true
+}
