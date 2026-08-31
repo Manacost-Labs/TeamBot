@@ -78,7 +78,7 @@ const failure = (
 
 const INVALID_ARGUMENT = failure(
   "INVALID_ARGUMENT",
-  "Artifact arguments are invalid.",
+  "Artifact arguments are invalid. Send exactly title, filename, mimeType and one non-empty inline content string; the filename extension must match the MIME type. Do not send workspacePath or extra fields.",
 );
 const NOT_FOUND = failure(
   "NOT_FOUND",

@@ -181,6 +181,24 @@ describe("create artifact argument contract", () => {
     expect(parseCreateArtifactArgs({ ...input, content: nested })).toBeNull();
   });
 
+  test("returns a corrective content-only contract for invalid arguments", async () => {
+    const result = await dependencies().tools.createArtifact(context, {
+      title: "Report",
+      filename: "report.md",
+      mimeType: "text/markdown",
+      content: "Body",
+      workspacePath: "reports/report.md",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_ARGUMENT",
+        message: expect.stringContaining("Do not send workspacePath"),
+      },
+    });
+  });
+
   test("rejects path tricks, reserved names, extension spoofing and two sources", () => {
     const valid = {
       title: "Report",

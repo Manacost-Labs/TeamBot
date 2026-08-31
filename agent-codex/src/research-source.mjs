@@ -135,6 +135,27 @@ function requestBody() {
   throw new Error(`unsupported command: ${command}`);
 }
 
+function boundedAgentOutput(body) {
+  if (command !== "youtube-transcript") return body;
+  try {
+    const payload = JSON.parse(body);
+    const results = payload?.data?.results;
+    if (!Array.isArray(results)) return body;
+    for (const result of results) {
+      if (!result || typeof result !== "object" || Array.isArray(result)) {
+        continue;
+      }
+      if (Array.isArray(result.segments)) {
+        delete result.segments;
+        result.segments_omitted_from_agent_output = true;
+      }
+    }
+    return JSON.stringify(payload);
+  } catch {
+    return body;
+  }
+}
+
 async function main() {
   if (command === "doctor") {
     const response = await fetch(`${baseUrl}/health`);
@@ -153,7 +174,7 @@ async function main() {
     body: JSON.stringify(requestBody()),
   });
   const body = await response.text();
-  process.stdout.write(`${body}\n`);
+  process.stdout.write(`${boundedAgentOutput(body)}\n`);
   process.exitCode = response.ok ? 0 : 1;
 }
 

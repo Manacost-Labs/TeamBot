@@ -5,7 +5,7 @@ import type { VendorToolConnection } from "./transport";
 const CREATE_ARTIFACT: McpTool = Object.freeze({
   name: "create_artifact",
   description:
-    "Create a durable file card in this conversation. Supported outputs are Markdown (.md), plain text (.txt), JSON (.json), CSV (.csv), SVG (.svg), HTML (.html) and PDF (.pdf). For application/pdf only, provide Markdown content for the isolated renderer. JSON must be valid. HTML and SVG previews are shown as inert source text. Provide inline content; workspacePath is accepted only when this deployment later enables governed workspace export.",
+    "Create a durable file card in this conversation from inline content. Supported outputs are Markdown (.md), plain text (.txt), JSON (.json), CSV (.csv), SVG (.svg), HTML (.html) and PDF (.pdf). For application/pdf only, provide Markdown content for the isolated renderer. JSON must be valid. HTML and SVG previews are shown as inert source text.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -25,13 +25,8 @@ const CREATE_ARTIFACT: McpTool = Object.freeze({
         ],
       },
       content: { type: "string", minLength: 1, maxLength: 1_048_576 },
-      workspacePath: { type: "string", minLength: 1, maxLength: 4_096 },
     },
-    required: ["title", "filename", "mimeType"],
-    oneOf: [
-      { required: ["content"], not: { required: ["workspacePath"] } },
-      { required: ["workspacePath"], not: { required: ["content"] } },
-    ],
+    required: ["title", "filename", "mimeType", "content"],
   },
 });
 

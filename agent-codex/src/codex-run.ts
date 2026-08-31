@@ -141,7 +141,7 @@ const RESEARCH_FINALISATION_PROMPT =
   "Finalise the research now. The previous response was only a progress log, not a result. Do not repeat the plan. Use the available first-party `research-source stats-api` for HSReplay/HSGuru data before claiming access is unavailable. Return a Markdown answer with `## Результат`, verified findings or an explicit `Результат не получен` explanation, freshness/limitations, and `## Источники`. For a substantial run, ensure a validated `/research-runs/.../report.md` exists and include its exact path.";
 
 const YOUTUBE_ARTIFACT_FINALISATION_PROMPT =
-  "Create the required deliverable now. Call the governed `create_artifact` tool exactly once with the completed report as inline content, MIME `text/markdown`, and a safe filename ending in `.md`. Even when every transcript failed, create a Markdown status report with the original links and exact limitations. Do not print the report or tool JSON in chat.";
+  "Create the required deliverable now. Call the governed `create_artifact` tool exactly once with exactly four fields: `title`, a safe `filename` ending in `.md`, `mimeType` set to `text/markdown`, and the completed report as non-empty inline `content`. Do not send `workspacePath` or any extra field. Even when every transcript failed, create a Markdown status report with the original links and exact limitations. Do not print the report or tool JSON in chat.";
 
 export function youtubeArtifactFinalisationIssue(
   artifactCreated: boolean,

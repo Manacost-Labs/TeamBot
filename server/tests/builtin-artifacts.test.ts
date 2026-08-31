@@ -27,11 +27,13 @@ describe("built-in artifact transport", () => {
       "title",
       "filename",
       "mimeType",
+      "content",
     ]);
-    expect(tool?.inputSchema.oneOf).toHaveLength(2);
+    expect(tool?.inputSchema.oneOf).toBeUndefined();
     const properties = tool?.inputSchema.properties as
-      | { mimeType?: { enum?: unknown } }
+      | { mimeType?: { enum?: unknown }; workspacePath?: unknown }
       | undefined;
+    expect(properties?.workspacePath).toBeUndefined();
     expect(properties?.mimeType?.enum).toEqual([
       "text/markdown",
       "text/plain",

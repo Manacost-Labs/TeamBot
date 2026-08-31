@@ -1,16 +1,20 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 
-async function invokeResearchSource(arguments_: string[]) {
+async function invokeResearchSource(
+  arguments_: string[],
+  responsePayload: unknown = { ok: true, data: { results: [] } },
+) {
   let receivedBody: unknown;
   let receivedToken = "";
+  let stdout = "";
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     async fetch(request) {
       receivedToken = request.headers.get("x-source-gateway-token") ?? "";
       receivedBody = await request.json();
-      return Response.json({ ok: true, data: { results: [] } });
+      return Response.json(responsePayload);
     },
   });
 
@@ -32,6 +36,7 @@ async function invokeResearchSource(arguments_: string[]) {
       },
     );
     const exitCode = await process_.exited;
+    stdout = await new Response(process_.stdout).text();
     const stderr = await new Response(process_.stderr).text();
     expect(stderr).toBe("");
     expect(exitCode).toBe(0);
@@ -39,7 +44,7 @@ async function invokeResearchSource(arguments_: string[]) {
     server.stop(true);
   }
 
-  return { receivedBody, receivedToken };
+  return { receivedBody, receivedToken, stdout };
 }
 
 test("research-source maps bounded YouTube search onto the authenticated gateway", async () => {
@@ -74,6 +79,33 @@ test("research-source maps YouTube transcript without exposing a translation-cos
       language: "en",
     },
   });
+});
+
+test("research-source keeps bounded evidence windows but omits duplicate raw segments", async () => {
+  const result = await invokeResearchSource(
+    ["youtube-transcript", "--video", "dQw4w9WgXcQ"],
+    {
+      ok: true,
+      data: {
+        results: [
+          {
+            segment_count: 2,
+            segments: [
+              { start: 0, text: "Opening" },
+              { start: 8, text: "Advice" },
+            ],
+            evidence_windows: [{ start: 0, end: 12, text: "Opening Advice" }],
+          },
+        ],
+      },
+    },
+  );
+
+  const payload = JSON.parse(result.stdout);
+  expect(payload.data.results[0].segments).toBeUndefined();
+  expect(payload.data.results[0].segments_omitted_from_agent_output).toBe(true);
+  expect(payload.data.results[0].evidence_windows).toHaveLength(1);
+  expect(payload.data.results[0].segment_count).toBe(2);
 });
 
 test("research-source maps a named MetaStats dataset onto the gateway", async () => {
