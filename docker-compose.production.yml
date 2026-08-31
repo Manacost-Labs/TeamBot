@@ -1,3 +1,9 @@
+x-research-provider-credentials: &research-provider-credentials
+  REDDITAPIS_KEY: ${RESEARCH_REDDITAPIS_KEY:?RESEARCH_REDDITAPIS_KEY is required}
+  GETXAPI_KEY: ${RESEARCH_GETXAPI_KEY:?RESEARCH_GETXAPI_KEY is required}
+  TRANSCRIPTAPI_TOKEN: ${RESEARCH_TRANSCRIPTAPI_TOKEN:-}
+  TINYFISH_API_KEY: ${RESEARCH_TINYFISH_API_KEY:?RESEARCH_TINYFISH_API_KEY is required}
+
 services:
   attachment-storage-init:
     image: openbot-work:local
@@ -97,6 +103,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      <<: *research-provider-credentials
       NODE_ENV: production
       EMBEDDED_POSTGRES: "on"
       EMBEDDED_COMPUTER: "off"
@@ -173,6 +180,7 @@ services:
       dockerfile: agent-codex/Dockerfile
     restart: unless-stopped
     environment:
+      <<: *research-provider-credentials
       PORT: "4202"
       MANAGED_AGENT_TOKEN: ${MANAGED_AGENT_TOKEN}
       AGENT_TOOL_TOKEN: ${AGENT_TOOL_TOKEN}
@@ -224,12 +232,9 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
+      <<: *research-provider-credentials
       SOURCE_GATEWAY_TOKEN: ${AGENT_TOOL_TOKEN}
       HEARTHSTONE_STATS_API_URL: https://api.kolodahearthstone.com/v1
-      REDDITAPIS_KEY: ${RESEARCH_REDDITAPIS_KEY:?RESEARCH_REDDITAPIS_KEY is required}
-      GETXAPI_KEY: ${RESEARCH_GETXAPI_KEY:?RESEARCH_GETXAPI_KEY is required}
-      TRANSCRIPTAPI_TOKEN: ${RESEARCH_TRANSCRIPTAPI_TOKEN:-}
-      TINYFISH_API_KEY: ${RESEARCH_TINYFISH_API_KEY:?RESEARCH_TINYFISH_API_KEY is required}
     networks:
       - app
 

@@ -109,4 +109,4 @@ trap - EXIT
 unset reddit_key getx_key transcriptapi_token tinyfish_key
 
 printf 'Research provider keys saved. Values were not printed.\n'
-printf 'Ask the operator to restart research-sources and agent-codex.\n'
+printf 'Ask the operator to restart research-sources, agent-codex and openbot.\n'

@@ -267,6 +267,46 @@ test("mounts durable attachment storage only into the production API server", ()
   }
 });
 
+test("shares research provider credentials only with OpenBot and agent runtimes", () => {
+  const production = readFileSync(
+    join(import.meta.dir, "..", "docker-compose.production.yml"),
+    "utf8",
+  );
+  const parsed = parse(production, { merge: true }) as {
+    services?: Record<string, { environment?: Record<string, string> }>;
+  };
+  const expected = {
+    REDDITAPIS_KEY:
+      "$" + "{RESEARCH_REDDITAPIS_KEY:?RESEARCH_REDDITAPIS_KEY is required}",
+    GETXAPI_KEY:
+      "$" + "{RESEARCH_GETXAPI_KEY:?RESEARCH_GETXAPI_KEY is required}",
+    TRANSCRIPTAPI_TOKEN: "$" + "{RESEARCH_TRANSCRIPTAPI_TOKEN:-}",
+    TINYFISH_API_KEY:
+      "$" +
+      "{RESEARCH_TINYFISH_API_KEY:?RESEARCH_TINYFISH_API_KEY is required}",
+  };
+
+  for (const serviceName of ["openbot", "agent-codex", "research-sources"]) {
+    expect(parsed.services?.[serviceName]?.environment).toMatchObject(expected);
+  }
+
+  for (const serviceName of [
+    "attachment-storage-init",
+    "agent-computer",
+    "artifact-renderer",
+    "pdf-extractor",
+    "routine-worker",
+    "editor-analyzer",
+    "editor-gateway",
+    "edge-auth",
+  ]) {
+    const environment = parsed.services?.[serviceName]?.environment ?? {};
+    for (const variable of Object.keys(expected)) {
+      expect(environment).not.toHaveProperty(variable);
+    }
+  }
+});
+
 test("does not expose attachment storage to local Bot or computer services", () => {
   const compose = readFileSync(
     join(import.meta.dir, "..", "docker-compose.yml"),

@@ -69,7 +69,7 @@ Attachment bytes, workspace, browser profiles и research reports не вход�
 
 ### Ключи источников главного аналитика
 
-Три provider key, доступные аналитику через отдельный `research-sources` gateway, задаются
+Четыре provider key, доступные через отдельный `research-sources` gateway, задаются
 интерактивно. Значения не отображаются и атомарно записываются только в игнорируемый Git файл
 `.env` с правами `0600`:
 
@@ -87,8 +87,11 @@ TranscriptAPI token, не вводя остальные ключи повтор�
 ```
 
 Первый-party `stats-api` использует разрешённые read-only endpoints и отдельного ключа не требует.
-После ротации пересоздайте `research-sources` и `agent-codex`; не передавайте provider keys
-непосредственно в model-facing контейнер.
+Production Compose передаёт эти четыре значения под provider-native именами (`REDDITAPIS_KEY`,
+`GETXAPI_KEY`, `TRANSCRIPTAPI_TOKEN`, `TINYFISH_API_KEY`) в `openbot`, единый runtime всех
+логических агентов `agent-codex` и `research-sources`. Браузерный компьютер, редакторские gateway /
+analyzer, edge-auth, БД и render/extract сервисы их не получают. После ротации пересоздайте
+`research-sources`, `agent-codex` и `openbot`.
 
 Сначала соберите образы, затем замените сервисы и дождитесь health checks:
 
