@@ -25,6 +25,7 @@ import {
   createAttachmentUploadService,
   processAttachmentBlobLifecycle,
 } from "./attachments/lifecycle";
+import { createAttachmentModelInputPreparer } from "./attachments/model-images";
 import { createAttachmentStore } from "./attachments/store";
 import { createConversationAttachmentTools } from "./attachments/tool-facade";
 import { createConversationAttachmentToolStore } from "./attachments/tool-store";
@@ -192,15 +193,16 @@ const attachmentUploads = createAttachmentUploadService({
 });
 const attachmentLifecycle = createAttachmentLifecycleStore(database);
 const attachmentMaintenance = createAttachmentBlobMaintenance(attachmentBlobs);
+const conversationAttachmentStore = createConversationAttachmentToolStore({
+  database,
+  metadata: attachmentStore,
+  blobs: attachmentBlobs,
+});
 useConversationAttachmentTools(
-  createConversationAttachmentTools(
-    createConversationAttachmentToolStore({
-      database,
-      metadata: attachmentStore,
-      blobs: attachmentBlobs,
-    }),
-  ),
+  createConversationAttachmentTools(conversationAttachmentStore),
 );
+const prepareRunInputForActor = (actorId: string) =>
+  createAttachmentModelInputPreparer(conversationAttachmentStore, actorId);
 const channelEvents = createChannelEventHub();
 /**
  * Which components each Bot may answer with.
@@ -696,6 +698,7 @@ const buildAgentFor = async ({
     // full so a Bot this owner cannot see is still absent, but the other Bots are neither built nor
     // asked what they hold.
     agentId,
+    prepareRunInputForActor(actor.id),
   );
   const agent = agents[agentId];
   if (!agent) {
@@ -852,6 +855,8 @@ const copilotRuntime = mountCopilotRuntime(
     });
     return passing ? [passing, asking] : [asking];
   },
+  undefined,
+  prepareRunInputForActor,
 );
 
 /**

@@ -9,6 +9,9 @@ import {
 import { buildAGUITextResponse, LLMock } from "@copilotkit/aimock";
 import { AGUIMock } from "@copilotkit/aimock/agui";
 import { z } from "zod";
+import { ATTACHMENT_ACCESS_MARKER } from "../../shared/message-content";
+import { createAttachmentModelInputPreparer } from "../src/attachments/model-images";
+import type { ConversationAttachmentModelStore } from "../src/attachments/tool-store";
 import {
   buildAgents,
   type RegisteredAgent,
@@ -70,6 +73,7 @@ const skills = [
 
 const llm = new LLMock();
 const remote = new AGUIMock();
+let llmUrl = "";
 let remoteUrl = "";
 /** Every AG-UI run the mock received, as the endpoint saw it. */
 let sentToRemote: {
@@ -79,8 +83,8 @@ let sentToRemote: {
 }[] = [];
 
 beforeAll(async () => {
-  const url = await llm.start();
-  process.env.OPENAI_BASE_URL = url;
+  llmUrl = await llm.start();
+  process.env.OPENAI_BASE_URL = llmUrl;
   process.env.OPENAI_API_KEY = "test-key";
 
   remote.onPredicate(
@@ -171,12 +175,22 @@ const remoteAgent = (): RegisteredAgent => ({
  * wrapper that did not carry its own state across would fail here and nowhere else.
  */
 async function ask(agent: { clone: () => unknown }, text: string) {
+  await askMessage(agent, {
+    id: `m-${text.length}`,
+    role: "user",
+    content: text,
+  });
+}
+
+async function askMessage(agent: { clone: () => unknown }, message: unknown) {
   const running = (agent.clone as () => never)() as unknown as {
     addMessage: (message: unknown) => void;
     runAgent: () => Promise<unknown>;
+    messages: unknown[];
   };
-  running.addMessage({ id: `m-${text.length}`, role: "user", content: text });
+  running.addMessage(message);
   await running.runAgent();
+  return running;
 }
 
 /** The tool names in the last request the model actually received for a run (not for pass one). */
@@ -195,6 +209,103 @@ function toolsOfferedToModel(): string[] {
 }
 
 describe("a built-in Bot", () => {
+  test("receives authorized opaque image bytes without persisting model-only base64", async () => {
+    llm.onMessage(/.*/, { type: "text", content: "I can see the image." });
+    const id = "00000000-0000-4000-8000-000000000001";
+    const content = new Uint8Array([1, 2, 3, 4]);
+    let sourceCalls = 0;
+    const store: ConversationAttachmentModelStore = {
+      async contentSource(context, attachmentId) {
+        sourceCalls += 1;
+        expect(context).toEqual({
+          actorId: "actor-1",
+          botId: "analyst",
+          threadId: expect.any(String),
+        });
+        if (attachmentId !== id) return null;
+        return {
+          attachment: {
+            id,
+            messageId: "message-1",
+            name: "not-forwarded.png",
+            mimeType: "image/png",
+            size: content.byteLength,
+            source: "user_upload",
+            createdAt: "2026-08-30T10:00:00.000Z",
+          },
+          async openStream() {
+            return new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(content);
+                controller.close();
+              },
+            });
+          },
+        };
+      },
+    };
+    let rawModelRequest: unknown;
+    const capture = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const body = await request.arrayBuffer();
+        rawModelRequest = JSON.parse(new TextDecoder().decode(body));
+        const incoming = new URL(request.url);
+        const target = new URL(
+          `${incoming.pathname}${incoming.search}`,
+          llmUrl,
+        );
+        return fetch(target, {
+          method: request.method,
+          headers: request.headers,
+          body,
+        });
+      },
+    });
+    const previousBaseUrl = process.env.OPENAI_BASE_URL;
+    process.env.OPENAI_BASE_URL = new URL(
+      new URL(llmUrl).pathname,
+      capture.url,
+    ).href;
+    try {
+      const agents = await buildAgents(
+        [builtIn],
+        model,
+        "test-key",
+        undefined,
+        async () => [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        createAttachmentModelInputPreparer(store, "actor-1"),
+      );
+
+      const running = await askMessage(agents.analyst as never, {
+        id: "image-message",
+        role: "user",
+        content: [
+          { type: "text", text: "What is shown?" },
+          { type: "binary", id, mimeType: "image/png" },
+        ],
+      });
+
+      const request = JSON.stringify(rawModelRequest);
+      const encoded = Buffer.from(content).toString("base64");
+      expect(sourceCalls).toBe(1);
+      expect(request).toContain(encoded);
+      expect(request).toContain("image/png");
+      expect(request).not.toContain("not-forwarded.png");
+      expect(JSON.stringify(running.messages)).not.toContain(encoded);
+    } finally {
+      process.env.OPENAI_BASE_URL = previousBaseUrl;
+      capture.stop(true);
+    }
+  });
+
   test("is offered the chosen skill's tools and the tools no skill claims", async () => {
     answerWith(["drive-audit"]);
     const agents = await buildAgents(
@@ -346,6 +457,49 @@ describe("a built-in Bot", () => {
 });
 
 describe("a remote Bot", () => {
+  test("receives only safe text and opaque ids, never client binary data or URLs", async () => {
+    const id = "00000000-0000-4000-8000-000000000001";
+    const agents = await buildAgents(
+      [remoteAgent()],
+      model,
+      null,
+      undefined,
+      async () => [],
+    );
+
+    await askMessage(agents.risk as never, {
+      id: "unsafe-binary-message",
+      role: "user",
+      content: [
+        { type: "text", text: "Review this safely." },
+        {
+          type: "binary",
+          id,
+          mimeType: "image/png",
+          data: "PRIVATE_CLIENT_BASE64",
+          url: "https://private.invalid/legacy-image",
+          filename: "private-client-name.png",
+        },
+        {
+          type: "image",
+          source: {
+            type: "url",
+            value: "https://private.invalid/modern-image",
+            mimeType: "image/png",
+          },
+        },
+      ],
+    });
+
+    const messages = JSON.stringify(sentToRemote.at(-1)?.messages);
+    expect(messages).toContain("Review this safely.");
+    expect(messages).toContain(ATTACHMENT_ACCESS_MARKER);
+    expect(messages).toContain(id);
+    expect(messages).not.toContain("PRIVATE_CLIENT_BASE64");
+    expect(messages).not.toContain("private.invalid");
+    expect(messages).not.toContain("private-client-name.png");
+  });
+
   test("is sent the narrowed tools in its run body", async () => {
     answerWith(["slack-digest"]);
     const agents = await buildAgents(

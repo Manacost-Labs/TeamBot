@@ -169,6 +169,25 @@ describe("conversation attachment tool authorization", () => {
     await reader?.cancel();
   });
 
+  test("offers the same authorized content stream to the internal model boundary", async () => {
+    const { blobs, database, metadata } = fakeDependencies();
+    database.results.push([{ channelId: "channel-a" }]);
+    const store = createConversationAttachmentToolStore({
+      blobs,
+      database: database as unknown as Database,
+      metadata,
+    });
+
+    const source = await store.contentSource(context, attachment.id);
+
+    expect(Object.keys(source ?? {}).toSorted()).toEqual([
+      "attachment",
+      "openStream",
+    ]);
+    expect(JSON.stringify(source)).not.toContain(attachment.storageKey);
+    expect(source?.attachment.id).toBe(attachment.id);
+  });
+
   test("cancels a blob that opens after its read signal was aborted", async () => {
     const { database, metadata } = fakeDependencies();
     database.results.push([{ channelId: "channel-a" }]);

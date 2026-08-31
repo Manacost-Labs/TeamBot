@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   ATTACHMENT_ACCESS_MARKER,
+  attachmentIdsFromMessageContent,
   projectMessageContent,
 } from "./message-content";
 
@@ -78,6 +79,23 @@ describe("safe AG-UI message content projection", () => {
     expect(projectMessageContent(content, "system")).toBe("Trusted text only.");
     expect(projectMessageContent(content, "developer")).toBe(
       "Trusted text only.",
+    );
+  });
+
+  test("extracts only bounded unique opaque ids and ignores modern image URLs", () => {
+    const content = [
+      { type: "binary", id: attachmentId(1) },
+      { type: "binary", id: attachmentId(1), data: "duplicate" },
+      {
+        type: "image",
+        source: { type: "url", value: "https://private.invalid/image.png" },
+      },
+      { type: "binary", id: "not-a-uuid" },
+    ];
+
+    expect(attachmentIdsFromMessageContent(content)).toEqual([attachmentId(1)]);
+    expect(projectMessageContent(content, "user")).not.toContain(
+      "private.invalid",
     );
   });
 });

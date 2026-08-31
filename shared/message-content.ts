@@ -16,6 +16,29 @@ type MessageRole =
 const ATTACHMENT_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Extract only the opaque attachment references that may cross into a governed server boundary. */
+export function attachmentIdsFromMessageContent(content: unknown): string[] {
+  if (!Array.isArray(content)) return [];
+  const attachmentIds: string[] = [];
+  const seen = new Set<string>();
+  for (const part of content) {
+    if (attachmentIds.length >= MAX_MESSAGE_ATTACHMENT_IDS) break;
+    if (typeof part !== "object" || part === null) continue;
+    const candidate = part as { type?: unknown; id?: unknown };
+    if (
+      candidate.type !== "binary" ||
+      typeof candidate.id !== "string" ||
+      !ATTACHMENT_ID.test(candidate.id) ||
+      seen.has(candidate.id)
+    ) {
+      continue;
+    }
+    seen.add(candidate.id);
+    attachmentIds.push(candidate.id);
+  }
+  return attachmentIds;
+}
+
 /**
  * Reduce AG-UI content to the only prompt-safe fields the runtimes need.
  *
@@ -41,23 +64,7 @@ export function projectMessageContent(
 
   if (role !== "user") return text;
 
-  const attachmentIds: string[] = [];
-  const seen = new Set<string>();
-  for (const part of content) {
-    if (attachmentIds.length >= MAX_MESSAGE_ATTACHMENT_IDS) break;
-    if (typeof part !== "object" || part === null) continue;
-    const candidate = part as { type?: unknown; id?: unknown };
-    if (
-      candidate.type !== "binary" ||
-      typeof candidate.id !== "string" ||
-      !ATTACHMENT_ID.test(candidate.id) ||
-      seen.has(candidate.id)
-    ) {
-      continue;
-    }
-    seen.add(candidate.id);
-    attachmentIds.push(candidate.id);
-  }
+  const attachmentIds = attachmentIdsFromMessageContent(content);
 
   if (attachmentIds.length === 0) return text;
   const marker = `[${ATTACHMENT_ACCESS_MARKER}: ${attachmentIds.join(", ")}]`;

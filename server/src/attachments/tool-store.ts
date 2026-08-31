@@ -49,6 +49,18 @@ export type ConversationAttachmentTextSource = Readonly<{
   openStream(signal?: AbortSignal): Promise<ReadableStream<Uint8Array>>;
 }>;
 
+export type ConversationAttachmentContentSource =
+  ConversationAttachmentTextSource;
+
+/** Model-only byte boundary; it exposes no path, URL, hash, owner or storage key. */
+export type ConversationAttachmentModelStore = Readonly<{
+  contentSource(
+    context: TrustedAttachmentToolContext,
+    attachmentId: string,
+    signal?: AbortSignal,
+  ): Promise<ConversationAttachmentContentSource | null>;
+}>;
+
 /**
  * Internal authorization seam used by the public tool facade. It deliberately
  * exposes neither a channel id nor an attachment storage key.
@@ -68,6 +80,9 @@ export type ConversationAttachmentToolStore = Readonly<{
     signal?: AbortSignal,
   ): Promise<ConversationAttachmentTextSource | null>;
 }>;
+
+export type ConversationAttachmentStore = ConversationAttachmentToolStore &
+  ConversationAttachmentModelStore;
 
 type ToolStoreOptions = {
   database: Database;
@@ -126,7 +141,7 @@ export function createConversationAttachmentToolStore({
   database,
   metadata,
   blobs,
-}: ToolStoreOptions): ConversationAttachmentToolStore {
+}: ToolStoreOptions): ConversationAttachmentStore {
   async function authorizedChannel(
     context: TrustedAttachmentToolContext,
     signal?: AbortSignal,
@@ -166,6 +181,27 @@ export function createConversationAttachmentToolStore({
     return record;
   }
 
+  const contentSource = async (
+    context: TrustedAttachmentToolContext,
+    attachmentId: string,
+    signal?: AbortSignal,
+  ): Promise<ConversationAttachmentContentSource | null> => {
+    const record = await authorizedAttachment(context, attachmentId, signal);
+    if (!record) return null;
+    return Object.freeze({
+      attachment: safeMetadata(record),
+      async openStream(readSignal?: AbortSignal) {
+        readSignal?.throwIfAborted();
+        const stream = await blobs.open(record.storageKey);
+        if (readSignal?.aborted) {
+          await stream.cancel(readSignal.reason).catch(() => undefined);
+          throw readSignal.reason;
+        }
+        return stream;
+      },
+    });
+  };
+
   return Object.freeze({
     async list(context, query = {}) {
       const channelId = await authorizedChannel(context);
@@ -186,20 +222,9 @@ export function createConversationAttachmentToolStore({
     },
 
     async textSource(context, attachmentId, signal) {
-      const record = await authorizedAttachment(context, attachmentId, signal);
-      if (!record) return null;
-      return Object.freeze({
-        attachment: safeMetadata(record),
-        async openStream(readSignal?: AbortSignal) {
-          readSignal?.throwIfAborted();
-          const stream = await blobs.open(record.storageKey);
-          if (readSignal?.aborted) {
-            await stream.cancel(readSignal.reason).catch(() => undefined);
-            throw readSignal.reason;
-          }
-          return stream;
-        },
-      });
+      return contentSource(context, attachmentId, signal);
     },
+
+    contentSource,
   });
 }

@@ -15,6 +15,7 @@ import {
   PROVENANCE_GUIDANCE,
 } from "../../shared/bot-prompt";
 import type { AgentActor } from "./agents/profile-types";
+import { projectRunInputForModel } from "./attachments/model-images";
 import type { AgentFetch, StallGuard } from "./channels/stall-guard";
 import type { DeploymentConfig } from "./config";
 import {
@@ -317,6 +318,8 @@ export async function buildAgents(
   agentFetch?: AgentFetch,
   /** How a run gets its tool for handing work on. Absent means no Bot is offered one. */
   handoff?: HandoffForRun,
+  /** Model-only input enrichment after prompt-safe projection. Applied only to built-in Bots. */
+  prepareRunInput?: PrepareRunInput,
 ): Promise<Record<string, AbstractAgent>> {
   const vendors = await loadVendors().catch(() => [] as readonly string[]);
   return Object.fromEntries(
@@ -335,6 +338,7 @@ export async function buildAgents(
           selection,
           agentFetch,
           handoff,
+          prepareRunInput,
         ),
       ]),
     ),
@@ -353,6 +357,7 @@ async function buildAgent(
   selection?: ToolSelection,
   agentFetch?: AgentFetch,
   handoff?: HandoffForRun,
+  prepareRunInput?: PrepareRunInput,
 ): Promise<AbstractAgent> {
   if (agent.type === "unavailable") {
     return new UnavailableAgent(agent);
@@ -442,9 +447,11 @@ async function buildAgent(
     );
 
   const whole = withTools(granted);
+  whole.use((input, next) => next.run(projectRunInputForModel(input)));
   // A Bot with no tools needs no per-run rebuild. A Bot with any server-side tool does: its trusted
   // run/thread pair does not exist until `run(input)`, and must never be taken from model arguments.
-  if (!narrowing && !handoff && granted.length === 0) return whole;
+  if (!narrowing && !handoff && !prepareRunInput && granted.length === 0)
+    return whole;
 
   return new RunBuiltAgent(
     { agentId: agent.id, description: agent.name },
@@ -468,6 +475,9 @@ async function buildAgent(
         }),
       );
     },
+    prepareRunInput
+      ? (input) => prepareRunInput(agent.id, input)
+      : projectRunInputForModel,
   );
 }
 
@@ -599,13 +609,14 @@ function remoteAgentWithStandingRole(
     input: RunAgentInput,
     next: AbstractAgent,
   ) => {
+    const safeInput = projectRunInputForModel(input);
     const holdingsMessage = holdingsMessageFor(tools);
     return next.run({
-      ...input,
+      ...safeInput,
       messages: [
         agent.standingMessage,
         ...(holdingsMessage ? [holdingsMessage] : []),
-        ...input.messages.filter(
+        ...safeInput.messages.filter(
           (message) =>
             message.id !== agent.standingMessage.id &&
             message.id !== holdingsMessage?.id,
@@ -708,24 +719,32 @@ class RunBuiltAgent extends AbstractAgent {
   /** The same Bot with nothing narrowed, kept to answer questions that are not about one run. */
   private whole: AbstractAgent;
   private build: (input: RunAgentInput) => Promise<AbstractAgent>;
+  /** A fresh model-facing copy; the outer runtime continues to own the original persisted input. */
+  private prepare: (input: RunAgentInput) => Promise<RunAgentInput>;
 
   constructor(
     identity: { agentId: string; description: string },
     whole: AbstractAgent,
     build: (input: RunAgentInput) => Promise<AbstractAgent>,
+    prepare: (input: RunAgentInput) => Promise<RunAgentInput> | RunAgentInput,
   ) {
     super(identity);
     this.whole = whole;
     this.build = build;
+    this.prepare = async (input) => prepare(input);
   }
 
   run(input: RunAgentInput): Observable<BaseEvent> {
     return defer(() =>
-      from(this.build(input)).pipe(
-        switchMap((agent) => {
-          this.inner = agent;
-          return agent.run(input);
-        }),
+      from(this.prepare(input)).pipe(
+        switchMap((prepared) =>
+          from(this.build(prepared)).pipe(
+            switchMap((agent) => {
+              this.inner = agent;
+              return agent.run(prepared);
+            }),
+          ),
+        ),
       ),
     );
   }
@@ -754,6 +773,7 @@ class RunBuiltAgent extends AbstractAgent {
     const cloned = super.clone() as RunBuiltAgent;
     cloned.whole = this.whole;
     cloned.build = this.build;
+    cloned.prepare = this.prepare;
     // Deliberately not the inner agent. A clone is a new run, and inheriting the last run's agent
     // would point `abortRun` at something already finished.
     cloned.inner = undefined;
@@ -804,6 +824,8 @@ export async function resolveRuntimeAgents(
    * theirs to see at all; what narrows is what gets built.
    */
   onlyBotId?: string,
+  /** Per-actor model input preparation; ignored for remote AG-UI endpoints. */
+  prepareRunInput?: PrepareRunInput,
 ): Promise<Record<string, AbstractAgent>> {
   const all = await loadAgents();
   if (all.length === 0) {
@@ -834,11 +856,20 @@ export async function resolveRuntimeAgents(
     selection,
     agentFetch,
     handoff,
+    prepareRunInput,
   );
 }
 
 /** What one Bot may call, for the person whose request this is. */
 export type LoadToolsForBot = (botId: string) => Promise<GrantedTool[]>;
+
+/** Prepare a fresh, model-only run input for one built-in Bot. */
+export type PrepareRunInput = (
+  botId: string,
+  input: RunAgentInput,
+) => Promise<RunAgentInput>;
+
+export type PrepareRunInputForActor = (actorId: string) => PrepareRunInput;
 
 /**
  * The deployment's signed statement of what a run is, for the agent that will run it.
@@ -904,6 +935,8 @@ export function createRequestAgents(
    * roster that person can see, so a Bot must never be able to address one they cannot.
    */
   handoffForActor?: (actorId: string) => HandoffForRun,
+  /** Server-authorized multimodal preparation for built-in Bots only. */
+  prepareRunInputForActor?: PrepareRunInputForActor,
 ) {
   return async ({ request }: { request: Request }) => {
     const actor = await identifyActor(request);
@@ -919,6 +952,8 @@ export function createRequestAgents(
       selectionForActor?.(actor.id),
       agentFetch,
       handoffForActor?.(actor.id),
+      undefined,
+      prepareRunInputForActor?.(actor.id),
     );
   };
 }
@@ -1061,6 +1096,8 @@ export function mountCopilotRuntime(
   handoffForActor?: (actorId: string) => HandoffForRun,
   /** Deterministic timing seam for tests and structured-log adapters. */
   runtimeTimingOptions?: RuntimeTimingOptions,
+  /** Server-authorized multimodal preparation for built-in Bots only. */
+  prepareRunInputForActor?: PrepareRunInputForActor,
 ) {
   const { intelligence } = config.runtime;
 
@@ -1103,6 +1140,7 @@ export function mountCopilotRuntime(
       // see is still absent; what this skips is constructing the other Bots and asking the database
       // what each of them was granted, on every delivery and again on every retry.
       input.botId,
+      prepareRunInputForActor?.(actor.id),
     );
     return agents[input.botId] ?? null;
   };
@@ -1154,6 +1192,7 @@ export function mountCopilotRuntime(
       selectionForActor,
       agentFetch,
       handoffForActor,
+      prepareRunInputForActor,
     ) as never,
   });
 
