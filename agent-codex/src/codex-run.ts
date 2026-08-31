@@ -60,6 +60,14 @@ const RESEARCH_COLLECTION_MAX_MS = positiveMilliseconds(
   "RESEARCH_COLLECTION_MAX_MS",
   8 * 60_000,
 );
+const RESEARCH_FINALISATION_MAX_MS = positiveMilliseconds(
+  "RESEARCH_FINALISATION_MAX_MS",
+  2 * 60_000,
+);
+const RESEARCH_INTERRUPT_GRACE_MS = positiveMilliseconds(
+  "RESEARCH_INTERRUPT_GRACE_MS",
+  15_000,
+);
 
 const RESEARCH_PROGRESS_MARKERS = [
   "начинаю исследование",
@@ -82,17 +90,11 @@ const RESEARCH_PENDING_WORK_PATTERNS = [
   /(?:i still need to|what remains is to|work remains to)\s+(?:check|research|collect|compare|analy[sz]e|review|prepare|finali[sz]e)/,
 ];
 
-const RESEARCH_RESULT_MARKERS = [
-  "## результат",
-  "## findings",
-  "## result",
-  "## источники",
-  "## sources",
-  "результат исследования",
-  "отчёт сохранён",
-  "отчет сохранен",
-  "report.md",
-];
+const RESEARCH_RESULT_HEADING =
+  /(?:^|\n)##[ \t]+(?:результат|findings|result)[ \t]*(?:\n|$)/;
+const RESEARCH_SOURCES_HEADING =
+  /(?:^|\n)##[ \t]+(?:источники|sources)[ \t]*(?:\n|$)/;
+const RESEARCH_REPORT_PATH = /\/research-runs\/[^\s`]+\/report\.md\b/;
 
 const RESEARCH_API_ACCESS_MARKERS = [
   "stats-api",
@@ -108,7 +110,10 @@ const RESEARCH_API_ACCESS_MARKERS = [
  * Returning a reason lets the run ask Codex for one bounded finalisation pass instead of showing a
  * polished status log as if it were an answer.
  */
-export function researchFinalisationIssue(text: string): string | null {
+export function researchFinalisationIssue(
+  text: string,
+  artifactCreated: boolean,
+): string | null {
   const normalized = text.trim().toLowerCase();
   if (!normalized) {
     return "The research run ended without an assistant result.";
@@ -116,18 +121,9 @@ export function researchFinalisationIssue(text: string): string | null {
   const progressMarkers = RESEARCH_PROGRESS_MARKERS.filter((marker) =>
     normalized.includes(marker),
   );
-  const hasResultMarker = RESEARCH_RESULT_MARKERS.some((marker) =>
-    normalized.includes(marker),
-  );
   const explicitlyHasPendingWork = RESEARCH_PENDING_WORK_PATTERNS.some(
     (pattern) => pattern.test(normalized),
   );
-  if (
-    (progressMarkers.length >= 2 || explicitlyHasPendingWork) &&
-    !hasResultMarker
-  ) {
-    return "The previous response only described research progress and did not deliver a result.";
-  }
 
   const namesWebsite = /hsreplay|hsguru/.test(normalized);
   const saysWebsiteBlocked =
@@ -137,13 +133,28 @@ export function researchFinalisationIssue(text: string): string | null {
   const mentionsFirstPartyApi = RESEARCH_API_ACCESS_MARKERS.some((marker) =>
     normalized.includes(marker),
   );
-  return namesWebsite && saysWebsiteBlocked && !mentionsFirstPartyApi
-    ? "The previous response treated an inaccessible HSReplay/HSGuru page as if the first-party API data were unavailable."
-    : null;
+  if (namesWebsite && saysWebsiteBlocked && !mentionsFirstPartyApi) {
+    return "The previous response treated an inaccessible HSReplay/HSGuru page as if the first-party API data were unavailable.";
+  }
+  if (!RESEARCH_RESULT_HEADING.test(normalized)) {
+    return progressMarkers.length >= 2 || explicitlyHasPendingWork
+      ? "The previous response only described research progress and did not deliver a result."
+      : "The research result is missing the required `## Результат` section.";
+  }
+  if (!RESEARCH_SOURCES_HEADING.test(normalized)) {
+    return "The research result is missing the required `## Источники` section.";
+  }
+  if (!RESEARCH_REPORT_PATH.test(normalized)) {
+    return "The research result does not include an exact `/research-runs/.../report.md` path.";
+  }
+  if (!artifactCreated) {
+    return "The research run ended without the required downloadable Markdown artifact.";
+  }
+  return null;
 }
 
 const RESEARCH_FINALISATION_PROMPT =
-  "Finalise the research now from the evidence and files already collected. The previous response was only a progress log, not a result. Do not repeat the plan and do not start another broad collection pass. Make at most one narrowly necessary source call, then stop collecting. Return a Markdown answer with `## Результат`, verified findings or an explicit `Результат не получен` explanation, freshness/limitations, and `## Источники`. Ensure a validated `/research-runs/.../report.md` exists and include its exact path. Finish this turn with the report even when some sources remain blocked.";
+  "Finalise the research now from the evidence and files already collected. The previous response was not a complete deliverable. Do not repeat the plan and do not start another broad collection pass. Make at most one narrowly necessary source call, then stop collecting. Ensure a validated `/research-runs/.../report.md` exists. Read that completed report and call the governed `create_artifact` tool exactly once with exactly four fields: `title`, a safe `filename` ending in `.md`, `mimeType` set to `text/markdown`, and the report as non-empty inline `content`; do not send `workspacePath` or extra fields. Then return a bounded Markdown answer with `## Результат`, verified findings or an explicit `Результат не получен` explanation, the exact report.md path, freshness/limitations, and `## Источники`. Finish this turn even when some sources remain blocked, and never print tool JSON.";
 
 const YOUTUBE_ARTIFACT_FINALISATION_PROMPT =
   "Create the required deliverable now. Call the governed `create_artifact` tool exactly once with exactly four fields: `title`, a safe `filename` ending in `.md`, `mimeType` set to `text/markdown`, and the completed report as non-empty inline `content`. Do not send `workspacePath` or any extra field. Even when every transcript failed, create a Markdown status report with the original links and exact limitations. Do not print the report or tool JSON in chat.";
@@ -219,7 +230,10 @@ export async function runCodex(
     spawn?: () => ChildProcessWithoutNullStreams;
     processExitGraceMs?: number;
     researchCollectionMaxMs?: number;
+    researchFinalisationMaxMs?: number;
+    researchInterruptGraceMs?: number;
     youtubeContext?: (input: RunAgentInput) => Promise<string>;
+    deploymentToolCaller?: typeof callDeploymentTool;
   } = {},
 ): Promise<void> {
   const youtubeContext = isYoutubeAnalystRun(input)
@@ -232,7 +246,10 @@ export async function runCodex(
     options.spawn,
     options.processExitGraceMs,
     options.researchCollectionMaxMs ?? RESEARCH_COLLECTION_MAX_MS,
+    options.researchFinalisationMaxMs ?? RESEARCH_FINALISATION_MAX_MS,
+    options.researchInterruptGraceMs ?? RESEARCH_INTERRUPT_GRACE_MS,
     youtubeContext,
+    options.deploymentToolCaller,
   );
   try {
     await client.run();
@@ -264,9 +281,11 @@ class CodexProcess {
   private correctionTurns = 0;
   private researchCorrectionTurns = 0;
   private researchText = "";
+  private researchArtifactCreated = false;
   private youtubeArtifactCreated = false;
   private youtubeArtifactCorrectionTurns = 0;
   private researchDeadline: ReturnType<typeof setTimeout> | undefined;
+  private researchInterruptDeadline: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly input: RunAgentInput,
@@ -276,7 +295,10 @@ class CodexProcess {
       spawnCodexProcess(input),
     private readonly processExitGraceMs = PROCESS_EXIT_GRACE_MS,
     private readonly researchCollectionMaxMs = RESEARCH_COLLECTION_MAX_MS,
+    private readonly researchFinalisationMaxMs = RESEARCH_FINALISATION_MAX_MS,
+    private readonly researchInterruptGraceMs = RESEARCH_INTERRUPT_GRACE_MS,
     private readonly youtubeContext = "",
+    private readonly deploymentToolCaller = callDeploymentTool,
   ) {
     this.dataControlWorkflow = isDataControlRun(input)
       ? new DataControlWorkflow()
@@ -517,16 +539,28 @@ class CodexProcess {
           );
         } else {
           const researchIssue = isResearchRun(this.input)
-            ? researchFinalisationIssue(this.researchText)
+            ? researchFinalisationIssue(
+                this.researchText,
+                this.researchArtifactCreated,
+              )
             : null;
           if (researchIssue && this.researchCorrectionTurns < 1) {
             this.researchCorrectionTurns += 1;
+            // Validate only the bounded correction turn. The progress text from the interrupted
+            // collection pass is still streamed to the conversation, but must not poison (or
+            // accidentally satisfy) the final deliverable contract.
+            this.researchText = "";
             void this.request("turn/start", {
               threadId: this.threadId,
               input: [{ type: "text", text: RESEARCH_FINALISATION_PROMPT }],
               effort: reasoningEffortFor(this.input),
               summary: REASONING_SUMMARY,
-            }).catch((error) => this.failRun(error));
+            })
+              .then((result) => {
+                const turn = result as { turn?: { id?: string } };
+                this.armResearchFinalisationDeadline(turn.turn?.id);
+              })
+              .catch((error) => this.failRun(error));
             return;
           }
           if (researchIssue) {
@@ -573,17 +607,44 @@ class CodexProcess {
     this.clearResearchDeadline();
     this.researchDeadline = setTimeout(() => {
       if (this.terminalFailure || this.turnCompleted || !this.threadId) return;
+      void this.request("turn/steer", {
+        threadId: this.threadId,
+        expectedTurnId: turnId,
+        input: [{ type: "text", text: RESEARCH_FINALISATION_PROMPT }],
+      }).catch(() => undefined);
+      this.armResearchFinalisationDeadline(turnId);
+    }, this.researchCollectionMaxMs);
+  }
+
+  private armResearchFinalisationDeadline(turnId: string | undefined): void {
+    if (!isResearchRun(this.input) || !turnId) return;
+    if (this.researchDeadline) clearTimeout(this.researchDeadline);
+    this.researchDeadline = setTimeout(() => {
+      if (this.terminalFailure || this.turnCompleted || !this.threadId) return;
       void this.request("turn/interrupt", {
         threadId: this.threadId,
         turnId,
       }).catch(() => undefined);
-    }, this.researchCollectionMaxMs);
+      this.researchInterruptDeadline = setTimeout(() => {
+        if (this.terminalFailure || this.turnCompleted) return;
+        this.failRun(
+          new Error(
+            "The research run did not stop after its bounded finalisation deadline. The run was not marked complete.",
+          ),
+        );
+      }, this.researchInterruptGraceMs);
+    }, this.researchFinalisationMaxMs);
   }
 
   private clearResearchDeadline(): void {
-    if (!this.researchDeadline) return;
-    clearTimeout(this.researchDeadline);
-    this.researchDeadline = undefined;
+    if (this.researchDeadline) {
+      clearTimeout(this.researchDeadline);
+      this.researchDeadline = undefined;
+    }
+    if (this.researchInterruptDeadline) {
+      clearTimeout(this.researchInterruptDeadline);
+      this.researchInterruptDeadline = undefined;
+    }
   }
 
   private recordProtocol(message: Notification): void {
@@ -623,16 +684,23 @@ class CodexProcess {
      * the original governed name, which is kept separately above.
      */
     this.callbacks.onToolStart(callId, eventName, args);
-    const duplicateYoutubeArtifact =
-      isYoutubeAnalystRun(this.input) &&
+    const duplicateDeliverableArtifact =
       deploymentName === "mcp__artifacts__create_artifact" &&
-      this.youtubeArtifactCreated;
-    const result = duplicateYoutubeArtifact
+      ((isYoutubeAnalystRun(this.input) && this.youtubeArtifactCreated) ||
+        (isResearchRun(this.input) && this.researchArtifactCreated));
+    const result = duplicateDeliverableArtifact
       ? {
-          text: "Refused. YouTube-аналитик already created the one artifact allowed for this run.",
+          text: "Refused. This run already created its one allowed deliverable artifact.",
           isError: true,
         }
-      : await callDeploymentTool(this.input, deploymentName, args);
+      : await this.deploymentToolCaller(this.input, deploymentName, args);
+    if (
+      isResearchRun(this.input) &&
+      deploymentName === "mcp__artifacts__create_artifact" &&
+      !result.isError
+    ) {
+      this.researchArtifactCreated = true;
+    }
     if (
       isYoutubeAnalystRun(this.input) &&
       deploymentName === "mcp__artifacts__create_artifact" &&

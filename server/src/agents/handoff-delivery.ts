@@ -308,7 +308,24 @@ export function createHandoffDelivery(options: {
                * gone. It is what stops the addressed Bot handing the work on for ever, and it is
                * signed, so the Bot cannot edit its own depth on the way past.
                */
-              forwardedProps: { openbotRun: assertion },
+              forwardedProps: {
+                openbotRun: assertion,
+                /*
+                 * The natural-language envelope above is right for a general model and wrong for
+                 * a deterministic specialist such as a text editor: it would edit the envelope
+                 * instead of the material inside `Task:`. Keep the typed handoff beside it so a
+                 * compatible endpoint can consume the exact task without parsing prose. This is
+                 * server-authored run context; the receiving Bot still gets no extra capability.
+                 */
+                openbotHandoff: {
+                  fromBotId: work.fromBotId,
+                  task: work.task,
+                  ...(work.constraints
+                    ? { constraints: work.constraints }
+                    : {}),
+                  ...(work.expecting ? { expecting: work.expecting } : {}),
+                },
+              },
             },
           }),
           deadlineMs,

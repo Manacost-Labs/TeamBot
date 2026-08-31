@@ -131,6 +131,10 @@ describe("turning a hop into a turn", () => {
 
     expect(requests[0]?.input.forwardedProps).toEqual({
       openbotRun: "signed-assertion",
+      openbotHandoff: {
+        fromBotId: "assistant",
+        task: "find the outage window",
+      },
     });
     // The addressed Bot's own conversation, because a thread has exactly one agent.
     expect(requests[0]?.threadId).toBe("answer-thread");
@@ -394,6 +398,12 @@ describe("what a hop leaves in the transcript", () => {
     const messages = requests[0]?.input.messages as Message[];
     expect(messages.at(-1)).toMatchObject({
       content: expect.stringContaining("Task:"),
+    });
+    expect(requests[0]?.input.forwardedProps).toMatchObject({
+      openbotHandoff: {
+        fromBotId: "assistant",
+        task: "find the outage window",
+      },
     });
   });
 });

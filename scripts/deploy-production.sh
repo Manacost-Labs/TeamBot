@@ -33,16 +33,39 @@ if [[ -z ${ARTIFACT_RENDERER_TOKEN:-} ]]; then
 	export ARTIFACT_RENDERER_TOKEN
 fi
 
-services=("$@")
-"${compose_cmd[@]}" config --quiet
+build_services=("$@")
+services=("${build_services[@]}")
+replace_openbot=false
+
+# routine-worker shares OpenBot's network namespace so it can reach embedded PostgreSQL on
+# 127.0.0.1. Recreating OpenBot alone leaves an already-running worker attached to the retired
+# namespace: its process stays up, but every database query and heartbeat fails. Always replace the
+# worker beside a targeted OpenBot replacement. A full deployment already includes both services.
 if ((${#services[@]})); then
-	"${compose_cmd[@]}" build "${services[@]}"
+	openbot_selected=false
+	routine_worker_selected=false
+	for service in "${services[@]}"; do
+		[[ "$service" == openbot ]] && openbot_selected=true
+		[[ "$service" == routine-worker ]] && routine_worker_selected=true
+	done
+	if [[ "$openbot_selected" == true && "$routine_worker_selected" == false ]]; then
+		services+=(routine-worker)
+	fi
+	replace_openbot=$openbot_selected
+else
+	replace_openbot=true
+fi
+
+"${compose_cmd[@]}" config --quiet
+if ((${#build_services[@]})); then
+	"${compose_cmd[@]}" build "${build_services[@]}"
 else
 	"${compose_cmd[@]}" build
 fi
 
 agent_container=$("${compose_cmd[@]}" ps -q agent-codex 2>/dev/null || true)
 drain_started=false
+routine_worker_stopped=false
 
 resume_agent() {
 	local container
@@ -60,6 +83,9 @@ resume_agent() {
 }
 
 cleanup() {
+	if [[ "$routine_worker_stopped" == true ]]; then
+		"${compose_cmd[@]}" up -d --no-build routine-worker >/dev/null 2>&1 || true
+	fi
 	if [[ "$drain_started" == true ]]; then
 		resume_agent
 	fi
@@ -100,12 +126,21 @@ if [[ -n "$agent_container" ]] && "${docker_cmd[@]}" inspect "$agent_container" 
 	fi
 fi
 
+# A container that shares another service's network namespace must leave that namespace before
+# Compose can replace its owner. Stopping it after the managed-run drain also prevents the worker
+# from submitting new work during the narrow replacement window.
+if [[ "$replace_openbot" == true ]]; then
+	"${compose_cmd[@]}" stop --timeout 30 routine-worker
+	routine_worker_stopped=true
+fi
+
 if ((${#services[@]})); then
 	"${compose_cmd[@]}" up -d --no-build --wait "${services[@]}"
 else
 	"${compose_cmd[@]}" up -d --no-build --wait
 fi
 
+routine_worker_stopped=false
 resume_agent
 drain_started=false
 trap - EXIT

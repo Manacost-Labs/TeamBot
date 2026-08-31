@@ -9,6 +9,7 @@ import {
   mintRunAssertion,
   type RunAssertion,
   readRunAssertion,
+  runAssertionTtlMs,
 } from "./agents/callback-token";
 import { createAgentFetch } from "./agents/endpoint";
 import { askTheirOwnPerson, escalationTool } from "./agents/escalation";
@@ -597,11 +598,7 @@ const signRunForActor =
       { botId, actorId, runId, threadId },
       config.keyEncryptionKey,
       Date.now(),
-      // Parser repairs legitimately run full validation and a production verification cycle.
-      // Keep ordinary Bots at the shorter default while covering this Bot's 30-minute turn budget.
-      botId === "data-control" || botId === "heartpulse-control"
-        ? 35 * 60_000
-        : undefined,
+      runAssertionTtlMs(botId),
     );
 
 /*
@@ -957,6 +954,8 @@ if (config.handoff.maxDepth > 0 && config.handoff.maxPerRun > 0) {
           depth: work.depth,
         },
         config.keyEncryptionKey,
+        Date.now(),
+        runAssertionTtlMs(work.toBotId),
       ),
     delivery: createHandoffDelivery({
       /*

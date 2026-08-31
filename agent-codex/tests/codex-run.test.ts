@@ -102,11 +102,12 @@ describe("Codex dynamic tool names", () => {
     expect(
       researchFinalisationIssue(
         "Начинаю исследование. План зафиксирован. Первый проход завершён.",
+        false,
       ),
     ).toContain("progress");
     expect(
-      researchFinalisationIssue("## Результат\nWin rate: 54%."),
-    ).toBeNull();
+      researchFinalisationIssue("## Результат\nWin rate: 54%.", false),
+    ).toContain("Источники");
   });
 
   it("does not mark an analyst update with promised follow-up work as complete", () => {
@@ -117,27 +118,49 @@ describe("Codex dynamic tool names", () => {
           "Параллельно проверяю актуальные списки и независимые практические разборы.",
           "Осталось оформить доказательства, контраргументы и финальную проверку.",
         ].join("\n\n"),
+        false,
       ),
     ).toContain("progress");
+  });
+
+  it("rejects the exact promised-result wording seen in production", () => {
+    expect(
+      researchFinalisationIssue(
+        "Срез подтверждён. Поэтому итог будет строго ограничен свежестью доступного API.",
+        false,
+      ),
+    ).not.toBeNull();
   });
 
   it("allows a bounded final result that describes completed verification", () => {
     expect(
       researchFinalisationIssue(
-        "## Результат\nПроверка завершена: Pure Paladin имеет 54,6% побед.\n\n## Источники\n- API snapshot",
+        "## Результат\nПроверка завершена: Pure Paladin имеет 54,6% побед.\n\nФайл: `/research-runs/pure-paladin/report.md`\n\n## Источники\n- API snapshot",
+        true,
       ),
     ).toBeNull();
+  });
+
+  it("requires the downloadable research artifact", () => {
+    expect(
+      researchFinalisationIssue(
+        "## Результат\nПроверка завершена.\n\nФайл: `/research-runs/check/report.md`\n\n## Источники\n- API snapshot",
+        false,
+      ),
+    ).toContain("artifact");
   });
 
   it("does not accept an HSReplay/HSGuru access failure without the first-party API", () => {
     expect(
       researchFinalisationIssue(
         "HSReplay и HSGuru не открылись, поэтому данных нет.",
+        false,
       ),
     ).toContain("first-party API");
     expect(
       researchFinalisationIssue(
-        "HSReplay HTML недоступен, но stats-api вернул dataset из api.kolodahearthstone.com.",
+        "## Результат\nHSReplay HTML недоступен, но stats-api вернул dataset из api.kolodahearthstone.com.\n\nФайл: `/research-runs/api-check/report.md`\n\n## Источники\n- first-party API",
+        true,
       ),
     ).toBeNull();
   });
@@ -206,36 +229,54 @@ describe("Codex process timing", () => {
   it("keeps a research run open for a finalisation turn after an incomplete update", async () => {
     const turnInputs: string[] = [];
     const input = {
-      ...processInput(),
-      agentId: process.env.RESEARCH_AGENT_ID?.trim() || "research-analyst",
+      ...researchProcessInput(),
     } as RunAgentInput;
 
     await runCodex(input, emptyCallbacks, {
       spawn: () => researchFinalisationProcess(turnInputs),
+      deploymentToolCaller: successfulArtifactCall,
     });
 
     expect(turnInputs).toHaveLength(2);
     expect(turnInputs[1]).toContain("Finalise the research now");
   });
 
-  it("interrupts an overlong collection pass and forces a bounded final report", async () => {
+  it("steers an overlong collection pass before forcing a bounded final report", async () => {
     const methods: string[] = [];
     const turnInputs: string[] = [];
     const input = {
-      ...processInput(),
-      agentId: process.env.RESEARCH_AGENT_ID?.trim() || "research-analyst",
+      ...researchProcessInput(),
     } as RunAgentInput;
 
     await runCodex(input, emptyCallbacks, {
       spawn: () => researchDeadlineProcess(methods, turnInputs),
       researchCollectionMaxMs: 5,
+      researchFinalisationMaxMs: 5,
+      deploymentToolCaller: successfulArtifactCall,
     });
 
+    expect(methods).toContain("turn/steer");
     expect(methods).toContain("turn/interrupt");
     expect(turnInputs).toHaveLength(2);
     expect(turnInputs[1]).toContain(
       "do not start another broad collection pass",
     );
+  });
+
+  it("fails a research run when the runtime ignores the bounded interrupt", async () => {
+    const methods: string[] = [];
+
+    await expect(
+      runCodex(researchProcessInput(), emptyCallbacks, {
+        spawn: () => researchDeadlineProcess(methods, [], false),
+        researchCollectionMaxMs: 5,
+        researchFinalisationMaxMs: 5,
+        researchInterruptGraceMs: 5,
+      }),
+    ).rejects.toThrow("did not stop after its bounded finalisation deadline");
+
+    expect(methods).toContain("turn/steer");
+    expect(methods).toContain("turn/interrupt");
   });
 
   it("rejects an initialize request when the child process fails before spawn", async () => {
@@ -288,6 +329,30 @@ function processInput(): RunAgentInput {
     state: {},
     forwardedProps: { openbotBotId: "codex" },
   } as unknown as RunAgentInput;
+}
+
+function researchProcessInput(): RunAgentInput {
+  const agentId = process.env.RESEARCH_AGENT_ID?.trim() || "research-analyst";
+  return {
+    ...processInput(),
+    agentId,
+    tools: [
+      {
+        name: "mcp__artifacts__create_artifact",
+        description: "Create a Markdown artifact.",
+        parameters: { type: "object" },
+      },
+    ],
+    forwardedProps: {
+      openbotBotId: agentId,
+      openbotDeploymentTools: ["mcp__artifacts__create_artifact"],
+      openbotRun: "signed-run",
+    },
+  } as unknown as RunAgentInput;
+}
+
+async function successfulArtifactCall() {
+  return { text: '{"ok":true}', isError: false };
 }
 
 function fakeCodexProcess(
@@ -368,18 +433,55 @@ function researchFinalisationProcess(turnInputs: string[]) {
         ? { thread: { id: "codex-research-thread" } }
         : {};
     queueMicrotask(() => {
+      if (request.method === undefined && request.id === 900) {
+        child.stdout.write(
+          `${JSON.stringify({
+            method: "item/agentMessage/delta",
+            params: {
+              itemId: "answer-2",
+              delta:
+                "## Результат\nПроверка завершена.\n\nФайл: `/research-runs/test/report.md`\n\n## Источники\n- API snapshot",
+            },
+          })}\n`,
+        );
+        child.stdout.write(
+          `${JSON.stringify({
+            method: "turn/completed",
+            params: { turn: { status: "completed" } },
+          })}\n`,
+        );
+        return;
+      }
       child.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
       if (request.method !== "turn/start") return;
       turnInputs.push(request.params?.input?.[0]?.text ?? "");
       const finalising = turnInputs.length > 1;
+      if (finalising) {
+        child.stdout.write(
+          `${JSON.stringify({
+            id: 900,
+            method: "item/tool/call",
+            params: {
+              callId: "research-artifact",
+              tool: "openbot__artifacts__create_artifact",
+              arguments: {
+                title: "Research report",
+                filename: "report.md",
+                mimeType: "text/markdown",
+                content: "# Research report",
+              },
+            },
+          })}\n`,
+        );
+        return;
+      }
       child.stdout.write(
         `${JSON.stringify({
           method: "item/agentMessage/delta",
           params: {
-            itemId: `answer-${turnInputs.length}`,
-            delta: finalising
-              ? "## Результат\nПроверка завершена.\n\n## Источники\n- API snapshot"
-              : "Теперь проверяю списки. Осталось оформить доказательства и финальную проверку.",
+            itemId: "answer-1",
+            delta:
+              "Теперь проверяю списки. Осталось оформить доказательства и финальную проверку.",
           },
         })}\n`,
       );
@@ -394,7 +496,11 @@ function researchFinalisationProcess(turnInputs: string[]) {
   return child as unknown as ChildProcessWithoutNullStreams;
 }
 
-function researchDeadlineProcess(methods: string[], turnInputs: string[]) {
+function researchDeadlineProcess(
+  methods: string[],
+  turnInputs: string[],
+  completeOnInterrupt = true,
+) {
   const child = new EventEmitter() as EventEmitter & {
     stdin: PassThrough;
     stdout: PassThrough;
@@ -418,9 +524,28 @@ function researchDeadlineProcess(methods: string[], turnInputs: string[]) {
       method?: string;
       params?: { input?: Array<{ text?: string }> };
     };
-    if (request.id === undefined || !request.method) return;
-    methods.push(request.method);
+    if (request.id === undefined) return;
+    if (request.method) methods.push(request.method);
     queueMicrotask(() => {
+      if (request.method === undefined && request.id === 901) {
+        child.stdout.write(
+          `${JSON.stringify({
+            method: "item/agentMessage/delta",
+            params: {
+              itemId: "final-answer",
+              delta:
+                "## Результат\nПроверка завершена.\n\nФайл: `/research-runs/deadline/report.md`\n\n## Источники\n- API snapshot",
+            },
+          })}\n`,
+        );
+        child.stdout.write(
+          `${JSON.stringify({
+            method: "turn/completed",
+            params: { turn: { status: "completed" } },
+          })}\n`,
+        );
+        return;
+      }
       if (request.method === "thread/start") {
         child.stdout.write(
           `${JSON.stringify({ id: request.id, result: { thread: { id: "deadline-thread" } } })}\n`,
@@ -441,24 +566,24 @@ function researchDeadlineProcess(methods: string[], turnInputs: string[]) {
         if (!finalising) return;
         child.stdout.write(
           `${JSON.stringify({
-            method: "item/agentMessage/delta",
+            id: 901,
+            method: "item/tool/call",
             params: {
-              itemId: "final-answer",
-              delta:
-                "## Результат\nПроверка завершена.\n\n## Источники\n- API snapshot",
+              callId: "deadline-research-artifact",
+              tool: "openbot__artifacts__create_artifact",
+              arguments: {
+                title: "Research report",
+                filename: "report.md",
+                mimeType: "text/markdown",
+                content: "# Research report",
+              },
             },
-          })}\n`,
-        );
-        child.stdout.write(
-          `${JSON.stringify({
-            method: "turn/completed",
-            params: { turn: { status: "completed" } },
           })}\n`,
         );
         return;
       }
       child.stdout.write(`${JSON.stringify({ id: request.id, result: {} })}\n`);
-      if (request.method === "turn/interrupt") {
+      if (request.method === "turn/interrupt" && completeOnInterrupt) {
         child.stdout.write(
           `${JSON.stringify({
             method: "turn/completed",

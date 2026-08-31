@@ -6,6 +6,7 @@ import {
   mintCallbackToken,
   mintRunAssertion,
   readRunAssertion,
+  runAssertionTtlMs,
   sameToken,
 } from "../src/agents/callback-token";
 
@@ -81,6 +82,17 @@ describe("the run assertion", () => {
       depth: 0,
     });
     expect(readRunAssertion(signed, KEY, 36 * 60 * 1000)).toBeNull();
+  });
+
+  test("keeps long-running control and research writes authorised", () => {
+    expect(runAssertionTtlMs("data-control")).toBe(35 * 60 * 1000);
+    expect(runAssertionTtlMs("heartpulse-control")).toBe(35 * 60 * 1000);
+    expect(runAssertionTtlMs("main-analyst", "main-analyst")).toBe(
+      20 * 60 * 1000,
+    );
+    expect(runAssertionTtlMs("ordinary-assistant", "main-analyst")).toBe(
+      undefined,
+    );
   });
 
   test("refuses an invalid custom lifetime", () => {

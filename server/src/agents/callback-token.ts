@@ -43,6 +43,22 @@ const RUN_LABEL = "openbot:agent-run";
  * Long-running maintenance Bots may receive a larger, explicitly bounded window at mint time.
  */
 const RUN_TTL_MS = 10 * 60 * 1000;
+const LONG_RUNNING_CONTROL_TTL_MS = 35 * 60 * 1000;
+const RESEARCH_RUN_TTL_MS = 20 * 60 * 1000;
+
+/**
+ * Long-running workers need an assertion that still exists when their final governed write runs.
+ * Keep the exception explicit and bounded; every ordinary Bot retains the ten-minute default.
+ */
+export function runAssertionTtlMs(
+  botId: string,
+  researchAgentId = process.env.RESEARCH_AGENT_ID?.trim() || "research-analyst",
+): number | undefined {
+  if (botId === "data-control" || botId === "heartpulse-control") {
+    return LONG_RUNNING_CONTROL_TTL_MS;
+  }
+  return botId === researchAgentId ? RESEARCH_RUN_TTL_MS : undefined;
+}
 
 export function mintCallbackToken(): string {
   return `${TOKEN_PREFIX}${randomBytes(TOKEN_BYTES).toString("base64url")}`;
