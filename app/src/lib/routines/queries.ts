@@ -41,10 +41,16 @@ export type RoutineRunRecord = {
   error: string | null;
 };
 
+export type RoutineWorkerHealth = {
+  status: "operational" | "stale" | "unavailable";
+  lastHeartbeatAt: string | null;
+};
+
 export const routineKeys = {
   all: ["routines"] as const,
   list: () => ["routines", "list"] as const,
   runs: (id: string) => ["routines", id, "runs"] as const,
+  health: () => ["routines", "worker-health"] as const,
 };
 
 /**
@@ -72,5 +78,17 @@ export function routineRunsQueryOptions(id: string | null) {
         fallback: "Routine history could not be loaded.",
       }),
     refetchInterval: 10_000,
+  });
+}
+
+/** Global scheduler health, refreshed independently from a person's routine list. */
+export function routineWorkerHealthQueryOptions() {
+  return queryOptions({
+    queryKey: routineKeys.health(),
+    queryFn: (): Promise<RoutineWorkerHealth> =>
+      client("/api/routines/health", "worker", {
+        fallback: "Routine worker health could not be loaded.",
+      }),
+    refetchInterval: 30_000,
   });
 }

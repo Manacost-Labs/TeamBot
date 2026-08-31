@@ -21,9 +21,9 @@ import { randomUUID } from "node:crypto";
 import { createDatabase } from "../../server/src/db/client";
 import { createRoutineStore } from "../../server/src/routines/store";
 import {
-  ROUTINE_FIRE_KIND,
   dispatchClaimedRoutines,
   offerDueRoutines,
+  ROUTINE_FIRE_KIND,
   type RoutineSweepOptions,
 } from "../../server/src/routines/sweep";
 import { createWorkQueue } from "../../server/src/work/queue";
@@ -159,6 +159,8 @@ async function runOneTick(): Promise<void> {
         skipped: report.skipped,
       }),
     );
+    // A pulse means both scheduling phases completed, not merely that this process still exists.
+    await routineStore.recordWorkerHeartbeat("succeeded");
   } catch (error) {
     console.warn(
       JSON.stringify({
@@ -166,6 +168,18 @@ async function runOneTick(): Promise<void> {
         reason: error instanceof Error ? error.message : String(error),
       }),
     );
+    try {
+      await routineStore.recordWorkerHeartbeat("failed");
+    } catch (heartbeatError) {
+      // The health row deliberately stores no error detail. This log keeps only the category too.
+      console.warn(
+        JSON.stringify({
+          type: "routine-worker-heartbeat-failed",
+          reason:
+            heartbeatError instanceof Error ? heartbeatError.name : "unknown",
+        }),
+      );
+    }
   }
 
   // The purge phase, on its own much longer cadence and its own try/catch: a purge failure this hour

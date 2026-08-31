@@ -39,6 +39,7 @@ import {
   channels,
   routineRuns,
   routines,
+  routineWorkerHeartbeats,
 } from "../db/schema";
 import { describeCron, nextOccurrence, ScheduleRefusedError } from "./schedule";
 
@@ -93,6 +94,7 @@ const TOO_MANY_ENABLED = `You already have ${MAX_ENABLED_ROUTINES} routines swit
 const MAX_NAMED_CHANNELS = 5;
 
 export type RoutineRunOutcome = "succeeded" | "failed" | "skipped";
+export type RoutineWorkerHeartbeatStatus = "succeeded" | "failed";
 
 export type Routine = {
   id: string;
@@ -198,6 +200,16 @@ export type RoutineStore = {
   ): Promise<RoutineRunHistory[]>;
   /** Owner-scoped, overlap-safe opening for the explicit Run now action. */
   insertManualRun?(ownerUserId: string, id: string): Promise<{ runId: string }>;
+
+  /** The latest completed scheduler pass, shared by every API and worker replica. */
+  readWorkerHeartbeat(): Promise<{
+    status: RoutineWorkerHeartbeatStatus;
+    heartbeatAt: Date;
+    /** The same database clock used to write heartbeatAt, read in the same statement. */
+    observedAt: Date;
+  } | null>;
+  /** Record only the outcome; the database supplies the authoritative timestamp. */
+  recordWorkerHeartbeat(status: RoutineWorkerHeartbeatStatus): Promise<void>;
 
   /* The sweep's half. Deliberately not owner-scoped — see the boundary comment below. */
 
@@ -622,6 +634,29 @@ export function createRoutineStore(database: Database): RoutineStore {
 
   return {
     update,
+
+    async readWorkerHeartbeat() {
+      const [row] = await database
+        .select({
+          status: routineWorkerHeartbeats.status,
+          heartbeatAt: routineWorkerHeartbeats.heartbeatAt,
+          observedAt: sql<Date>`now()`,
+        })
+        .from(routineWorkerHeartbeats)
+        .where(eq(routineWorkerHeartbeats.worker, "routine-worker"))
+        .limit(1);
+      return row ?? null;
+    },
+
+    async recordWorkerHeartbeat(status) {
+      await database
+        .insert(routineWorkerHeartbeats)
+        .values({ worker: "routine-worker", status, heartbeatAt: sql`now()` })
+        .onConflictDoUpdate({
+          target: routineWorkerHeartbeats.worker,
+          set: { status, heartbeatAt: sql`now()` },
+        });
+    },
 
     async create(input) {
       const instruction = validInstruction(input.instruction);

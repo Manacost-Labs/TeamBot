@@ -196,6 +196,102 @@ describe("GET /", () => {
   });
 });
 
+describe("GET /health", () => {
+  test("reports a recent successful worker heartbeat as operational", async () => {
+    const store = fakeStore({
+      readWorkerHeartbeat: async () => ({
+        status: "succeeded",
+        heartbeatAt: new Date("2026-08-31T12:00:00.000Z"),
+        observedAt: new Date("2026-08-31T12:06:00.000Z"),
+      }),
+    });
+    const response = await appFor(store).request("http://openbot.test/health");
+
+    expect(response.status).toBe(200);
+    expect(await json(response)).toEqual({
+      worker: {
+        status: "operational",
+        lastHeartbeatAt: "2026-08-31T12:00:00.000Z",
+      },
+    });
+  });
+
+  test("does not call an old successful heartbeat healthy", async () => {
+    const store = fakeStore({
+      readWorkerHeartbeat: async () => ({
+        status: "succeeded",
+        heartbeatAt: new Date("2026-08-31T11:47:59.999Z"),
+        observedAt: new Date("2026-08-31T12:00:00.000Z"),
+      }),
+    });
+    const response = await appFor(store).request("http://openbot.test/health");
+
+    expect(await json(response)).toEqual({
+      worker: {
+        status: "stale",
+        lastHeartbeatAt: "2026-08-31T11:47:59.999Z",
+      },
+    });
+  });
+
+  test("reports a failed pass and a missing heartbeat as unavailable", async () => {
+    const failed = fakeStore({
+      readWorkerHeartbeat: async () => ({
+        status: "failed",
+        heartbeatAt: new Date("2026-08-31T12:00:00.000Z"),
+        observedAt: new Date("2026-08-31T12:00:01.000Z"),
+      }),
+    });
+    const missing = fakeStore({ readWorkerHeartbeat: async () => null });
+
+    const failedResponse = await appFor(failed).request(
+      "http://openbot.test/health",
+    );
+    const missingResponse = await appFor(missing).request(
+      "http://openbot.test/health",
+    );
+
+    expect(await json(failedResponse)).toEqual({
+      worker: {
+        status: "unavailable",
+        lastHeartbeatAt: "2026-08-31T12:00:00.000Z",
+      },
+    });
+    expect(await json(missingResponse)).toEqual({
+      worker: { status: "unavailable", lastHeartbeatAt: null },
+    });
+  });
+
+  test("fails closed when the observed database time precedes the heartbeat", async () => {
+    const store = fakeStore({
+      readWorkerHeartbeat: async () => ({
+        status: "succeeded",
+        heartbeatAt: new Date("2026-08-31T12:00:01.000Z"),
+        observedAt: new Date("2026-08-31T12:00:00.000Z"),
+      }),
+    });
+
+    const response = await appFor(store).request("http://openbot.test/health");
+    expect((await json(response)).worker.status).toBe("unavailable");
+  });
+
+  test("requires a signed-in user before exposing worker health", async () => {
+    let reads = 0;
+    const store = fakeStore({
+      readWorkerHeartbeat: async () => {
+        reads += 1;
+        return null;
+      },
+    });
+    const response = await appFor(store, denied).request(
+      "http://openbot.test/health",
+    );
+
+    expect(response.status).toBe(401);
+    expect(reads).toBe(0);
+  });
+});
+
 describe("PATCH /:id", () => {
   test("updates through the owner and audits field names without field contents", async () => {
     const updates: unknown[] = [];

@@ -127,6 +127,23 @@ try {
       purged,
     }),
   );
+  // Written only after the whole CronJob pass completed. Merely starting a pod is not healthy.
+  await routineStore.recordWorkerHeartbeat("succeeded");
+} catch (error) {
+  try {
+    // Best-effort: when Postgres itself is down this cannot land, and the previous pulse becomes
+    // stale instead. Never replace the sweep's original failure with a heartbeat-write failure.
+    await routineStore.recordWorkerHeartbeat("failed");
+  } catch (heartbeatError) {
+    console.warn(
+      JSON.stringify({
+        type: "routine-worker-heartbeat-failed",
+        reason:
+          heartbeatError instanceof Error ? heartbeatError.name : "unknown",
+      }),
+    );
+  }
+  throw error;
 } finally {
   await database.$client.end({ timeout: 5 });
 }

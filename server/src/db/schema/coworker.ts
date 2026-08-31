@@ -84,6 +84,27 @@ export const routineRunStatus = pgEnum("routine_run_status", [
   "skipped",
 ]);
 
+export const routineWorkerHeartbeatStatus = pgEnum(
+  "routine_worker_heartbeat_status",
+  ["succeeded", "failed"],
+);
+
+/**
+ * The scheduler's one durable pulse.
+ *
+ * It is separate from routines and their run history because an idle worker with no due routines is
+ * still healthy, while an API server with plenty of old successful runs may have no worker at all.
+ * The row contains no host name, error or routine data: it answers only whether the latest pass
+ * completed and when Postgres observed it.
+ */
+export const routineWorkerHeartbeats = pgTable("routine_worker_heartbeats", {
+  worker: text("worker").primaryKey(),
+  status: routineWorkerHeartbeatStatus("status").notNull(),
+  heartbeatAt: timestamp("heartbeat_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 /**
  * A standing instruction one person gave one Bot, on a schedule.
  *

@@ -21,6 +21,9 @@ export type RoutineRouteOptions = {
   auditStore?: AuditStore;
 };
 
+/** Two missed production CronJob windows plus their scheduling margin. */
+export const ROUTINE_WORKER_STALE_AFTER_MS = 12 * 60_000;
+
 /**
  * The routines page API. Creation stays conversational through the four `RoutineTools`; once a
  * routine exists, this owner-scoped surface lists, edits, pauses, runs and removes it.
@@ -72,6 +75,50 @@ export function createRoutineRoutes(
   routes.get("/", requireUser, async (context) => {
     const routines = await routineStore.listFor(context.var.actor.id);
     return context.json({ routines: routines.map(routineDto) });
+  });
+
+  routes.get("/health", requireUser, async (context) => {
+    let heartbeat: Awaited<ReturnType<RoutineStore["readWorkerHeartbeat"]>>;
+    try {
+      heartbeat = await routineStore.readWorkerHeartbeat();
+    } catch (error) {
+      // A failed health read is not proof that the worker is healthy. Keep the member-facing answer
+      // coarse, while the server log retains only the error category and no routine data.
+      console.warn(
+        JSON.stringify({
+          type: "routine-worker-health-read-failed",
+          reason: error instanceof Error ? error.name : "unknown",
+        }),
+      );
+      return context.json({
+        worker: { status: "unavailable", lastHeartbeatAt: null },
+      });
+    }
+
+    if (!heartbeat) {
+      return context.json({
+        worker: { status: "unavailable", lastHeartbeatAt: null },
+      });
+    }
+
+    // Both stamps come from Postgres. Comparing against an API pod's wall clock would call a live
+    // worker stale (or a dead one fresh) when the pod clock drifts from the database.
+    const ageMs =
+      heartbeat.observedAt.getTime() - heartbeat.heartbeatAt.getTime();
+    const status =
+      heartbeat.status === "failed"
+        ? "unavailable"
+        : ageMs < 0
+          ? "unavailable"
+          : ageMs > ROUTINE_WORKER_STALE_AFTER_MS
+            ? "stale"
+            : "operational";
+    return context.json({
+      worker: {
+        status,
+        lastHeartbeatAt: heartbeat.heartbeatAt.toISOString(),
+      },
+    });
   });
 
   routes.put("/:id/enabled", requireUser, async (context) => {

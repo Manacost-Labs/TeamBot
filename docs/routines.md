@@ -67,10 +67,16 @@ Nothing above happens without a second process. The API server answers `/interna
 it is handed a run, but nothing hands it one on its own — that is a separate worker's whole job, and a
 deployment that never started one schedules nothing.
 
-This fails silently. A routine created in chat is stored, its schedule is computed, and the Routines
-page shows it sitting there with a next run time like any other — because as far as that page knows,
-it is correct. Nothing on the screen says a worker exists to act on it, so a deployment with no worker
-looks identical to one running normally, right up until nobody's standup notes ever arrive.
+The Routines page shows the worker's durable heartbeat above the list. A recent successful sweep is
+**operational**; the latest failed sweep or a heartbeat timestamp that cannot be trusted is
+**unavailable**; a successful heartbeat older than twelve minutes is **stale**. No row is also
+unavailable, so a deployment that never enabled the worker cannot look healthy merely because the API
+server and routine list are available.
+
+The worker writes that pulse only after the scheduling and dispatch phases finish. Both the pulse and
+the time used to judge its age come from PostgreSQL, avoiding disagreement between a worker pod's
+clock and an API pod's clock. The row contains no routine instructions, errors, credentials or host
+names — only the last pass outcome and database timestamp.
 
 Two settings carry this:
 

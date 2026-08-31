@@ -54,6 +54,7 @@ import {
   routinesQueryOptions,
 } from "@/lib/routines/queries";
 import { queryClient } from "@/query-client";
+import { RoutineWorkerHealthIndicator } from "./routine-worker-health";
 
 /**
  * What the last-run cell says, and in what tone.
@@ -139,6 +140,7 @@ export function RoutinesList() {
 
   return (
     <PageSection>
+      <RoutineWorkerHealthIndicator />
       {setEnabled.error ? (
         <p className="text-destructive text-sm" role="alert">
           {setEnabled.error.message}
