@@ -21,7 +21,9 @@ export async function verifyToken(
       encoder.encode(encodedPayload),
     );
     if (!valid) return null;
-    const payload = JSON.parse(decoder.decode(fromBase64Url(encodedPayload))) as Partial<Payload>;
+    const payload = JSON.parse(
+      decoder.decode(fromBase64Url(encodedPayload)),
+    ) as Partial<Payload>;
     if (
       payload.kind !== expectedKind ||
       typeof payload.sub !== "string" ||
@@ -29,7 +31,8 @@ export async function verifyToken(
       typeof payload.exp !== "number" ||
       payload.exp <= now ||
       typeof payload.nonce !== "string"
-    ) return null;
+    )
+      return null;
     return payload as Payload;
   } catch {
     return null;
@@ -56,7 +59,10 @@ export async function createSessionToken(
   return `${encodedPayload}.${toBase64Url(new Uint8Array(signature))}`;
 }
 
-async function importKey(secret: string, usages: KeyUsage[]): Promise<CryptoKey> {
+async function importKey(
+  secret: string,
+  usages: KeyUsage[],
+): Promise<CryptoKey> {
   return crypto.subtle.importKey(
     "raw",
     encoder.encode(secret),

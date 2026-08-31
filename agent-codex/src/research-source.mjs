@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
-const baseUrl = (process.env.RESEARCH_SOURCES_URL || "http://research-sources:8777").replace(/\/$/, "");
+const baseUrl = (
+  process.env.RESEARCH_SOURCES_URL || "http://research-sources:8777"
+).replace(/\/$/, "");
 const token = process.env.RESEARCH_SOURCE_GATEWAY_TOKEN || "";
 const args = process.argv.slice(2);
 const command = args.shift() || "";
@@ -21,7 +23,8 @@ function options(name) {
   for (let index = 0; index < args.length; index += 1) {
     if (args[index] === `--${name}`) {
       const value = args[index + 1];
-      if (!value || value.startsWith("--")) throw new Error(`missing --${name}`);
+      if (!value || value.startsWith("--"))
+        throw new Error(`missing --${name}`);
       values.push(value);
     }
   }
@@ -139,6 +142,8 @@ async function main() {
 try {
   await main();
 } catch (error) {
-  process.stderr.write(`${error instanceof Error ? error.message : "research source request failed"}\n`);
+  process.stderr.write(
+    `${error instanceof Error ? error.message : "research source request failed"}\n`,
+  );
   process.exitCode = 1;
 }
