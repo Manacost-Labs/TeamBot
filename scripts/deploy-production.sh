@@ -13,7 +13,8 @@ fi
 
 docker_cmd=(docker)
 if ! docker info >/dev/null 2>&1; then
-	docker_cmd=(sudo -n docker)
+	# Compose must receive required interpolation variables through sudo.
+	docker_cmd=(sudo -n -E docker)
 fi
 compose_cmd=("${docker_cmd[@]}" compose -f "$compose_file")
 
