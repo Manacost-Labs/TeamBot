@@ -38,6 +38,10 @@ const MODEL = process.env.CODEX_MODEL?.trim();
 const REASONING_EFFORT = process.env.CODEX_REASONING_EFFORT?.trim() || "low";
 const REASONING_SUMMARY =
   process.env.CODEX_REASONING_SUMMARY?.trim() || "concise";
+const PROCESS_EXIT_GRACE_MS = positiveMilliseconds(
+  "CODEX_PROCESS_EXIT_GRACE_MS",
+  5_000,
+);
 const REASONING_EFFORTS = new Set([
   "none",
   "minimal",
@@ -178,6 +182,7 @@ export async function runCodex(
   options: {
     timing?: AgentExecutionTiming;
     spawn?: () => ChildProcessWithoutNullStreams;
+    processExitGraceMs?: number;
   } = {},
 ): Promise<void> {
   const client = new CodexProcess(
@@ -185,11 +190,12 @@ export async function runCodex(
     callbacks,
     options.timing,
     options.spawn,
+    options.processExitGraceMs,
   );
   try {
     await client.run();
   } finally {
-    client.close();
+    await client.close();
   }
 }
 
@@ -200,8 +206,11 @@ class CodexProcess {
     { resolve(value: unknown): void; reject(error: Error): void }
   >();
   private readonly finished: Promise<void>;
+  private readonly stopped: Promise<void>;
   private finish!: () => void;
   private fail!: (error: Error) => void;
+  private markStopped!: () => void;
+  private stoppedObserved = false;
   private nextId = 1;
   private turnCompleted = false;
   private terminalFailure: Error | undefined;
@@ -220,6 +229,7 @@ class CodexProcess {
     private readonly timing?: AgentExecutionTiming,
     spawnProcess: () => ChildProcessWithoutNullStreams = () =>
       spawnCodexProcess(input),
+    private readonly processExitGraceMs = PROCESS_EXIT_GRACE_MS,
   ) {
     this.dataControlWorkflow = isDataControlRun(input)
       ? new DataControlWorkflow()
@@ -231,6 +241,13 @@ class CodexProcess {
     // A process can fail while run() is still awaiting an earlier JSON-RPC response.
     // Keep the terminal promise observed until run() reaches it.
     void this.finished.catch(() => undefined);
+    this.stopped = new Promise<void>((resolve) => {
+      this.markStopped = () => {
+        if (this.stoppedObserved) return;
+        this.stoppedObserved = true;
+        resolve();
+      };
+    });
     this.process = spawnProcess();
     this.process.once("spawn", () =>
       this.timing?.record("child_process_spawned"),
@@ -241,8 +258,12 @@ class CodexProcess {
     this.process.stderr.on("data", (chunk) => {
       this.stderr = `${this.stderr}${String(chunk)}`.slice(-4000);
     });
-    this.process.once("error", (error) => this.failRun(error));
+    this.process.once("error", (error) => {
+      if (this.process.pid === undefined) this.markStopped();
+      this.failRun(error);
+    });
     this.process.once("exit", (code) => {
+      this.markStopped();
       if (!this.turnCompleted) {
         const trace =
           this.protocolTrace.length > 0
@@ -255,6 +276,7 @@ class CodexProcess {
         );
       }
     });
+    this.process.once("close", this.markStopped);
   }
 
   async run(): Promise<void> {
@@ -302,8 +324,41 @@ class CodexProcess {
     await this.finished;
   }
 
-  close(): void {
-    if (!this.process.killed) this.process.kill("SIGTERM");
+  async close(): Promise<void> {
+    if (this.stoppedObserved) return;
+    this.signal("SIGTERM");
+    if (await this.waitForStop(this.processExitGraceMs)) return;
+    this.signal("SIGKILL");
+    // Keep the admission slot until the operating system confirms that the process is gone.
+    await this.stopped;
+  }
+
+  private signal(signal: NodeJS.Signals): void {
+    if (this.stoppedObserved) return;
+    try {
+      this.process.kill(signal);
+    } catch (error) {
+      if (this.process.pid === undefined) {
+        this.markStopped();
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private async waitForStop(timeoutMs: number): Promise<boolean> {
+    if (this.stoppedObserved) return true;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.stopped.then(() => true),
+        new Promise<false>((resolve) => {
+          timeout = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   }
 
   private request(method: string, params: JsonObject): Promise<unknown> {
@@ -532,6 +587,16 @@ function isObject(value: unknown): value is JsonObject {
 
 function safeDiagnostic(value: unknown): string {
   return JSON.stringify(value)?.slice(0, 600) ?? String(value).slice(0, 600);
+}
+
+function positiveMilliseconds(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+  return value;
 }
 
 export function codexToolName(name: string): string {

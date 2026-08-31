@@ -164,6 +164,21 @@ describe("Codex process timing", () => {
       }),
     ).rejects.toThrow("stopped with code 17");
   });
+
+  it("waits for process exit and escalates a stuck SIGTERM before resolving", async () => {
+    const signals: NodeJS.Signals[] = [];
+
+    await runCodex(processInput(), emptyCallbacks, {
+      spawn: () =>
+        fakeCodexProcess({
+          signals,
+          exitOnSignal: "SIGKILL",
+        }),
+      processExitGraceMs: 5,
+    });
+
+    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+  });
 });
 
 const emptyCallbacks = {
@@ -186,20 +201,26 @@ function processInput(): RunAgentInput {
   } as unknown as RunAgentInput;
 }
 
-function fakeCodexProcess() {
+function fakeCodexProcess(
+  options: { signals?: NodeJS.Signals[]; exitOnSignal?: NodeJS.Signals } = {},
+) {
   const child = new EventEmitter() as EventEmitter & {
     stdin: PassThrough;
     stdout: PassThrough;
     stderr: PassThrough;
     killed: boolean;
-    kill(): boolean;
+    kill(signal?: NodeJS.Signals): boolean;
   };
   child.stdin = new PassThrough();
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
   child.killed = false;
-  child.kill = () => {
+  child.kill = (signal = "SIGTERM") => {
     child.killed = true;
+    options.signals?.push(signal);
+    if (!options.exitOnSignal || options.exitOnSignal === signal) {
+      queueMicrotask(() => child.emit("exit", 0, signal));
+    }
     return true;
   };
   queueMicrotask(() => child.emit("spawn"));

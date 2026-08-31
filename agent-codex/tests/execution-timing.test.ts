@@ -324,8 +324,9 @@ function protocolErrorProcess() {
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
   child.killed = false;
-  child.kill = () => {
+  child.kill = (signal?: NodeJS.Signals) => {
     child.killed = true;
+    queueMicrotask(() => child.emit("exit", 0, signal ?? "SIGTERM"));
     return true;
   };
   queueMicrotask(() => child.emit("spawn"));
