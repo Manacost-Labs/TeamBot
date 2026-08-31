@@ -25,27 +25,20 @@ describe("coworker form validation", () => {
   test("accepts the fields a person fills in", () => {
     expect(
       agentFormSchema.parse({
+        ...emptyAgentForm,
         name: "  Expense Manager  ",
         title: "Finance Operations",
         roleDescription: "Review receipts and prepare reimbursement reports.",
-        visibility: "private",
-        endpoint: "",
-        authValue: "",
-        model: "",
-        reasoningEffort: "",
       }).name,
     ).toBe("Expense Manager");
   });
 
   test("an endpoint is optional, and must look like a web address", () => {
     const valid = {
+      ...emptyAgentForm,
       name: "Expense Manager",
       title: "Finance Operations",
       roleDescription: "Review receipts.",
-      visibility: "private" as const,
-      authValue: "",
-      model: "",
-      reasoningEffort: "",
     };
     // Empty means the Bot in the box, which is what most people want first time.
     expect(agentFormSchema.safeParse({ ...valid, endpoint: "" }).success).toBe(
@@ -66,14 +59,10 @@ describe("coworker form validation", () => {
 
   test("rejects what the server would reject", () => {
     const valid = {
+      ...emptyAgentForm,
       name: "Expense Manager",
       title: "Finance Operations",
       roleDescription: "Review receipts.",
-      visibility: "private" as const,
-      endpoint: "",
-      authValue: "",
-      model: "",
-      reasoningEffort: "",
     };
 
     expect(agentFormSchema.safeParse({ ...valid, name: "   " }).success).toBe(
