@@ -125,6 +125,20 @@ Google writes are classified as external side effects. Broad clears require expl
 Docs replacements verify the expected text and revision; ambiguous append failures say not to retry
 automatically so a network timeout cannot silently duplicate content.
 
+### Main Editor write-back
+
+The Main Editor never receives a Google write tool. After its analyzer accepts a correction, the
+gateway asks OpenBot to prepare a durable proposal through the signed run assertion and its internal
+service credential. OpenBot maps only complete, single-tab, paragraph-local changes to exact UTF-16
+ranges and captures the current Docs revision. The user reviews the diff at
+`/editor/google-doc-edits/<operation-id>` and approves it under their own authenticated session.
+
+Approval rechecks the Bot grant, policy and that user's OAuth connection, then sends every range in
+one descending `batchUpdate` with `requiredRevisionId`. The operation is one-time: concurrent clicks
+dispatch once, a stale revision is not applied, and an ambiguous post-dispatch result is never
+retried. Proposal prose is encrypted at rest and erased on completion; neither proposal prose nor
+the captured revision enters audit metadata.
+
 ## Troubleshooting
 
 ### `redirect_uri_mismatch`
