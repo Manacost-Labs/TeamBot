@@ -140,6 +140,13 @@ export type AttachmentStorageConfig = {
   maxBytes: number;
 };
 
+export type ArtifactRendererConfig = {
+  /** Internal service address. It is never exposed to the browser or model. */
+  baseUrl: string;
+  /** Shared secret sent only from the OpenBot server to the renderer. */
+  token: string;
+};
+
 export type DeploymentConfig = {
   databaseUrl: string;
   keyEncryptionKey: string;
@@ -200,6 +207,8 @@ export type DeploymentConfig = {
   appUrl: string | undefined;
   tenantPackageDirectory: string;
   attachments: AttachmentStorageConfig;
+  /** Isolated Markdown-to-PDF renderer. Absent leaves PDF creation unavailable. */
+  artifactRenderer?: ArtifactRendererConfig;
   runtime: RuntimeCapabilities;
   /**
    * How long a Bot's stream may say nothing before this deployment ends the turn, in milliseconds.
@@ -398,6 +407,22 @@ function managedAgentConfig(
     return undefined;
   }
   return { endpoint, token };
+}
+
+function artifactRendererConfig(
+  environment: Environment,
+): ArtifactRendererConfig | undefined {
+  const address = optionalHttpUrl(environment, "ARTIFACT_RENDERER_URL");
+  const token = optional(environment, "ARTIFACT_RENDERER_TOKEN");
+  if (Boolean(address) !== Boolean(token)) {
+    throw new Error(
+      "ARTIFACT_RENDERER_URL and ARTIFACT_RENDERER_TOKEN must be set together",
+    );
+  }
+  if (token && token.length < 32) {
+    throw new Error("ARTIFACT_RENDERER_TOKEN must be at least 32 characters");
+  }
+  return address && token ? { baseUrl: address.toString(), token } : undefined;
 }
 
 function oauthClient(
@@ -884,6 +909,7 @@ export function loadConfig(
   const google = oauthClient(environment, "GOOGLE");
   const auth = authConfig(environment, google);
   const managedAgent = managedAgentConfig(environment);
+  const artifactRenderer = artifactRendererConfig(environment);
   const workerSharedSecret = optional(environment, "WORKER_SHARED_SECRET");
 
   return {
@@ -904,6 +930,7 @@ export function loadConfig(
     tenantPackageDirectory:
       optional(environment, "TENANT_PACKAGE_DIR") ?? "../examples/fintech",
     attachments: attachmentStorageConfig(environment),
+    ...(artifactRenderer ? { artifactRenderer } : {}),
     runtime: runtimeCapabilities(environment),
     agentStallTimeoutMs: agentStallTimeoutMs(environment),
     auditRetentionDays: auditRetentionDays(environment),

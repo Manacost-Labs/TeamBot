@@ -43,6 +43,8 @@ at `agent-langgraph` on a laptop.
 | `TENANT_PACKAGE_DIR` | `../examples/fintech`              | Tenant package directory, resolved from `server/`.                  |
 | `ATTACHMENT_STORAGE_DIR` | `server/.openbot/attachments` locally; `/var/lib/openbot/attachments` in production | Directory holding attachment bytes. Local development permits a relative or custom path; production accepts exactly `/var/lib/openbot/attachments`. |
 | `ATTACHMENT_MAX_BYTES` | `26214400` (25 MiB)                | Positive whole-byte limit for one attachment. Values above 1 GiB are refused. |
+| `ARTIFACT_RENDERER_URL` | unset                              | Internal HTTP(S) address of the isolated Markdown-to-PDF renderer. Set together with `ARTIFACT_RENDERER_TOKEN`. |
+| `ARTIFACT_RENDERER_TOKEN` | unset                            | Renderer-only secret of at least 32 characters. Generate independently; never reuse a session, model, or agent-tool token. |
 | `DEPLOYMENT_ID`      | the tenant package's id            | Names this deployment inside a shared Intelligence project.          |
 | `OPENAI_API_KEY`     | unset                              | Default model key for built-in agents and both shipped Bots.        |
 | `OPENAI_BASE_URL`    | unset                              | OpenAI-compatible endpoint that key is spent against. See below.    |
@@ -69,6 +71,11 @@ computer workspace, browser profile, system directory, or another shared mount.
 The current backend is one local filesystem. Run one API replica only: separate replicas would see
 different files, and a single-writer volume does not turn them into a shared object store. Horizontal
 replicas require a future object-storage backend with shared addressing and lifecycle management.
+
+PDF creation is intentionally absent when the renderer pair is unset. Production Compose builds a
+separate renderer container, gives it only a private internal network, and injects the same
+`ARTIFACT_RENDERER_TOKEN` into OpenBot and the renderer. The browser, Bots, workers and computer do
+not receive this token. Generate it with `openssl rand -base64 48`.
 
 **`AGENT_STALL_TIMEOUT_MS`** watches for the failure a Bot has that nothing else in the trail can
 show: a stream that stops producing anything. Every other audit row is something that happened, and

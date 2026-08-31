@@ -142,6 +142,35 @@ describe("deployment configuration", () => {
     expect(loadConfig(environment).managedAgent).toBeUndefined();
   });
 
+  test("configures the isolated PDF renderer only when both halves are present", () => {
+    expect(
+      loadConfig({
+        ...baseEnvironment,
+        ARTIFACT_RENDERER_URL: " http://artifact-renderer:8090/internal ",
+        ARTIFACT_RENDERER_TOKEN: "r".repeat(32),
+      }).artifactRenderer,
+    ).toEqual({
+      baseUrl: "http://artifact-renderer:8090/internal",
+      token: "r".repeat(32),
+    });
+
+    expect(() =>
+      loadConfig({
+        ...baseEnvironment,
+        ARTIFACT_RENDERER_URL: "http://artifact-renderer:8090",
+      }),
+    ).toThrow(
+      "ARTIFACT_RENDERER_URL and ARTIFACT_RENDERER_TOKEN must be set together",
+    );
+    expect(() =>
+      loadConfig({
+        ...baseEnvironment,
+        ARTIFACT_RENDERER_URL: "http://artifact-renderer:8090",
+        ARTIFACT_RENDERER_TOKEN: "too-short",
+      }),
+    ).toThrow("ARTIFACT_RENDERER_TOKEN must be at least 32 characters");
+  });
+
   test("refuses a URL with no token", () => {
     const environment: Record<string, string | undefined> = {
       ...baseEnvironment,

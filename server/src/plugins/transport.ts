@@ -1,3 +1,4 @@
+import * as builtinArtifacts from "./builtin-artifacts";
 import * as builtinAttachments from "./builtin-conversation-attachments";
 import * as builtinHeartPulseOps from "./builtin-heartpulse-ops";
 import * as builtinParserOps from "./builtin-parser-ops";
@@ -105,6 +106,7 @@ export type VendorTransport = {
 export type TransportKind =
   | "mcp"
   | "google-workspace-rest"
+  | "builtin-artifacts"
   | "builtin-attachments"
   | "builtin-routines"
   | "builtin-parser-ops"
@@ -113,6 +115,7 @@ export type TransportKind =
 const TRANSPORTS: Record<TransportKind, VendorTransport> = {
   mcp,
   "google-workspace-rest": googleWorkspaceRest,
+  "builtin-artifacts": builtinArtifacts,
   "builtin-attachments": builtinAttachments,
   "builtin-routines": builtinRoutines,
   "builtin-parser-ops": builtinParserOps,

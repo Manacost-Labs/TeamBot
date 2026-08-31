@@ -1,0 +1,18 @@
+{
+  "name": "@teambot/artifact-renderer",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test --test-concurrency=1 tests/*.test.js",
+    "check": "npm test && npm audit --omit=dev --audit-level=high"
+  },
+  "dependencies": {
+    "playwright": "1.62.1"
+  }
+}

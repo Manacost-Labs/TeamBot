@@ -1,5 +1,6 @@
 /** One import path for every table, with schema files grouped by owner. */
 
+export * from "./artifacts";
 export * from "./attachments";
 export * from "./components";
 export * from "./computer";

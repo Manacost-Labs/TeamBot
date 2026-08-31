@@ -474,7 +474,10 @@ function listQuery(url: URL): {
   return query;
 }
 
-function encodedFilename(filename: string): string {
+function encodedFilename(
+  filename: string,
+  disposition: "attachment" | "inline" = "attachment",
+): string {
   const encoded = [...Buffer.from(filename, "utf8")]
     .map((byte) => {
       const character = String.fromCharCode(byte);
@@ -483,7 +486,16 @@ function encodedFilename(filename: string): string {
         : `%${byte.toString(16).toUpperCase().padStart(2, "0")}`;
     })
     .join("");
-  return `attachment; filename="attachment"; filename*=UTF-8''${encoded}`;
+  return `${disposition}; filename="attachment"; filename*=UTF-8''${encoded}`;
+}
+
+function isPreviewableArtifact(record: AttachmentRecord): boolean {
+  return (
+    record.source === "agent_generated" &&
+    record.messageId?.startsWith("artifact:") === true &&
+    (record.mimeType === "text/markdown" ||
+      record.mimeType === "application/pdf")
+  );
 }
 
 export function createAttachmentRoutes(
@@ -569,6 +581,39 @@ export function createAttachmentRoutes(
             "content-length": String(record.size),
             "content-security-policy": "default-src 'none'; sandbox",
             "content-type": record.mimeType,
+            "cross-origin-resource-policy": "same-origin",
+            "referrer-policy": "no-referrer",
+            "x-content-type-options": "nosniff",
+          },
+        });
+      } catch {
+        return internalFailure();
+      }
+    },
+  );
+
+  routes.get(
+    "/:channelId/attachments/:attachmentId/preview",
+    requireUser,
+    async (context) => {
+      try {
+        const record = await dependencies.store.get(
+          context.var.actor.id,
+          context.req.param("channelId"),
+          context.req.param("attachmentId"),
+        );
+        if (!record || !isPreviewableArtifact(record)) return notFound();
+        const body = await dependencies.blobs.open(record.storageKey);
+        return new Response(body, {
+          headers: {
+            "cache-control": "private, no-store",
+            "content-disposition": encodedFilename(record.name, "inline"),
+            "content-length": String(record.size),
+            "content-security-policy": "default-src 'none'; sandbox",
+            "content-type":
+              record.mimeType === "text/markdown"
+                ? "text/markdown; charset=utf-8"
+                : "application/pdf",
             "cross-origin-resource-policy": "same-origin",
             "referrer-policy": "no-referrer",
             "x-content-type-options": "nosniff",

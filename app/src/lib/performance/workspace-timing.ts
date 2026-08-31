@@ -208,6 +208,30 @@ export function abandonAgentRunTiming(messageId: string): void {
   recorder.finish(runKey(messageId));
 }
 
+/** Start only for a live pending first-party artifact call; callers pass no title or content. */
+export function beginArtifactRenderTiming(
+  toolCallId: string,
+  timing: FrontendTimingRecorder = recorder,
+): void {
+  timing.start(artifactKey(toolCallId), "artifact_render");
+}
+
+export function markArtifactCardPainted(
+  toolCallId: string,
+  timing: FrontendTimingRecorder = recorder,
+): void {
+  const key = artifactKey(toolCallId);
+  timing.record(key, "artifact_card_painted");
+  timing.finish(key);
+}
+
+export function abandonArtifactRenderTiming(
+  toolCallId: string,
+  timing: FrontendTimingRecorder = recorder,
+): void {
+  timing.finish(artifactKey(toolCallId));
+}
+
 /**
  * Run after a committed tree has crossed a browser paint boundary.
  *
@@ -263,6 +287,10 @@ function channelKey(channelId: string): string {
 
 function runKey(messageId: string): string {
   return `run:${messageId}`;
+}
+
+function artifactKey(toolCallId: string): string {
+  return `artifact:${toolCallId}`;
 }
 
 function milliseconds(value: number): number {

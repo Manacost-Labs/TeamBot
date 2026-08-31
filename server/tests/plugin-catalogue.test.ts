@@ -343,6 +343,18 @@ describe("conversation attachments", () => {
   });
 });
 
+describe("conversation artifacts", () => {
+  const entry = catalogueEntry("artifacts");
+
+  test("is a credential-free builtin with an explicit creation boundary", () => {
+    expect(resolveServerUrl("artifacts")?.url).toBe("builtin://artifacts");
+    expect(entry?.auth.kind).toBe("builtin");
+    expect(entry?.transport).toBe("builtin-artifacts");
+    expect(entry?.writeTools).toEqual(["create_artifact"]);
+    expect(classifyTool(entry, "create_artifact", true)).toBe("write");
+  });
+});
+
 describe("Parser Ops", () => {
   const entry = catalogueEntry("parser-ops");
 

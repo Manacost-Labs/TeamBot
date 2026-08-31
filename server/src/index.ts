@@ -16,6 +16,9 @@ import { createAgentProfileStore } from "./agents/profile-store";
 import type { AgentActor } from "./agents/profile-types";
 import { createRuntimeAgentLoader } from "./agents/runtime-agents";
 import { createApp } from "./app";
+import { createArtifactExportStore } from "./artifacts/export-store";
+import { createArtifactRenderer } from "./artifacts/renderer-client";
+import { createArtifactTools } from "./artifacts/service";
 import {
   AttachmentBlobStore,
   createAttachmentBlobMaintenance,
@@ -74,6 +77,7 @@ import {
 } from "./credentials";
 import { createDatabase } from "./db/client";
 import { createPeopleStore } from "./people/store";
+import { useArtifactTools } from "./plugins/builtin-artifacts";
 import { useConversationAttachmentTools } from "./plugins/builtin-conversation-attachments";
 import { useRoutineTools } from "./plugins/builtin-routines";
 import { redirectUriFor } from "./plugins/oauth";
@@ -200,6 +204,18 @@ const conversationAttachmentStore = createConversationAttachmentToolStore({
 });
 useConversationAttachmentTools(
   createConversationAttachmentTools(conversationAttachmentStore),
+);
+const artifactRenderer = config.artifactRenderer
+  ? createArtifactRenderer(config.artifactRenderer)
+  : undefined;
+useArtifactTools(
+  createArtifactTools({
+    database,
+    exports: createArtifactExportStore(database),
+    attachments: attachmentStore,
+    uploads: attachmentUploads,
+    ...(artifactRenderer ? { renderer: artifactRenderer } : {}),
+  }),
 );
 const prepareRunInputForActor = (actorId: string) =>
   createAttachmentModelInputPreparer(conversationAttachmentStore, actorId);

@@ -5,6 +5,7 @@ import {
   IconTable,
 } from "@tabler/icons-react";
 import type { ComponentProps } from "react";
+import type { UrlTransform } from "streamdown";
 
 /**
  * Shared markdown rendering for Bot prose and tool results.
@@ -31,6 +32,46 @@ const DRIVE_KINDS = [
   { match: "/spreadsheets/", icon: IconTable, label: "Sheet" },
   { match: "/presentation/", icon: IconPresentation, label: "Slides" },
 ] as const;
+
+const LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
+const MEDIA_PROTOCOLS = new Set(["http:", "https:"]);
+
+/**
+ * Keep ordinary relative and web links while refusing active/local schemes from model content.
+ *
+ * Streamdown's default hardener intentionally permits every protocol. This transform is therefore
+ * supplied at each transcript renderer, and the anchor component repeats the href check so a future
+ * caller that only reuses the components does not accidentally restore javascript/data/file links.
+ */
+export function safeMarkdownUrl(
+  value: string | undefined,
+  key: string = "href",
+): string | null {
+  if (value === undefined) return null;
+  const url = value.trim();
+  if (url.length === 0 || hasUrlControl(url)) return null;
+
+  const scheme = /^([a-z][a-z\d+.-]*):/iu.exec(url)?.[1]?.toLowerCase();
+  if (scheme === undefined) return url;
+  const protocol = `${scheme}:`;
+  const allowed = key === "src" ? MEDIA_PROTOCOLS : LINK_PROTOCOLS;
+  return allowed.has(protocol) ? url : null;
+}
+
+export const markdownUrlTransform: UrlTransform = (url, key) =>
+  safeMarkdownUrl(url, key);
+
+/** Artifact previews never load model-authored media from the viewer's browser or local network. */
+export const artifactMarkdownUrlTransform: UrlTransform = (url, key) =>
+  key === "src" ? null : safeMarkdownUrl(url, key);
+
+function hasUrlControl(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint <= 31 || codePoint === 127) return true;
+  }
+  return false;
+}
 
 export function documentChipKind(href: string | undefined) {
   if (!href) return null;
@@ -71,7 +112,12 @@ export function documentChipKind(href: string | undefined) {
 
 export const markdownComponents = {
   a: ({ href, children, ...rest }: ComponentProps<"a">) => {
-    const kind = documentChipKind(href);
+    const safeHref = safeMarkdownUrl(href);
+    const kind = documentChipKind(safeHref ?? undefined);
+
+    if (!safeHref) {
+      return <span className="text-muted-foreground">{children}</span>;
+    }
 
     if (kind) {
       const Icon = kind.icon;
@@ -84,7 +130,7 @@ export const markdownComponents = {
            * into a ragged block.
            */
           className="inline-flex max-w-full items-center gap-1.5 rounded-md border bg-muted/40 px-1.5 py-0.5 align-middle text-xs leading-tight no-underline transition-colors hover:bg-muted"
-          href={href}
+          href={safeHref}
           rel="noreferrer noopener"
           target="_blank"
         >
@@ -104,7 +150,7 @@ export const markdownComponents = {
       <a
         {...rest}
         className="underline underline-offset-2 hover:no-underline"
-        href={href}
+        href={safeHref}
         rel="noreferrer noopener"
         target="_blank"
       >
@@ -112,4 +158,13 @@ export const markdownComponents = {
       </a>
     );
   },
+};
+
+export const artifactMarkdownComponents = {
+  ...markdownComponents,
+  img: ({ alt }: ComponentProps<"img">) => (
+    <span className="text-muted-foreground">
+      {alt ? `[Изображение: ${alt}]` : "[Изображение недоступно]"}
+    </span>
+  ),
 };

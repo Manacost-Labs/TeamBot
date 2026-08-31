@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import { Streamdown } from "streamdown";
+import { ArtifactCard } from "@/components/channels/artifact-card";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import {
   MessageContent,
@@ -26,6 +27,10 @@ import {
   useMessageScroller,
 } from "@/components/ui/message-scroller";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  CREATE_ARTIFACT_TOOL_NAME,
+  parseArtifactToolResult,
+} from "@/lib/artifacts/contract";
 import { attachmentDownloadUrl } from "@/lib/attachments/api";
 import type { AttachmentMessageReference } from "@/lib/attachments/message-content";
 import {
@@ -38,7 +43,11 @@ import {
   type AgentRunState,
   agentRunStatusLabel,
 } from "@/lib/copilot/run-state";
-import { markdownComponents } from "@/lib/markdown";
+import { markdownComponents, markdownUrlTransform } from "@/lib/markdown";
+import {
+  abandonArtifactRenderTiming,
+  beginArtifactRenderTiming,
+} from "@/lib/performance/workspace-timing";
 import { readToolName } from "@/lib/plugins/tool-name";
 import { asText, forDisplay, REFUSAL_MARKER } from "@/lib/plugins/tool-result";
 import { projectTranscriptWindow } from "./chat-messages";
@@ -64,6 +73,8 @@ type ChatTranscriptProps = {
   run?: AgentRunState;
   /** Bounded in-memory UI state key for draft-adjacent transcript position and history window. */
   conversationKey?: string;
+  /** Channel used for authenticated artifact metadata and bytes. Falls back to conversationKey. */
+  channelId?: string;
   /** Deterministic render-count seam used by transcript performance regression tests. */
   onRowRender?: (id: string) => void;
   /** Re-send the last failed request without making a duplicate while another turn is active. */
@@ -374,6 +385,7 @@ const TranscriptMessage = memo(function TranscriptMessage({
                   <Streamdown
                     components={markdownComponents}
                     mode={streaming ? "streaming" : "static"}
+                    urlTransform={markdownUrlTransform}
                   >
                     {text}
                   </Streamdown>
@@ -473,25 +485,93 @@ function AttachmentCards({
  * the message is a new object on every chunk and would defeat the memo exactly as the text items
  * did. A finished chart re-rendering on every token of the sentence after it is not free.
  *
- * `useRenderToolCall` is called HERE rather than passed in as a prop: a function whose identity the
- * parent cannot guarantee is the classic way to make a memo boundary useless.
+ * MCP calls never ask the frontend registry to render them: they execute on the server and have no
+ * browser hook. Keeping that path outside `RegisteredToolCall` also lets restored server history be
+ * rendered before a Copilot provider has joined.
  */
 const TranscriptToolCall = memo(function TranscriptToolCall({
+  channelId,
   id,
   onRender,
   toolCallId,
   name,
   args,
   result,
+  live,
 }: {
+  channelId?: string;
   id: string;
   onRender?: (id: string) => void;
   toolCallId: string;
   name: string;
   args: string;
   result?: string;
+  live?: boolean;
 }) {
   onRender?.(id);
+  const artifact = parseArtifactToolResult(name, result)?.artifact ?? null;
+  const timingStarted = useRef(false);
+
+  useEffect(() => {
+    if (
+      name === CREATE_ARTIFACT_TOOL_NAME &&
+      live &&
+      result === undefined &&
+      !timingStarted.current
+    ) {
+      timingStarted.current = true;
+      beginArtifactRenderTiming(toolCallId);
+    }
+    if (result !== undefined && !artifact && timingStarted.current) {
+      timingStarted.current = false;
+      abandonArtifactRenderTiming(toolCallId);
+    }
+  }, [artifact, live, name, result, toolCallId]);
+
+  useEffect(
+    () => () => {
+      if (timingStarted.current) abandonArtifactRenderTiming(toolCallId);
+    },
+    [toolCallId],
+  );
+
+  return (
+    <MessageLayout>
+      <ToolRenderBoundary name={name}>
+        {artifact && channelId ? (
+          <ArtifactCard
+            artifact={artifact}
+            channelId={channelId}
+            trackPaint={timingStarted.current}
+            toolCallId={toolCallId}
+          />
+        ) : name.startsWith("mcp__") ? (
+          <ServerToolLine name={name} result={result} />
+        ) : (
+          <RegisteredToolCall
+            args={args}
+            name={name}
+            result={result}
+            toolCallId={toolCallId}
+          />
+        )}
+      </ToolRenderBoundary>
+    </MessageLayout>
+  );
+});
+
+/** A browser-registered component or decision; unlike MCP tools, these may have a custom renderer. */
+function RegisteredToolCall({
+  toolCallId,
+  name,
+  args,
+  result,
+}: {
+  toolCallId: string;
+  name: string;
+  args: string;
+  result?: string;
+}) {
   const renderToolCall = useRenderToolCall();
   const toolCall = useMemo(
     () => ({
@@ -515,24 +595,8 @@ const TranscriptToolCall = memo(function TranscriptToolCall({
           },
         }),
   });
-
-  return (
-    <MessageLayout>
-      <ToolRenderBoundary name={name}>
-        {/*
-         * A TOOL WITH NO REGISTERED RENDERER STILL HAPPENED, and since tools moved to the server
-         * that is now the ordinary case rather than the exception: MCP tools execute in the runtime
-         * and register no renderer here at all. `renderToolCall` still draws the components the app
-         * registers, and everything else lands below.
-         *
-         * What was called, shimmering until its result arrives, and then the server's own words
-         * drawn the way a Bot's prose is drawn.
-         */}
-        {drawn ?? <ServerToolLine name={name} result={result} />}
-      </ToolRenderBoundary>
-    </MessageLayout>
-  );
-});
+  return drawn ?? <ServerToolLine name={name} result={result} />;
+}
 
 /**
  * A tool the runtime executed, drawn for the person watching.
@@ -566,7 +630,10 @@ function ServerToolLine({ name, result }: { name: string; result?: string }) {
       running={result === undefined}
     >
       {body ? (
-        <Streamdown components={markdownComponents}>
+        <Streamdown
+          components={markdownComponents}
+          urlTransform={markdownUrlTransform}
+        >
           {forDisplay(body)}
         </Streamdown>
       ) : null}
@@ -576,6 +643,7 @@ function ServerToolLine({ name, result }: { name: string; result?: string }) {
 
 export function ChatTranscript({
   busy = false,
+  channelId,
   commandNames = "",
   conversationKey,
   messages,
@@ -587,6 +655,7 @@ export function ChatTranscript({
   stopped,
   onRetry,
 }: ChatTranscriptProps) {
+  const artifactChannelId = channelId ?? conversationKey;
   const [historyWindow, setHistoryWindow] = useState<HistoryWindowState>(() => {
     const saved = conversationKey
       ? conversationStateCache.get(conversationKey)
@@ -766,7 +835,16 @@ export function ChatTranscript({
                   >
                     <TranscriptToolCall
                       args={item.toolCall.function.arguments}
+                      {...(artifactChannelId
+                        ? { channelId: artifactChannelId }
+                        : {})}
                       id={item.id}
+                      live={
+                        busy &&
+                        visible.hiddenAfter === 0 &&
+                        index === visible.items.length - 1 &&
+                        item.result === undefined
+                      }
                       name={item.toolCall.function.name}
                       onRender={onRowRender}
                       result={item.result}

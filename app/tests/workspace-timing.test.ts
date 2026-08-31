@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  abandonArtifactRenderTiming,
+  beginArtifactRenderTiming,
   FrontendTimingRecorder,
+  markArtifactCardPainted,
   scheduleAfterPaint,
   shouldBeginChannelTiming,
   traceAttachmentUpload,
@@ -8,6 +11,49 @@ import {
 } from "../src/lib/performance/workspace-timing";
 
 describe("frontend workspace timing", () => {
+  test("records one content-free artifact paint and ignores history without a start", () => {
+    let now = 20;
+    const samples: WorkspaceTimingSample[] = [];
+    const timing = new FrontendTimingRecorder({
+      now: () => now,
+      id: () => "trace-artifact",
+      sink: (sample) => samples.push(sample),
+    });
+
+    beginArtifactRenderTiming("tool-call-a", timing);
+    now = 64.5;
+    markArtifactCardPainted("tool-call-a", timing);
+    markArtifactCardPainted("tool-call-a", timing);
+    markArtifactCardPainted("history-only", timing);
+
+    expect(samples).toEqual([
+      {
+        operation: "artifact_render",
+        phase: "artifact_card_painted",
+        traceId: "trace-artifact",
+        elapsedMs: 44.5,
+      },
+    ]);
+    expect(Object.keys(samples[0] ?? {}).sort()).toEqual([
+      "elapsedMs",
+      "operation",
+      "phase",
+      "traceId",
+    ]);
+  });
+
+  test("abandons a refused artifact trace without reporting a paint", () => {
+    const samples: WorkspaceTimingSample[] = [];
+    const timing = new FrontendTimingRecorder({
+      sink: (sample) => samples.push(sample),
+    });
+
+    beginArtifactRenderTiming("tool-call-refused", timing);
+    abandonArtifactRenderTiming("tool-call-refused", timing);
+    markArtifactCardPainted("tool-call-refused", timing);
+    expect(samples).toEqual([]);
+  });
+
   test("measures from the initiating event and records each phase once", () => {
     let now = 100;
     const samples: WorkspaceTimingSample[] = [];

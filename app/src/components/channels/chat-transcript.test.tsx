@@ -6,9 +6,11 @@ import { conversationStateCache } from "@/lib/channels/conversation-state";
 import { ChatTranscript } from "./chat-transcript";
 
 GlobalRegistrator.register();
+const originalFetch = globalThis.fetch;
 afterEach(() => {
   cleanup();
   conversationStateCache.clear();
+  globalThis.fetch = originalFetch;
 });
 afterAll(() => GlobalRegistrator.unregister());
 
@@ -217,5 +219,126 @@ describe("transcript windowing", () => {
     expect(
       view.getByRole("button", { name: /Вернуться к последним сообщениям/ }),
     ).toBeTruthy();
+  });
+
+  test("renders artifact v1 only for the exact first-party tool and trusts server metadata", async () => {
+    const attachmentId = "69bb8eb0-1ac8-4c67-aeca-2362e2f507cd";
+    globalThis.fetch = (async () =>
+      Response.json({
+        attachment: {
+          id: attachmentId,
+          name: "authoritative.md",
+          mimeType: "text/markdown",
+          size: 73,
+          messageId: "artifact:69bb8eb0-1ac8-4c67-aeca-2362e2f507ca",
+          source: "agent_generated",
+        },
+      })) as unknown as typeof fetch;
+    const result = JSON.stringify({
+      schema: "openbot.artifact.v1",
+      artifact: {
+        attachmentId,
+        filename: "untrusted.md",
+        mimeType: "text/markdown",
+        size: 1,
+        title: "Edited article",
+      },
+    });
+
+    const view = render(
+      <ChatTranscript
+        conversationKey="channel-a"
+        messages={[
+          {
+            id: "assistant-tool",
+            role: "assistant",
+            toolCalls: [
+              {
+                id: "artifact-call",
+                type: "function",
+                function: {
+                  name: "mcp__artifacts__create_artifact",
+                  arguments: "{}",
+                },
+              },
+            ],
+          },
+          {
+            id: "artifact-result",
+            role: "tool",
+            toolCallId: "artifact-call",
+            content: result,
+          },
+        ]}
+      />,
+    );
+
+    await view.findByText(/authoritative\.md/);
+    expect(view.getByTestId("artifact-card")).toBeTruthy();
+    expect(view.queryByText(/untrusted\.md/)).toBeNull();
+  });
+
+  test("keeps matching JSON from another tool and malformed artifact results as ordinary output", () => {
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return new Response(null, { status: 500 });
+    }) as unknown as typeof fetch;
+    const envelope = JSON.stringify({
+      schema: "openbot.artifact.v1",
+      artifact: {
+        attachmentId: "69bb8eb0-1ac8-4c67-aeca-2362e2f507cd",
+        filename: "report.pdf",
+        mimeType: "application/pdf",
+        size: 10,
+        title: "Report",
+      },
+    });
+
+    const view = render(
+      <ChatTranscript
+        conversationKey="channel-a"
+        messages={[
+          {
+            id: "assistant-tools",
+            role: "assistant",
+            toolCalls: [
+              {
+                id: "foreign-call",
+                type: "function",
+                function: {
+                  name: "mcp__other__create_artifact",
+                  arguments: "{}",
+                },
+              },
+              {
+                id: "malformed-call",
+                type: "function",
+                function: {
+                  name: "mcp__artifacts__create_artifact",
+                  arguments: "{}",
+                },
+              },
+            ],
+          },
+          {
+            id: "foreign-result",
+            role: "tool",
+            toolCallId: "foreign-call",
+            content: envelope,
+          },
+          {
+            id: "malformed-result",
+            role: "tool",
+            toolCallId: "malformed-call",
+            content: "not-json",
+          },
+        ]}
+      />,
+    );
+
+    expect(view.queryByTestId("artifact-card")).toBeNull();
+    expect(view.getByText("not-json")).toBeTruthy();
+    expect(fetches).toBe(0);
   });
 });

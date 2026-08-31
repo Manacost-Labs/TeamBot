@@ -183,6 +183,13 @@
       "when": 1788122945344,
       "tag": "0025_attachment_blob_inventory",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1788137207646,
+      "tag": "0026_artifact_exports",
+      "breakpoints": true
     }
   ]
 }

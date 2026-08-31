@@ -18,6 +18,7 @@ export default defineConfig({
    * the schema file.
    */
   schema: [
+    "./src/db/schema/artifacts.ts",
     "./src/db/schema/attachments.ts",
     "./src/db/schema/core.ts",
     "./src/db/schema/computer.ts",

@@ -49,6 +49,26 @@ services:
     networks:
       - app
 
+  artifact-renderer:
+    build:
+      context: ./artifact-renderer
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    environment:
+      PORT: "8080"
+      ARTIFACT_RENDERER_TOKEN: ${ARTIFACT_RENDERER_TOKEN:?ARTIFACT_RENDERER_TOKEN is required}
+    read_only: true
+    tmpfs:
+      - /tmp:size=268435456,mode=1777
+    shm_size: 256mb
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - artifact-render
+
   openbot:
     image: openbot-work:local
     build:
@@ -64,6 +84,8 @@ services:
       TENANT_PACKAGE_DIR: /app/examples/chatgpt
       ATTACHMENT_STORAGE_DIR: /var/lib/openbot/attachments
       ATTACHMENT_MAX_BYTES: ${ATTACHMENT_MAX_BYTES:-26214400}
+      ARTIFACT_RENDERER_URL: http://artifact-renderer:8080
+      ARTIFACT_RENDERER_TOKEN: ${ARTIFACT_RENDERER_TOKEN:?ARTIFACT_RENDERER_TOKEN is required}
       OPENBOT_SINGLE_USER: "true"
       OPENBOT_PUBLIC_URL: https://work-origin.kolodahearthstone.com
       OPENBOT_APP_URL: https://work-origin.kolodahearthstone.com
@@ -85,6 +107,8 @@ services:
     depends_on:
       attachment-storage-init:
         condition: service_completed_successfully
+      artifact-renderer:
+        condition: service_healthy
       agent-computer:
         condition: service_healthy
       agent-codex:
@@ -93,6 +117,7 @@ services:
         condition: service_healthy
     networks:
       - app
+      - artifact-render
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -234,3 +259,5 @@ volumes:
 
 networks:
   app:
+  artifact-render:
+    internal: true

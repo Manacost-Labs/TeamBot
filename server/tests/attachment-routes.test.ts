@@ -813,3 +813,65 @@ describe("attachment download route", () => {
     expect(opened).toBe(false);
   });
 });
+
+describe("artifact preview route", () => {
+  test.each([
+    ["text/markdown", "text/markdown; charset=utf-8"],
+    ["application/pdf", "application/pdf"],
+  ])(
+    "streams a private generated %s artifact inline",
+    async (mimeType, expected) => {
+      const generated = {
+        ...attachment,
+        messageId: "artifact:10000000-0000-4000-8000-000000000002",
+        mimeType,
+        source: "agent_generated" as const,
+      };
+      const dependencies = fakeDependencies({
+        store: { get: () => Promise.resolve(generated) },
+      });
+      const response = await appFor(dependencies).request(
+        `http://openbot.test/channel-a/attachments/${attachment.id}/preview`,
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("hello");
+      expect(response.headers.get("content-type")).toBe(expected);
+      expect(response.headers.get("content-disposition")).toStartWith(
+        "inline;",
+      );
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(response.headers.get("content-security-policy")).toBe(
+        "default-src 'none'; sandbox",
+      );
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    },
+  );
+
+  test("does not open user uploads or unsupported active content", async () => {
+    for (const unavailable of [
+      attachment,
+      {
+        ...attachment,
+        messageId: "artifact:10000000-0000-4000-8000-000000000002",
+        mimeType: "text/html",
+        source: "agent_generated" as const,
+      },
+    ]) {
+      let opened = false;
+      const response = await appFor(
+        fakeDependencies({
+          store: { get: () => Promise.resolve(unavailable) },
+          open: () => {
+            opened = true;
+            return Promise.resolve(bytes("private"));
+          },
+        }),
+      ).request(
+        `http://openbot.test/channel-a/attachments/${attachment.id}/preview`,
+      );
+      expect(response.status).toBe(404);
+      expect(opened).toBe(false);
+    }
+  });
+});
