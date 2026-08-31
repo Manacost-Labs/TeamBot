@@ -8,6 +8,7 @@ import {
 } from "./execution-timing";
 import {
   type RunAdmission,
+  RunDrainingError,
   RunQueueAbortedError,
   RunQueueFullError,
   RunQueueTimeoutError,
@@ -131,19 +132,25 @@ export function createAgentRequestHandler(options: AgentRequestHandlerOptions) {
                 errorType: "RunQueueFull",
                 message: "Managed run queue is full.",
               }
-            : error instanceof RunQueueTimeoutError
+            : error instanceof RunDrainingError
               ? {
                   status: 503,
-                  errorType: "RunQueueTimeout",
-                  message: "Managed run queue timed out.",
+                  errorType: "RunDraining",
+                  message: "Managed runtime is draining for deployment.",
                 }
-              : error instanceof RunQueueAbortedError
+              : error instanceof RunQueueTimeoutError
                 ? {
-                    status: 499,
-                    errorType: "RunQueueAborted",
-                    message: "Managed run request was cancelled.",
+                    status: 503,
+                    errorType: "RunQueueTimeout",
+                    message: "Managed run queue timed out.",
                   }
-                : undefined;
+                : error instanceof RunQueueAbortedError
+                  ? {
+                      status: 499,
+                      errorType: "RunQueueAborted",
+                      message: "Managed run request was cancelled.",
+                    }
+                  : undefined;
         if (!queueFailure) throw error;
         timing.record("run_error", { errorType: queueFailure.errorType });
         return Response.json(

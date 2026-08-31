@@ -180,4 +180,41 @@ describe("agent-codex request boundary", () => {
     expect((await handle(request(body))).status).toBe(202);
     expect(starts).toBe(2);
   });
+
+  test("returns an explicit retryable 503 while deployment drain is active", async () => {
+    const admission = new RunAdmission({
+      globalLimit: 1,
+      perAgentLimit: 1,
+      queueLimit: 1,
+      maxWaitMs: 1_000,
+      sink: () => {},
+    });
+    admission.startDraining();
+    const handler = createAgentRequestHandler({
+      managedAgentToken: TOKEN,
+      agentId: "agent-codex",
+      admission,
+      respond: () => new Response("must not run"),
+    });
+
+    const response = await handler(
+      request(
+        JSON.stringify({
+          threadId: "thread-draining",
+          runId: "run-draining",
+          state: {},
+          messages: [],
+          tools: [],
+          context: [],
+          forwardedProps: { openbotBotId: "research-analyst" },
+        }),
+      ),
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("5");
+    expect(await response.json()).toEqual({
+      error: "Managed runtime is draining for deployment.",
+    });
+  });
 });

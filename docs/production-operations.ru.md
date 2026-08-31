@@ -93,11 +93,13 @@ Production Compose передаёт эти четыре значения под 
 analyzer, edge-auth, БД и render/extract сервисы их не получают. После ротации пересоздайте
 `research-sources`, `agent-codex` и `openbot`.
 
-Сначала соберите образы, затем замените сервисы и дождитесь health checks:
+Собирайте и заменяйте сервисы только через drain-aware helper. Он сначала строит новые образы, затем
+закрывает admission новых managed-запусков, дожидается завершения активных исследований и только
+после этого заменяет контейнеры. Это предотвращает `socket connection was closed unexpectedly` в
+долгом исследовании. При отменённом deployment helper снова открывает admission:
 
 ```sh
-docker compose -f "$COMPOSE_FILE" build
-docker compose -f "$COMPOSE_FILE" up -d --wait
+./scripts/deploy-production.sh
 docker compose -f "$COMPOSE_FILE" ps
 curl -fsS http://127.0.0.1:3021/health >/dev/null
 curl -fsS http://127.0.0.1:3030/health >/dev/null
@@ -106,6 +108,12 @@ docker compose -f "$COMPOSE_FILE" exec -T agent-codex \
 docker compose -f "$COMPOSE_FILE" exec -T agent-computer \
   bun -e "const r=await fetch('http://127.0.0.1:4100/health');process.exit(r.ok?0:1)"
 ```
+
+Для обновления только выбранных сервисов передайте их имена, например
+`./scripts/deploy-production.sh research-sources agent-codex openbot`. Не запускайте обычный
+`docker compose up` для этих трёх сервисов, пока `managedRuns.active` или `managedRuns.queued`
+ненулевые. По умолчанию helper ждёт до 30 минут; граница задаётся
+`DEPLOY_DRAIN_TIMEOUT_SECONDS`.
 
 После health checks выполните один реальный test-run без чувствительного текста и найдите его
 timing-последовательность по `runId`. Затем проверьте:

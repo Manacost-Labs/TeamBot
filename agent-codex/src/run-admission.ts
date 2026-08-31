@@ -1,6 +1,7 @@
 export type RunAdmissionSnapshot = {
   active: number;
   queued: number;
+  draining: boolean;
   globalLimit: number;
   perAgentLimit: number;
   queueLimit: number;
@@ -40,6 +41,13 @@ export class RunQueueAbortedError extends Error {
   }
 }
 
+export class RunDrainingError extends Error {
+  constructor() {
+    super("managed runtime is draining for deployment");
+    this.name = "RunDrainingError";
+  }
+}
+
 type QueueEntry = {
   agentId: string;
   queuedAt: number;
@@ -66,6 +74,7 @@ export class RunAdmission {
   private readonly queued: QueueEntry[] = [];
   private readonly now: () => number;
   private readonly sink: (event: RunAdmissionEvent) => void;
+  private draining = false;
 
   constructor(private readonly options: RunAdmissionOptions) {
     for (const [name, value] of Object.entries({
@@ -89,6 +98,7 @@ export class RunAdmission {
     return {
       active: this.active,
       queued: this.queued.length,
+      draining: this.draining,
       globalLimit: this.options.globalLimit,
       perAgentLimit: this.options.perAgentLimit,
       queueLimit: this.options.queueLimit,
@@ -99,6 +109,10 @@ export class RunAdmission {
   acquire(agentId: string, signal?: AbortSignal): Promise<RunAdmissionLease> {
     if (!agentId) throw new TypeError("agentId is required");
     if (signal?.aborted) return Promise.reject(new RunQueueAbortedError());
+    if (this.draining) {
+      this.emit("rejected", agentId);
+      return Promise.reject(new RunDrainingError());
+    }
 
     if (this.canAdmit(agentId)) {
       return Promise.resolve(this.admit(agentId, this.now()));
@@ -118,7 +132,7 @@ export class RunAdmission {
           this.cleanup(entry);
           this.emit("timed_out", agentId, this.now() - entry.queuedAt);
           reject(new RunQueueTimeoutError());
-          this.drain();
+          this.drainQueue();
         }, this.options.maxWaitMs),
         resolve,
         reject,
@@ -128,14 +142,32 @@ export class RunAdmission {
           if (!this.remove(entry)) return;
           this.cleanup(entry);
           reject(new RunQueueAbortedError());
-          this.drain();
+          this.drainQueue();
         };
         signal.addEventListener("abort", entry.onAbort, { once: true });
       }
       this.queued.push(entry);
       this.emit("queued", agentId);
-      this.drain();
+      this.drainQueue();
     });
+  }
+
+  /** Stop admitting new work and fail queued work before a deployment waits for active runs. */
+  startDraining(): RunAdmissionSnapshot {
+    if (this.draining) return this.snapshot();
+    this.draining = true;
+    for (const entry of this.queued.splice(0)) {
+      this.cleanup(entry);
+      entry.reject(new RunDrainingError());
+    }
+    return this.snapshot();
+  }
+
+  /** Re-open admission when a deployment is cancelled or updated only a sibling service. */
+  resume(): RunAdmissionSnapshot {
+    this.draining = false;
+    this.drainQueue();
+    return this.snapshot();
   }
 
   private canAdmit(agentId: string): boolean {
@@ -161,13 +193,14 @@ export class RunAdmission {
         if (remaining === 0) this.activeByAgent.delete(agentId);
         else this.activeByAgent.set(agentId, remaining);
         this.emit("released", agentId);
-        this.drain();
+        this.drainQueue();
       },
     };
   }
 
   /** Admit the oldest request that is eligible, without one busy agent blocking another. */
-  private drain(): void {
+  private drainQueue(): void {
+    if (this.draining) return;
     while (this.active < this.options.globalLimit) {
       const index = this.queued.findIndex((entry) =>
         this.canAdmit(entry.agentId),

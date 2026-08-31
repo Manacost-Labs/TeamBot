@@ -56,6 +56,10 @@ const REASONING_EFFORTS = new Set([
 const RESEARCH_MODEL = process.env.RESEARCH_MODEL?.trim() || "gpt-5.6-luna";
 const RESEARCH_REASONING_EFFORT =
   process.env.RESEARCH_REASONING_EFFORT?.trim() || "xhigh";
+const RESEARCH_COLLECTION_MAX_MS = positiveMilliseconds(
+  "RESEARCH_COLLECTION_MAX_MS",
+  8 * 60_000,
+);
 
 const RESEARCH_PROGRESS_MARKERS = [
   "начинаю исследование",
@@ -139,7 +143,7 @@ export function researchFinalisationIssue(text: string): string | null {
 }
 
 const RESEARCH_FINALISATION_PROMPT =
-  "Finalise the research now. The previous response was only a progress log, not a result. Do not repeat the plan. Use the available first-party `research-source stats-api` for HSReplay/HSGuru data before claiming access is unavailable. Return a Markdown answer with `## Результат`, verified findings or an explicit `Результат не получен` explanation, freshness/limitations, and `## Источники`. For a substantial run, ensure a validated `/research-runs/.../report.md` exists and include its exact path.";
+  "Finalise the research now from the evidence and files already collected. The previous response was only a progress log, not a result. Do not repeat the plan and do not start another broad collection pass. Make at most one narrowly necessary source call, then stop collecting. Return a Markdown answer with `## Результат`, verified findings or an explicit `Результат не получен` explanation, freshness/limitations, and `## Источники`. Ensure a validated `/research-runs/.../report.md` exists and include its exact path. Finish this turn with the report even when some sources remain blocked.";
 
 const YOUTUBE_ARTIFACT_FINALISATION_PROMPT =
   "Create the required deliverable now. Call the governed `create_artifact` tool exactly once with exactly four fields: `title`, a safe `filename` ending in `.md`, `mimeType` set to `text/markdown`, and the completed report as non-empty inline `content`. Do not send `workspacePath` or any extra field. Even when every transcript failed, create a Markdown status report with the original links and exact limitations. Do not print the report or tool JSON in chat.";
@@ -214,6 +218,7 @@ export async function runCodex(
     timing?: AgentExecutionTiming;
     spawn?: () => ChildProcessWithoutNullStreams;
     processExitGraceMs?: number;
+    researchCollectionMaxMs?: number;
     youtubeContext?: (input: RunAgentInput) => Promise<string>;
   } = {},
 ): Promise<void> {
@@ -226,6 +231,7 @@ export async function runCodex(
     options.timing,
     options.spawn,
     options.processExitGraceMs,
+    options.researchCollectionMaxMs ?? RESEARCH_COLLECTION_MAX_MS,
     youtubeContext,
   );
   try {
@@ -260,6 +266,7 @@ class CodexProcess {
   private researchText = "";
   private youtubeArtifactCreated = false;
   private youtubeArtifactCorrectionTurns = 0;
+  private researchDeadline: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly input: RunAgentInput,
@@ -268,6 +275,7 @@ class CodexProcess {
     spawnProcess: () => ChildProcessWithoutNullStreams = () =>
       spawnCodexProcess(input),
     private readonly processExitGraceMs = PROCESS_EXIT_GRACE_MS,
+    private readonly researchCollectionMaxMs = RESEARCH_COLLECTION_MAX_MS,
     private readonly youtubeContext = "",
   ) {
     this.dataControlWorkflow = isDataControlRun(input)
@@ -353,7 +361,7 @@ class CodexProcess {
     this.threadId = threadId;
     this.timing?.record("codex_thread_started");
 
-    await this.request("turn/start", {
+    const turn = (await this.request("turn/start", {
       threadId,
       input: [
         {
@@ -363,12 +371,14 @@ class CodexProcess {
       ],
       effort: reasoningEffortFor(this.input),
       summary: REASONING_SUMMARY,
-    });
+    })) as { turn?: { id?: string } };
+    this.armResearchDeadline(turn.turn?.id);
     this.timing?.record("codex_turn_started");
     await this.finished;
   }
 
   async close(): Promise<void> {
+    this.clearResearchDeadline();
     if (this.stoppedObserved) return;
     this.signal("SIGTERM");
     if (await this.waitForStop(this.processExitGraceMs)) return;
@@ -424,6 +434,7 @@ class CodexProcess {
 
   private failRun(error: Error): void {
     if (this.terminalFailure) return;
+    this.clearResearchDeadline();
     this.terminalFailure = error;
     for (const pending of this.pending.values()) pending.reject(error);
     this.pending.clear();
@@ -480,6 +491,7 @@ class CodexProcess {
       return;
     }
     if (message.method === "turn/completed") {
+      this.clearResearchDeadline();
       const turn = message.params?.turn as
         | { status?: string; error?: unknown }
         | undefined;
@@ -554,6 +566,24 @@ class CodexProcess {
       if (message.params?.willRetry === true) return;
       this.failRun(new Error(JSON.stringify(message.params ?? "Codex error.")));
     }
+  }
+
+  private armResearchDeadline(turnId: string | undefined): void {
+    if (!isResearchRun(this.input) || !turnId) return;
+    this.clearResearchDeadline();
+    this.researchDeadline = setTimeout(() => {
+      if (this.terminalFailure || this.turnCompleted || !this.threadId) return;
+      void this.request("turn/interrupt", {
+        threadId: this.threadId,
+        turnId,
+      }).catch(() => undefined);
+    }, this.researchCollectionMaxMs);
+  }
+
+  private clearResearchDeadline(): void {
+    if (!this.researchDeadline) return;
+    clearTimeout(this.researchDeadline);
+    this.researchDeadline = undefined;
   }
 
   private recordProtocol(message: Notification): void {

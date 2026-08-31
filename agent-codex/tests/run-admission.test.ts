@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   RunAdmission,
+  RunDrainingError,
   RunQueueAbortedError,
   RunQueueFullError,
   RunQueueTimeoutError,
@@ -125,5 +126,34 @@ describe("managed Codex run admission", () => {
     expect(serialized).not.toContain("prompt");
     expect(serialized).not.toContain("messages");
     expect(serialized).not.toContain("credentials");
+  });
+
+  test("drains active work, rejects queued and new work, then resumes", async () => {
+    const admission = new RunAdmission({
+      globalLimit: 1,
+      perAgentLimit: 1,
+      queueLimit: 2,
+      maxWaitMs: 1_000,
+      sink: () => {},
+    });
+    const active = await admission.acquire("agent-a");
+    const queued = admission.acquire("agent-b");
+
+    expect(admission.startDraining()).toMatchObject({
+      active: 1,
+      queued: 0,
+      draining: true,
+    });
+    await expect(queued).rejects.toBeInstanceOf(RunDrainingError);
+    await expect(admission.acquire("agent-c")).rejects.toBeInstanceOf(
+      RunDrainingError,
+    );
+
+    active.release();
+    expect(admission.snapshot()).toMatchObject({ active: 0, draining: true });
+    admission.resume();
+    const resumed = await admission.acquire("agent-c");
+    resumed.release();
+    expect(admission.snapshot()).toMatchObject({ active: 0, draining: false });
   });
 });

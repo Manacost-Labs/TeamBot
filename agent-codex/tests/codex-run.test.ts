@@ -218,6 +218,26 @@ describe("Codex process timing", () => {
     expect(turnInputs[1]).toContain("Finalise the research now");
   });
 
+  it("interrupts an overlong collection pass and forces a bounded final report", async () => {
+    const methods: string[] = [];
+    const turnInputs: string[] = [];
+    const input = {
+      ...processInput(),
+      agentId: process.env.RESEARCH_AGENT_ID?.trim() || "research-analyst",
+    } as RunAgentInput;
+
+    await runCodex(input, emptyCallbacks, {
+      spawn: () => researchDeadlineProcess(methods, turnInputs),
+      researchCollectionMaxMs: 5,
+    });
+
+    expect(methods).toContain("turn/interrupt");
+    expect(turnInputs).toHaveLength(2);
+    expect(turnInputs[1]).toContain(
+      "do not start another broad collection pass",
+    );
+  });
+
   it("rejects an initialize request when the child process fails before spawn", async () => {
     await expect(
       runCodex(processInput(), emptyCallbacks, {
@@ -369,6 +389,83 @@ function researchFinalisationProcess(turnInputs: string[]) {
           params: { turn: { status: "completed" } },
         })}\n`,
       );
+    });
+  });
+  return child as unknown as ChildProcessWithoutNullStreams;
+}
+
+function researchDeadlineProcess(methods: string[], turnInputs: string[]) {
+  const child = new EventEmitter() as EventEmitter & {
+    stdin: PassThrough;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    killed: boolean;
+    kill(signal?: NodeJS.Signals): boolean;
+  };
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.killed = false;
+  child.kill = (signal = "SIGTERM") => {
+    child.killed = true;
+    queueMicrotask(() => child.emit("exit", 0, signal));
+    return true;
+  };
+  queueMicrotask(() => child.emit("spawn"));
+  child.stdin.on("data", (chunk) => {
+    const request = JSON.parse(String(chunk)) as {
+      id?: number;
+      method?: string;
+      params?: { input?: Array<{ text?: string }> };
+    };
+    if (request.id === undefined || !request.method) return;
+    methods.push(request.method);
+    queueMicrotask(() => {
+      if (request.method === "thread/start") {
+        child.stdout.write(
+          `${JSON.stringify({ id: request.id, result: { thread: { id: "deadline-thread" } } })}\n`,
+        );
+        return;
+      }
+      if (request.method === "turn/start") {
+        turnInputs.push(request.params?.input?.[0]?.text ?? "");
+        const finalising = turnInputs.length > 1;
+        child.stdout.write(
+          `${JSON.stringify({
+            id: request.id,
+            result: {
+              turn: { id: finalising ? "final-turn" : "collection-turn" },
+            },
+          })}\n`,
+        );
+        if (!finalising) return;
+        child.stdout.write(
+          `${JSON.stringify({
+            method: "item/agentMessage/delta",
+            params: {
+              itemId: "final-answer",
+              delta:
+                "## Результат\nПроверка завершена.\n\n## Источники\n- API snapshot",
+            },
+          })}\n`,
+        );
+        child.stdout.write(
+          `${JSON.stringify({
+            method: "turn/completed",
+            params: { turn: { status: "completed" } },
+          })}\n`,
+        );
+        return;
+      }
+      child.stdout.write(`${JSON.stringify({ id: request.id, result: {} })}\n`);
+      if (request.method === "turn/interrupt") {
+        child.stdout.write(
+          `${JSON.stringify({
+            method: "turn/completed",
+            params: { turn: { status: "interrupted" } },
+          })}\n`,
+        );
+      }
     });
   });
   return child as unknown as ChildProcessWithoutNullStreams;

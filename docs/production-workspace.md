@@ -162,11 +162,12 @@ CODEX_MAX_ACTIVE_RUNS_PER_AGENT=2
 CODEX_MAX_QUEUED_RUNS=32
 CODEX_MAX_QUEUE_WAIT_MS=60000
 CODEX_PROCESS_EXIT_GRACE_MS=5000
+RESEARCH_COLLECTION_MAX_MS=480000
 ```
 
 Также явно задаются URL CopilotKit Intelligence, модели и допустимые уровни reasoning/effort, если они отличаются от проектных defaults.
 
-`agent-codex` допускает одновременно не больше `CODEX_MAX_ACTIVE_RUNS` процессов и не больше `CODEX_MAX_ACTIVE_RUNS_PER_AGENT` процессов одного агента. Остальные запросы ждут в ограниченной очереди. Переполнение возвращает HTTP 429, превышение времени ожидания — HTTP 503; оба ответа содержат `Retry-After`. После завершения turn адаптер даёт процессу `CODEX_PROCESS_EXIT_GRACE_MS` на штатный выход, затем отправляет `SIGKILL` и удерживает слот до подтверждённого `exit`. Отмена HTTP-потока также не освобождает слот раньше фактического завершения процесса, поэтому счётчик не занижает реальную нагрузку. `/health` показывает только безопасные счётчики и лимиты в поле `managedRuns`, без пользовательского содержимого.
+`agent-codex` допускает одновременно не больше `CODEX_MAX_ACTIVE_RUNS` процессов и не больше `CODEX_MAX_ACTIVE_RUNS_PER_AGENT` процессов одного агента. Остальные запросы ждут в ограниченной очереди. Переполнение возвращает HTTP 429, превышение времени ожидания — HTTP 503; оба ответа содержат `Retry-After`. `RESEARCH_COLLECTION_MAX_MS` ограничивает широкий сбор Главного Аналитика: после этой границы текущий collection-turn прерывается штатным протоколом Codex и запускается обязательный финальный turn по уже собранным данным. После завершения turn адаптер даёт процессу `CODEX_PROCESS_EXIT_GRACE_MS` на штатный выход, затем отправляет `SIGKILL` и удерживает слот до подтверждённого `exit`. Отмена HTTP-потока также не освобождает слот раньше фактического завершения процесса, поэтому счётчик не занижает реальную нагрузку. `/health` показывает только безопасные счётчики и лимиты в поле `managedRuns`, включая `draining`, без пользовательского содержимого. Production deployment выполняется через `scripts/deploy-production.sh`: helper включает drain, дожидается нулевых `active`/`queued`, обновляет контейнеры и возвращает admission в рабочее состояние.
 
 `OPENBOT_PUBLIC_URL` определяет OAuth callback. `OPENBOT_APP_URL` определяет, куда браузер вернётся после callback. Оба значения должны указывать на фактически доступный origin и совпадать с настройками reverse proxy.
 
@@ -393,8 +394,7 @@ bun run build
 
 ```bash
 docker compose -f docker-compose.production.yml config --quiet
-docker compose -f docker-compose.production.yml build
-docker compose -f docker-compose.production.yml up -d --wait
+./scripts/deploy-production.sh
 docker compose -f docker-compose.production.yml ps
 curl --fail http://127.0.0.1:3021/health
 bun run test:smoke

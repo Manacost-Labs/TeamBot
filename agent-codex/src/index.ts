@@ -1,4 +1,5 @@
 import { serve } from "bun";
+import { hasManagedAgentToken } from "../../shared/agent-authorisation";
 import { createAgentRequestHandler } from "./request-handler";
 import { RunAdmission } from "./run-admission";
 
@@ -37,7 +38,7 @@ const handleAgentRequest = createAgentRequestHandler({
   admission,
 });
 
-serve({
+const server = serve({
   port: PORT,
   // Bun caps this at 255 seconds; use the maximum for long validation tool calls.
   idleTimeout: 255,
@@ -45,11 +46,24 @@ serve({
     const url = new URL(request.url);
     if (url.pathname === "/health") {
       return Response.json({
-        status: "ok",
+        status: admission.snapshot().draining ? "draining" : "ok",
         model: process.env.CODEX_MODEL?.trim() || "account-default",
         auth: "chatgpt",
         managedRuns: admission.snapshot(),
       });
+    }
+    if (
+      (url.pathname === "/admin/drain" || url.pathname === "/admin/resume") &&
+      request.method === "POST"
+    ) {
+      if (!hasManagedAgentToken(request, MANAGED_AGENT_TOKEN)) {
+        return Response.json({ error: "Unauthorized." }, { status: 401 });
+      }
+      return Response.json(
+        url.pathname === "/admin/drain"
+          ? admission.startDraining()
+          : admission.resume(),
+      );
     }
     if (url.pathname === "/ag-ui" && request.method === "POST") {
       return handleAgentRequest(request);
@@ -57,5 +71,15 @@ serve({
     return Response.json({ error: "Not found." }, { status: 404 });
   },
 });
+
+let shutdownStarted = false;
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => {
+    if (shutdownStarted) return;
+    shutdownStarted = true;
+    admission.startDraining();
+    void server.stop(false).finally(() => process.exit(0));
+  });
+}
 
 console.info(`agent-codex listening on http://localhost:${PORT}/ag-ui`);

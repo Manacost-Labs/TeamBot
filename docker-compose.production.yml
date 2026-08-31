@@ -101,6 +101,7 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    stop_grace_period: 20m
     env_file: .env
     environment:
       <<: *research-provider-credentials
@@ -179,6 +180,7 @@ services:
       context: .
       dockerfile: agent-codex/Dockerfile
     restart: unless-stopped
+    stop_grace_period: 20m
     environment:
       <<: *research-provider-credentials
       PORT: "4202"
@@ -195,6 +197,7 @@ services:
       CODEX_MAX_QUEUED_RUNS: ${CODEX_MAX_QUEUED_RUNS:-32}
       CODEX_MAX_QUEUE_WAIT_MS: ${CODEX_MAX_QUEUE_WAIT_MS:-60000}
       CODEX_PROCESS_EXIT_GRACE_MS: ${CODEX_PROCESS_EXIT_GRACE_MS:-5000}
+      RESEARCH_COLLECTION_MAX_MS: ${RESEARCH_COLLECTION_MAX_MS:-480000}
       RESEARCH_AGENT_ID: ${RESEARCH_AGENT_ID:-research-analyst}
       YOUTUBE_ANALYST_AGENT_ID: ${YOUTUBE_ANALYST_AGENT_ID:-youtube-analyst}
       RESEARCH_MODEL: gpt-5.6-luna
