@@ -89,6 +89,11 @@ describe("Codex prompt translation", () => {
     );
     expect(instructionsFor(research)).toContain("hsreplay_archetypes");
     expect(instructionsFor(research)).toContain("hsguru_meta_standard_legend");
+    expect(instructionsFor(research)).toContain(
+      "stats-api --operation dataset --source-id SOURCE_ID",
+    );
+    expect(instructionsFor(research)).toContain("metastats_decks");
+    expect(instructionsFor(research)).toContain("metastats_matchups");
     expect(instructionsFor(research)).toContain("failed Fetch");
     expect(instructionsFor(research)).toContain("private chain-of-thought");
     expect(shouldExposeReasoning(research)).toBe(false);

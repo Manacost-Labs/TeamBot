@@ -75,3 +75,23 @@ test("research-source maps YouTube transcript without exposing a translation-cos
     },
   });
 });
+
+test("research-source maps a named MetaStats dataset onto the gateway", async () => {
+  const result = await invokeResearchSource([
+    "stats-api",
+    "--operation",
+    "dataset",
+    "--source-id",
+    "metastats_decks",
+  ]);
+
+  expect(result.receivedBody).toEqual({
+    command: "stats-api",
+    options: {
+      operation: "dataset",
+      source_id: "metastats_decks",
+      limit: 50,
+      offset: 0,
+    },
+  });
+});
