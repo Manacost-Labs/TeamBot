@@ -18,6 +18,9 @@ const MAX_CELL_CHARS = 500;
 const MAX_PARAGRAPH_CHARS = 2_000;
 const MAX_EDIT_SPANS = 30;
 const MAX_EDIT_ANCHOR_CHARS = 500;
+const MAX_CONFIRMED_EDIT_CHARS = 500_000;
+const MAX_CONFIRMED_EDITS = 30;
+const MAX_CONFIRMED_REPLACEMENT_CHARS = 10_000;
 
 type Connection = { url: string; token?: string };
 
@@ -331,15 +334,22 @@ const mutationResponseSchema = z.object({
 
 type ApiResult =
   | { ok: true; payload: unknown }
-  | { ok: false; message: string; ambiguous: boolean };
+  | {
+      ok: false;
+      message: string;
+      ambiguous: boolean;
+      status: number | null;
+    };
 
 function requestFailure(
   message: string,
   ambiguous: boolean,
+  status: number | null = null,
 ): Extract<ApiResult, { ok: false }> {
   return {
     ok: false,
     ambiguous,
+    status,
     message: ambiguous
       ? `${message} The write outcome is unknown. Do not retry automatically; read the document before deciding what to do.`
       : message,
@@ -461,7 +471,11 @@ async function request(
       (response.status === 408 ||
         response.status === 429 ||
         response.status >= 500);
-    return requestFailure(safeVendorFailure(response.status), ambiguous);
+    return requestFailure(
+      safeVendorFailure(response.status),
+      ambiguous,
+      response.status,
+    );
   }
 
   try {
@@ -873,6 +887,397 @@ async function mutate(
     };
   }
   return null;
+}
+
+export type ConfirmedGoogleDocumentEdit = Readonly<{
+  startIndex: number;
+  endIndex: number;
+  expectedText: string;
+  replacementText: string;
+}>;
+
+export type ConfirmedGoogleDocumentEditPlan = Readonly<{
+  documentId: string;
+  revisionId: string;
+  tabId: string;
+  edits: readonly ConfirmedGoogleDocumentEdit[];
+}>;
+
+export type ConfirmedGoogleDocumentPlanResult =
+  | Readonly<{ ok: true; plan: ConfirmedGoogleDocumentEditPlan }>
+  | Readonly<{ ok: false; message: string }>;
+
+export type ConfirmedGoogleDocumentApplyResult = Readonly<{
+  text: string;
+  isError: boolean;
+  outcome: "applied" | "not_applied" | "ambiguous";
+}>;
+
+type EditableParagraph = Readonly<{
+  rendered: string;
+  prefix: string;
+  suffix: string;
+  element: ParagraphElement | null;
+}>;
+
+function editableParagraph(
+  paragraph: Paragraph,
+): EditableParagraph | null | "unsupported" {
+  const elements = paragraph.elements ?? [];
+  const fullText = elements
+    .map((element) => element.textRun?.content ?? "")
+    .join("")
+    .replace(/\n$/, "");
+  const prose = fullText.trim();
+  if (!prose) return null;
+  if (fullText.length > MAX_PARAGRAPH_CHARS) return "unsupported";
+
+  const style = paragraph.paragraphStyle?.namedStyleType ?? "";
+  const heading = /^HEADING_([1-6])$/.exec(style);
+  let prefix = "";
+  let suffix = "";
+  if (heading) {
+    prefix = `${"#".repeat(Math.min(6, Number(heading[1]) + 2))} `;
+  } else if (style === "TITLE") {
+    prefix = "### ";
+  } else if (style === "SUBTITLE") {
+    prefix = "_";
+    suffix = "_";
+  } else if (paragraph.bullet) {
+    prefix = `${"  ".repeat(
+      Math.min(paragraph.bullet.nestingLevel ?? 0, 6),
+    )}- `;
+  }
+
+  const textElements = elements.filter((element) => element.textRun);
+  const single = textElements.length === 1 ? textElements[0] : null;
+  return {
+    rendered: `${prefix}${prose}${suffix}`,
+    prefix,
+    suffix,
+    element: single ?? null,
+  };
+}
+
+function editableBody(
+  tab: DocumentTab,
+):
+  | { ok: true; paragraphs: EditableParagraph[] }
+  | { ok: false; message: string } {
+  const content = tab.documentTab?.body?.content;
+  if (!content) {
+    return {
+      ok: false,
+      message: "Google Docs returned a tab without a readable body.",
+    };
+  }
+  if (
+    content.some(
+      (element) =>
+        element.table !== undefined || element.tableOfContents !== undefined,
+    )
+  ) {
+    return {
+      ok: false,
+      message:
+        "This document contains a table or table of contents. The editor will not map a lossy text rendering back onto that structure.",
+    };
+  }
+  const structuralParagraphs = content.filter(
+    (element) => element.paragraph !== undefined,
+  );
+  if (structuralParagraphs.length > MAX_PARAGRAPHS) {
+    return {
+      ok: false,
+      message:
+        "This document exceeds the editor's complete-read limit, so a write-back cannot be prepared safely.",
+    };
+  }
+
+  const paragraphs: EditableParagraph[] = [];
+  for (const structural of structuralParagraphs) {
+    const candidate = editableParagraph(structural.paragraph as Paragraph);
+    if (candidate === "unsupported") {
+      return {
+        ok: false,
+        message:
+          "This document contains a paragraph longer than the editor's complete-read limit.",
+      };
+    }
+    if (candidate) paragraphs.push(candidate);
+  }
+  return { ok: true, paragraphs };
+}
+
+function replacementFor(
+  paragraph: EditableParagraph,
+  rendered: string,
+): string | null {
+  if (rendered.includes("\n") || rendered !== rendered.trim()) return null;
+  if (!rendered.startsWith(paragraph.prefix)) return null;
+  if (paragraph.suffix && !rendered.endsWith(paragraph.suffix)) return null;
+  const end = paragraph.suffix
+    ? rendered.length - paragraph.suffix.length
+    : rendered.length;
+  const prose = rendered.slice(paragraph.prefix.length, end);
+  return prose && prose === prose.trim() ? prose : null;
+}
+
+/**
+ * Build exact UTF-16 paragraph replacements from the same bounded rendering the editor saw.
+ *
+ * This function is intentionally not an advertised tool. A model may propose prose, but only the
+ * durable editor-confirmation service can call this planner and later spend its captured revision.
+ */
+export async function planConfirmedDocumentEdit(
+  connection: Connection,
+  input: { documentId: string; sourceText: string; candidateText: string },
+): Promise<ConfirmedGoogleDocumentPlanResult> {
+  const parsedId = idSchema.safeParse(input.documentId);
+  if (
+    !parsedId.success ||
+    typeof input.sourceText !== "string" ||
+    typeof input.candidateText !== "string" ||
+    input.sourceText.length < 1 ||
+    input.candidateText.length < 1 ||
+    input.sourceText.length > MAX_CONFIRMED_EDIT_CHARS ||
+    input.candidateText.length > MAX_CONFIRMED_EDIT_CHARS
+  ) {
+    return {
+      ok: false,
+      message: "The proposed Google Docs edit is not a bounded document edit.",
+    };
+  }
+
+  const found = await fetchDocument(connection, parsedId.data);
+  if (!found.ok) return { ok: false, message: found.result.text };
+  if (!found.document.revisionId) {
+    return {
+      ok: false,
+      message:
+        "Google Docs did not return a revision id, so this edit cannot be confirmed safely.",
+    };
+  }
+  const tabs = flattenTabs(found.document.tabs ?? []);
+  if (tabs.length !== 1) {
+    return {
+      ok: false,
+      message:
+        "Write-back is currently limited to a single-tab Google Doc. The corrected text is still available in chat.",
+    };
+  }
+  const selected = selectTab(found.document, undefined);
+  if (!selected.ok) return { ok: false, message: selected.message };
+  const body = editableBody(selected.tab);
+  if (!body.ok) return body;
+
+  const currentRendering = body.paragraphs
+    .map((paragraph) => paragraph.rendered)
+    .join("\n\n")
+    .trim();
+  const source = input.sourceText.trim();
+  const candidate = input.candidateText.trim();
+  if (currentRendering !== source) {
+    return {
+      ok: false,
+      message:
+        "The complete current document no longer matches the text the editor checked. Read it again before preparing another save.",
+    };
+  }
+
+  const candidateParagraphs = candidate.split("\n\n");
+  if (
+    candidateParagraphs.length !== body.paragraphs.length ||
+    candidateParagraphs.some((paragraph) => paragraph.includes("\n"))
+  ) {
+    return {
+      ok: false,
+      message:
+        "This correction changes document structure. For now, only paragraph-local wording changes can be saved automatically.",
+    };
+  }
+
+  const edits: ConfirmedGoogleDocumentEdit[] = [];
+  let replacementCharacters = 0;
+  for (const [index, paragraph] of body.paragraphs.entries()) {
+    const rendered = candidateParagraphs[index] as string;
+    if (rendered === paragraph.rendered) continue;
+    if (edits.length >= MAX_CONFIRMED_EDITS) {
+      return {
+        ok: false,
+        message: `This correction changes more than ${MAX_CONFIRMED_EDITS} paragraphs. Save it manually or edit a smaller section.`,
+      };
+    }
+    const replacementText = replacementFor(paragraph, rendered);
+    const element = paragraph.element;
+    if (
+      replacementText === null ||
+      replacementText.length > MAX_REPLACEMENT_CHARS ||
+      !element?.textRun ||
+      element.startIndex === undefined ||
+      element.endIndex === undefined ||
+      element.endIndex <= element.startIndex ||
+      element.textRun.content.length !== element.endIndex - element.startIndex
+    ) {
+      return {
+        ok: false,
+        message:
+          "One changed paragraph crosses formatting or structure that cannot be replaced safely. The corrected text remains available in chat.",
+      };
+    }
+    const raw = element.textRun.content.replace(/\n$/, "");
+    const expectedText = raw.trim();
+    const offset = raw.indexOf(expectedText);
+    if (
+      !expectedText ||
+      expectedText.length > MAX_REPLACE_RANGE ||
+      offset < 0 ||
+      raw.indexOf(expectedText, offset + 1) !== -1
+    ) {
+      return {
+        ok: false,
+        message:
+          "One changed paragraph does not map to one exact bounded Google Docs range.",
+      };
+    }
+    replacementCharacters += replacementText.length;
+    if (replacementCharacters > MAX_CONFIRMED_REPLACEMENT_CHARS) {
+      return {
+        ok: false,
+        message:
+          "The combined replacement text is too large for one confirmed Google Docs operation.",
+      };
+    }
+    const startIndex = element.startIndex + offset;
+    edits.push({
+      startIndex,
+      endIndex: startIndex + expectedText.length,
+      expectedText,
+      replacementText,
+    });
+  }
+  if (edits.length === 0) {
+    return {
+      ok: false,
+      message: "The accepted correction does not change the document.",
+    };
+  }
+
+  return {
+    ok: true,
+    plan: Object.freeze({
+      documentId: parsedId.data,
+      revisionId: found.document.revisionId,
+      tabId: selected.tabId,
+      edits: Object.freeze(edits.map((edit) => Object.freeze(edit))),
+    }),
+  };
+}
+
+const confirmedEditPlanSchema = z
+  .object({
+    documentId: idSchema,
+    revisionId: z.string().min(1).max(4_096),
+    tabId: tabIdSchema,
+    edits: z
+      .array(
+        z
+          .object({
+            startIndex: z.number().int().min(1),
+            endIndex: z.number().int().min(2),
+            expectedText: z.string().min(1).max(MAX_REPLACE_RANGE),
+            replacementText: z.string().min(1).max(MAX_REPLACEMENT_CHARS),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(MAX_CONFIRMED_EDITS),
+  })
+  .strict();
+
+/** Apply a previously planned edit in one revision-fenced Google Docs batch. */
+export async function applyConfirmedDocumentEdit(
+  connection: Connection,
+  rawPlan: ConfirmedGoogleDocumentEditPlan,
+): Promise<ConfirmedGoogleDocumentApplyResult> {
+  const parsed = confirmedEditPlanSchema.safeParse(rawPlan);
+  if (!parsed.success) {
+    return {
+      text: "The stored Google Docs edit is invalid and was not sent.",
+      isError: true,
+      outcome: "not_applied",
+    };
+  }
+  const edits = [...parsed.data.edits].sort(
+    (left, right) => right.startIndex - left.startIndex,
+  );
+  for (let index = 0; index < edits.length; index += 1) {
+    const edit = edits[index] as (typeof edits)[number];
+    const next = edits[index + 1];
+    if (
+      edit.endIndex <= edit.startIndex ||
+      edit.endIndex - edit.startIndex !== edit.expectedText.length ||
+      edit.expectedText.includes("\n") ||
+      edit.replacementText.includes("\n") ||
+      (next !== undefined && next.endIndex > edit.startIndex)
+    ) {
+      return {
+        text: "The stored Google Docs ranges overlap or cross paragraph structure and were not sent.",
+        isError: true,
+        outcome: "not_applied",
+      };
+    }
+  }
+
+  const requests: Record<string, unknown>[] = [];
+  for (const edit of edits) {
+    requests.push({
+      deleteContentRange: {
+        range: {
+          startIndex: edit.startIndex,
+          endIndex: edit.endIndex,
+          tabId: parsed.data.tabId,
+        },
+      },
+    });
+    requests.push({
+      insertText: {
+        location: { index: edit.startIndex, tabId: parsed.data.tabId },
+        text: edit.replacementText,
+      },
+    });
+  }
+
+  const response = await request(
+    connection,
+    `/documents/${encodeURIComponent(parsed.data.documentId)}:batchUpdate`,
+    {
+      method: "POST",
+      body: {
+        requests,
+        writeControl: { requiredRevisionId: parsed.data.revisionId },
+      },
+    },
+  );
+  if (!response.ok) {
+    return {
+      text: response.message,
+      isError: true,
+      outcome: response.ambiguous ? "ambiguous" : "not_applied",
+    };
+  }
+  if (!mutationResponseSchema.safeParse(response.payload).success) {
+    return {
+      text: "Google Docs returned an unexpected response after the confirmed edit. The outcome is unknown and will not be retried automatically.",
+      isError: true,
+      outcome: "ambiguous",
+    };
+  }
+  return {
+    text: `Applied ${edits.length} confirmed paragraph ${edits.length === 1 ? "edit" : "edits"} to Google Docs.`,
+    isError: false,
+    outcome: "applied",
+  };
 }
 
 export async function callTool(

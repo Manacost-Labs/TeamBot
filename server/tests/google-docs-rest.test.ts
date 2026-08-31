@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { callTool, listTools } from "../src/plugins/google-docs-rest";
+import {
+  applyConfirmedDocumentEdit,
+  callTool,
+  listTools,
+  planConfirmedDocumentEdit,
+} from "../src/plugins/google-docs-rest";
 
 const CONNECTION = {
   url: "https://docs.googleapis.com/v1",
@@ -162,6 +167,51 @@ function documentFixture(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function editableDocumentFixture() {
+  return {
+    documentId: "doc_123",
+    title: "Editable",
+    revisionId: "confirmed-revision",
+    tabs: [
+      {
+        tabProperties: { tabId: "tab_main", title: "Main" },
+        documentTab: {
+          body: {
+            content: [
+              {
+                startIndex: 1,
+                endIndex: 7,
+                paragraph: {
+                  elements: [
+                    {
+                      startIndex: 1,
+                      endIndex: 7,
+                      textRun: { content: "Hello\n" },
+                    },
+                  ],
+                },
+              },
+              {
+                startIndex: 7,
+                endIndex: 13,
+                paragraph: {
+                  elements: [
+                    {
+                      startIndex: 7,
+                      endIndex: 13,
+                      textRun: { content: "world\n" },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      },
+    ],
+  };
+}
+
 describe("Google Docs tool contract", () => {
   test("advertises only implemented tools with policy-clear read/write names", async () => {
     const tools = await listTools(CONNECTION);
@@ -182,6 +232,105 @@ describe("Google Docs tool contract", () => {
 
   test("does not need a person's OAuth token just to list static tools", async () => {
     expect(await listTools({ url: CONNECTION.url })).toHaveLength(5);
+  });
+});
+
+describe("human-confirmed editor write-back", () => {
+  test("plans exact ranges and applies every change in one descending revision-fenced batch", async () => {
+    const calls = queueFetch(
+      { body: editableDocumentFixture() },
+      { body: { documentId: "doc_123", replies: [{}, {}, {}, {}] } },
+    );
+    const planned = await planConfirmedDocumentEdit(CONNECTION, {
+      documentId: "doc_123",
+      sourceText: "Hello\n\nworld",
+      candidateText: "Hello!\n\nworld!",
+    });
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) throw new Error(planned.message);
+    expect(planned.plan).toEqual({
+      documentId: "doc_123",
+      revisionId: "confirmed-revision",
+      tabId: "tab_main",
+      edits: [
+        {
+          startIndex: 1,
+          endIndex: 6,
+          expectedText: "Hello",
+          replacementText: "Hello!",
+        },
+        {
+          startIndex: 7,
+          endIndex: 12,
+          expectedText: "world",
+          replacementText: "world!",
+        },
+      ],
+    });
+
+    const applied = await applyConfirmedDocumentEdit(CONNECTION, planned.plan);
+    expect(applied).toEqual({
+      text: "Applied 2 confirmed paragraph edits to Google Docs.",
+      isError: false,
+      outcome: "applied",
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls[1].body).toEqual({
+      requests: [
+        {
+          deleteContentRange: {
+            range: { startIndex: 7, endIndex: 12, tabId: "tab_main" },
+          },
+        },
+        {
+          insertText: {
+            location: { index: 7, tabId: "tab_main" },
+            text: "world!",
+          },
+        },
+        {
+          deleteContentRange: {
+            range: { startIndex: 1, endIndex: 6, tabId: "tab_main" },
+          },
+        },
+        {
+          insertText: {
+            location: { index: 1, tabId: "tab_main" },
+            text: "Hello!",
+          },
+        },
+      ],
+      writeControl: { requiredRevisionId: "confirmed-revision" },
+    });
+  });
+
+  test("refuses lossy structure and reports a stale revision as not applied", async () => {
+    queueFetch({ body: documentFixture() });
+    const lossy = await planConfirmedDocumentEdit(CONNECTION, {
+      documentId: "doc_123",
+      sourceText: "anything",
+      candidateText: "something",
+    });
+    expect(lossy.ok).toBe(false);
+    if (lossy.ok) throw new Error("Expected a refusal");
+    expect(lossy.message).toContain("table");
+
+    queueFetch({ status: 409, body: { error: "stale" } });
+    const stale = await applyConfirmedDocumentEdit(CONNECTION, {
+      documentId: "doc_123",
+      revisionId: "old-revision",
+      tabId: "tab_main",
+      edits: [
+        {
+          startIndex: 1,
+          endIndex: 6,
+          expectedText: "Hello",
+          replacementText: "Hello!",
+        },
+      ],
+    });
+    expect(stale.outcome).toBe("not_applied");
+    expect(stale.isError).toBe(true);
   });
 });
 

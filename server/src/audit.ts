@@ -390,6 +390,11 @@ export const auditEventTypes = [
   "routine.enabled_changed",
   "routine.deleted",
   "routine.manual_run_requested",
+  "google_doc_edit.proposed",
+  "google_doc_edit.declined",
+  "google_doc_edit.applied",
+  "google_doc_edit.not_applied",
+  "google_doc_edit.ambiguous",
 ] as const;
 
 export type AuditEventType = (typeof auditEventTypes)[number];

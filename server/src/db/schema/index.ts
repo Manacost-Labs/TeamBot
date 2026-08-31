@@ -6,5 +6,6 @@ export * from "./components";
 export * from "./computer";
 export * from "./core";
 export * from "./coworker";
+export * from "./editor";
 export * from "./plugins";
 export * from "./work";

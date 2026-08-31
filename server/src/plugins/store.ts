@@ -38,9 +38,10 @@ import {
 } from "./catalogue";
 import {
   createGoogleAppendOperationStore,
-  planGoogleAppend,
   type GoogleAppendClaim,
+  planGoogleAppend,
 } from "./google-append-idempotency";
+import * as googleWorkspaceRest from "./google-workspace-rest";
 import { McpServerError } from "./mcp";
 import { registerDynamicClient } from "./oauth";
 import {
@@ -1536,6 +1537,112 @@ export function createPluginStore(options: PluginStoreOptions) {
     return { row, entry };
   }
 
+  const confirmedGoogleDocumentRef =
+    "google-drive/replace_google_doc_range" as const;
+
+  async function confirmedGoogleDocumentConnection(
+    input: TrustedToolCallContext & { operationId?: string },
+    phase: "prepare" | "apply",
+  ): Promise<VendorToolConnection> {
+    const serverId = "google-drive";
+    const toolName = "replace_google_doc_range";
+    const [grant] = await database
+      .select({ ref: pluginGrants.ref })
+      .from(pluginGrants)
+      .where(
+        and(
+          eq(pluginGrants.kind, "mcp"),
+          eq(pluginGrants.ref, confirmedGoogleDocumentRef),
+          eq(pluginGrants.agentId, input.botId),
+        ),
+      )
+      .limit(1);
+    if (!grant) {
+      const reason = `This Bot has not been given the tool ${confirmedGoogleDocumentRef}.`;
+      await recordAuditEvent(auditStore, {
+        eventType: "mcp.call_rejected",
+        targetType: "mcp_tool",
+        targetId: confirmedGoogleDocumentRef,
+        payload: {
+          actor: input.actorId,
+          bot: input.botId,
+          server: serverId,
+          tool: toolName,
+          phase,
+          operationId: input.operationId,
+          refusal: "not_granted",
+        },
+      });
+      throw new PluginRefusedError(reason, null);
+    }
+
+    const { row, entry } = await requireServer(serverId);
+    if (entry?.transport !== "google-workspace-rest") {
+      throw new PluginRefusedError(
+        "Confirmed Google Docs edits require the reviewed Google Workspace REST transport.",
+        null,
+      );
+    }
+    const [advertised] = await database
+      .select({ name: mcpTools.name })
+      .from(mcpTools)
+      .where(and(eq(mcpTools.serverId, serverId), eq(mcpTools.name, toolName)))
+      .limit(1);
+    if (!advertised) {
+      throw new PluginRefusedError(
+        "The confirmed Google Docs write tool is not available in this deployment.",
+        null,
+      );
+    }
+
+    const verdict = evaluateActionPolicy(options.policy(), {
+      tool: { name: toolNameFor(confirmedGoogleDocumentRef) },
+      bot: { id: input.botId },
+      actor: { id: input.actorId },
+      page: { url: "", host: "" },
+      element: { ref: "", role: "", name: "", type: "" },
+      key: "",
+      file: { path: "", name: "", extension: "" },
+      command: "",
+      intent: "write_tool",
+      mcp: { server: serverId, tool: toolName, effect: "write" },
+    });
+    if (!verdict.forward) {
+      await recordAuditEvent(auditStore, {
+        eventType: "mcp.call_rejected",
+        targetType: "mcp_tool",
+        targetId: confirmedGoogleDocumentRef,
+        payload: {
+          actor: input.actorId,
+          bot: input.botId,
+          server: serverId,
+          tool: toolName,
+          phase,
+          operationId: input.operationId,
+          decision: {
+            allowed: verdict.allowed,
+            mode: verdict.mode,
+            rule: verdict.matched,
+            source: verdict.source,
+            carriedOut: verdict.forward,
+          },
+        },
+      });
+      throw new PluginRefusedError(verdict.reason, verdict.matched);
+    }
+
+    const { token } = await connectionTokenFor(
+      row,
+      entry,
+      input.actorId,
+      toolName,
+    );
+    return vendorToolConnection(
+      { url: effectiveUrl(row, entry), token },
+      input,
+    );
+  }
+
   return {
     /**
      * Add a server from the catalogue.
@@ -2788,6 +2895,87 @@ export function createPluginStore(options: PluginStoreOptions) {
         };
       }
       return { allowed: true };
+    },
+
+    async planConfirmedGoogleDocumentEdit(
+      input: TrustedToolCallContext & {
+        documentId: string;
+        sourceText: string;
+        candidateText: string;
+      },
+    ): Promise<googleWorkspaceRest.ConfirmedGoogleDocumentPlanResult> {
+      const connection = await confirmedGoogleDocumentConnection(
+        input,
+        "prepare",
+      );
+      return googleWorkspaceRest.planConfirmedDocumentEdit(connection, {
+        documentId: input.documentId,
+        sourceText: input.sourceText,
+        candidateText: input.candidateText,
+      });
+    },
+
+    async applyConfirmedGoogleDocumentEdit(
+      input: TrustedToolCallContext & {
+        operationId: string;
+        plan: googleWorkspaceRest.ConfirmedGoogleDocumentEditPlan;
+      },
+    ): Promise<googleWorkspaceRest.ConfirmedGoogleDocumentApplyResult> {
+      const decided = {
+        actor: input.actorId,
+        bot: input.botId,
+        server: "google-drive",
+        tool: "replace_google_doc_range",
+        effect: "write",
+        operation: {
+          id: input.operationId,
+          documentId: input.plan.documentId,
+          tabId: input.plan.tabId,
+          editCount: input.plan.edits.length,
+        },
+      };
+      let connection: VendorToolConnection;
+      try {
+        connection = await confirmedGoogleDocumentConnection(input, "apply");
+      } catch (error) {
+        const result = {
+          text:
+            error instanceof Error
+              ? error.message
+              : "The confirmed edit could not be authorised.",
+          isError: true,
+          outcome: "not_applied" as const,
+        };
+        await recordAuditEvent(auditStore, {
+          eventType: "mcp.call_failed",
+          targetType: "mcp_tool",
+          targetId: confirmedGoogleDocumentRef,
+          payload: {
+            ...decided,
+            outcome: "not_applied",
+            failure: result.text.slice(0, 400),
+          },
+        }).catch(() => undefined);
+        return result;
+      }
+      const result = await googleWorkspaceRest.applyConfirmedDocumentEdit(
+        connection,
+        input.plan,
+      );
+      await recordAuditEvent(auditStore, {
+        eventType:
+          result.outcome === "applied"
+            ? "mcp.call_succeeded"
+            : "mcp.call_failed",
+        targetType: "mcp_tool",
+        targetId: confirmedGoogleDocumentRef,
+        payload: {
+          ...decided,
+          outcome: result.outcome,
+          ...(result.isError ? { failure: result.text.slice(0, 400) } : {}),
+        },
+      }).catch(() => undefined);
+      return result;
     },
 
     /**

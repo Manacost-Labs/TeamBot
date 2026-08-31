@@ -77,6 +77,7 @@ import {
   resolveModelApiKey,
 } from "./credentials";
 import { createDatabase } from "./db/client";
+import { createGoogleDocumentEditService } from "./editor/google-document-edits";
 import { createPeopleStore } from "./people/store";
 import { useArtifactTools } from "./plugins/builtin-artifacts";
 import { useConversationAttachmentTools } from "./plugins/builtin-conversation-attachments";
@@ -380,6 +381,12 @@ const pluginStore = createPluginStore({
    * registering.
    */
   redirectUri: config.publicUrl ? redirectUriFor(config.publicUrl) : undefined,
+});
+const googleDocumentEdits = createGoogleDocumentEditService({
+  database,
+  pluginStore,
+  encryptionKey: config.keyEncryptionKey,
+  auditStore: bootAuditStore,
 });
 
 /**
@@ -1145,6 +1152,7 @@ const app = createApp(
     blobs: attachmentBlobs,
     maxUploadBytes: config.attachments.maxBytes,
   },
+  googleDocumentEdits,
 );
 
 /**

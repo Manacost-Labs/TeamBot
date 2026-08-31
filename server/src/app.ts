@@ -42,6 +42,8 @@ import type { PolicyStore } from "./computer/policy-store";
 import { createComputerRoutes } from "./computer/routes";
 import { configuredAuthProviders, type DeploymentConfig } from "./config";
 import type { CredentialAdminService, CredentialInput } from "./credentials";
+import { createGoogleDocumentEditRoutes } from "./editor/google-document-edit-routes";
+import type { GoogleDocumentEditService } from "./editor/google-document-edits";
 import { createIntelligenceClient } from "./intelligence-client";
 import type { PeopleStore } from "./people/store";
 import { createPluginRoutes } from "./plugins/routes";
@@ -206,6 +208,8 @@ export function createApp(
   workspaceTimingStore: WorkspaceTimingStore = createWorkspaceTimingStore(),
   /** Private attachment routes; appended to preserve every existing positional call site. */
   attachmentRoutes?: AttachmentRouteDependencies,
+  /** Human-confirmed Google Docs write-back; appended to preserve positional call sites. */
+  googleDocumentEdits?: GoogleDocumentEditService,
 ) {
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -751,6 +755,21 @@ export function createApp(
     ? async (actor, botId) =>
         (await agentProfileStore.get(actor, botId)) !== null
     : async () => true;
+
+  if (googleDocumentEdits) {
+    app.route(
+      "/",
+      createGoogleDocumentEditRoutes({
+        service: googleDocumentEdits,
+        requireUser,
+        canUseBot,
+        encryptionKey: config.keyEncryptionKey,
+        legacyAgentToken: config.agentToolToken ?? "",
+        agentProfiles: agentProfileStore,
+        allowedOrigins: [config.appUrl, config.publicUrl],
+      }),
+    );
+  }
 
   // The Bot computer. Acting on a page needs the gateway and the policy it enforces, so both arrive
   // together or the routes are not mounted. An ungoverned computer is not a reduced feature. It is

@@ -253,6 +253,10 @@ services:
       EDITOR_PROVIDER: agui
       EDITOR_AGUI_URL: http://agent-codex:4202/ag-ui
       EDITOR_AGUI_TOKEN: ${MANAGED_AGENT_TOKEN}
+      # Candidate registration uses the same trusted service boundary as agent tool callbacks.
+      # The token stays in the gateway and is never forwarded to the editor model.
+      EDITOR_OPENBOT_URL: http://openbot:3001
+      EDITOR_OPENBOT_TOKEN: ${AGENT_TOOL_TOKEN}
       EDITOR_MODEL: gpt-5.6-luna
       EDITOR_REASONING_EFFORT: xhigh
       EDITOR_MAX_ATTEMPTS: "3"

@@ -111,3 +111,38 @@ export async function callTool(
   const { backend } = owners[0];
   return backend.callTool(forBackend(connection, backend), toolName, args);
 }
+
+/** Internal editor planner; deliberately absent from listTools and model discovery. */
+export async function planConfirmedDocumentEdit(
+  connection: Connection,
+  input: { documentId: string; sourceText: string; candidateText: string },
+): Promise<docs.ConfirmedGoogleDocumentPlanResult> {
+  const backend = BACKENDS.find((candidate) => candidate.name === "Docs");
+  if (!backend) {
+    return { ok: false, message: "Google Docs is unavailable in this build." };
+  }
+  return docs.planConfirmedDocumentEdit(forBackend(connection, backend), input);
+}
+
+/** Internal confirmed write; deliberately absent from listTools and model discovery. */
+export async function applyConfirmedDocumentEdit(
+  connection: Connection,
+  plan: docs.ConfirmedGoogleDocumentEditPlan,
+): Promise<docs.ConfirmedGoogleDocumentApplyResult> {
+  const backend = BACKENDS.find((candidate) => candidate.name === "Docs");
+  if (!backend) {
+    return {
+      text: "Google Docs is unavailable in this build.",
+      isError: true,
+      outcome: "not_applied",
+    };
+  }
+  return docs.applyConfirmedDocumentEdit(forBackend(connection, backend), plan);
+}
+
+export type {
+  ConfirmedGoogleDocumentApplyResult,
+  ConfirmedGoogleDocumentEdit,
+  ConfirmedGoogleDocumentEditPlan,
+  ConfirmedGoogleDocumentPlanResult,
+} from "./google-docs-rest";
