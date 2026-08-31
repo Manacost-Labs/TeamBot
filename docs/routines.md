@@ -7,10 +7,12 @@ the same way any other message from that Bot does.
 
 ## Creating one
 
-There is no form for this. Ask a Bot, in a channel: "every weekday at 9, post the standup notes
+There is no creation form. Ask a Bot, in a channel: "every weekday at 9, post the standup notes
 here." Turning a sentence into a five-field cron expression and a channel is conversational work, and
-that is what the conversation is for. The same Bot can list what is standing, change one, or delete
-one, all by being asked.
+that is what the conversation is for. Once created, the owner can edit the Employee, instruction,
+schedule, timezone, Target channel and overlap policy on the Routines page. Employee and channel are
+human-readable selectors; a channel is offered only when it is active and contains that employee.
+The same Bot can also list, change, or delete a routine when asked.
 
 **The prerequisite:** a Bot can only do this once an administrator has granted it to. Routines is a
 catalogue entry like any other — `create_routine`, `update_routine` and `delete_routine` are its write
@@ -63,23 +65,37 @@ carry it out is skipped, not just the one that was in flight.
 
 ## Overlap policy
 
-Every routine defaults to **skip**: if its previous run is still active, the new occurrence is
-recorded as skipped and no second turn starts. The edit dialog and the conversational tools can
-change this to **queue one**. In that mode the first overlapping occurrence is retained durably;
-later overlaps collapse into it, and the worker offers that one retained firing after the active run
-ends. Pausing the routine cancels the retained firing, and a manual **Run now** remains a 409-style
-refusal while either an active or retained run exists.
+The policy governs overlap between occurrences of the same routine:
+
+- **skip** (default) records a new occurrence as skipped while a previous run is active;
+- **queue one** retains the first overlapping occurrence durably, collapses later overlaps, and
+  offers that one retained firing after the active run ends. Pausing cancels the retained firing;
+- **allow overlap** admits every occurrence as its own run row and dispatches every one. Nothing is
+  collapsed or recorded as skipped merely because the previous occurrence is still active.
+
+A channel transcript still has one safe writer. Therefore **allow overlap** is parallel admission,
+not concurrent writes into one conversation: admitted turns wait for the canonical Intelligence
+thread lock and execute one at a time. The wait is cross-replica, retries only the expected 409 lock
+conflict every 500 ms, and is bounded at five minutes. History is read only after the lock is acquired,
+so each waiter sees the turn before it. A non-409 lock error fails immediately; a firing that cannot
+acquire the channel within five minutes is recorded as failed rather than waiting forever. True
+simultaneous transcript writes would require separate channel threads and are intentionally not
+implemented.
+
+Manual **Run now** follows the same policy: it remains a 409-style refusal while an active or retained
+run exists under **skip** or **queue one**, while **allow overlap** admits another run which waits for
+the same safe channel writer when necessary.
 
 Scheduled work items and run rows carry the same firing identity. A retry can therefore recognize a
 run it already opened and finish without dispatching the turn twice. The retained slot lives on the
 routine row, is updated under the existing per-routine advisory lock, and contains only an internal
 work key and scheduled timestamp — never the instruction or credentials.
 
-The storage enum reserves **allow overlap**, but the current API and tools refuse selecting it and
-the visual editor shows it as unavailable. A routine writes one durable conversation thread, whose
-platform lock is exclusive; pretending to overlap would only create a second run that fails that lock.
-True overlap requires an explicit product decision about separate thread identity, not a weakened
-lock in the scheduler.
+The overlap policy does not reserve capacity across different routines or a person's live browser
+turn. Those all share the same canonical thread lock. **allow overlap** waits as described above;
+other policies fail the turn if that separate channel writer owns the lock even when this routine has
+no earlier active occurrence. This constraint protects transcript ordering across every writer, not
+only the scheduler.
 
 ## The worker requirement
 
