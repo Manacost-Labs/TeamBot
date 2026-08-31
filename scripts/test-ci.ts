@@ -12,6 +12,7 @@
  */
 
 const MINIMUM_TESTS = 400;
+const NODE_SERVICE_SUITES = ["pdf-extractor", "artifact-renderer"] as const;
 
 // `bun run test` rather than `bun test`, so the pretest hook fires and the generated application
 // config exists before route imports need it.
@@ -49,3 +50,20 @@ if (count < MINIMUM_TESTS) {
 }
 
 console.error(`\n${count} tests ran (floor ${MINIMUM_TESTS}).`);
+
+// These two isolated services are Node applications and use node:test. Bun can discover those files,
+// but its compatibility layer does not preserve node:http upload-deadline behaviour and can leave the
+// shared test state nested after a timeout. Run each service with the runtime declared by its package
+// instead of silently dropping the service tests from the repository-wide gate.
+for (const service of NODE_SERVICE_SUITES) {
+  const serviceTests = Bun.spawn(["npm", "test"], {
+    cwd: service,
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  const serviceStatus = await serviceTests.exited;
+  if (serviceStatus !== 0) {
+    console.error(`\n${service} tests failed with exit code ${serviceStatus}.`);
+    process.exit(serviceStatus);
+  }
+}

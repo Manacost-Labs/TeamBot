@@ -16,7 +16,7 @@
     "format": "bunx biome format --write .",
     "format:check": "bunx biome format .",
     "lint": "bunx biome lint --error-on-warnings .",
-    "test": "bun test",
+    "test": "bun test --path-ignore-patterns 'pdf-extractor/**' --path-ignore-patterns 'artifact-renderer/**'",
     "typecheck": "bun run --filter '*' typecheck",
     "test:ci": "bun scripts/test-ci.ts",
     "pretest": "bun run generate:app-config",

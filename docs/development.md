@@ -105,7 +105,9 @@ They write to whichever database `DATABASE_URL` names and leave their rows behin
 them against a deployment you are using puts test Bots in its audit trail and its activity
 reports. Point `DATABASE_URL` at a database of their own to keep the two apart.
 
-CI uses `bun run test:ci` to verify the expected test count in addition to normal tests.
+CI uses `bun run test:ci` to verify the expected test count in addition to normal tests. The command
+also runs the isolated PDF extractor and artifact renderer suites with Node, which is the runtime
+declared by those services; `bun run test` intentionally excludes their `node:test` files.
 
 `bun run test:smoke` is separate and needs a deployment that is up:
 
