@@ -1,8 +1,13 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { Hono } from "hono";
+import type { AuditEventType, AuditStore } from "../audit";
+import { recordAuditEvent } from "../audit";
 import type { AppVariables } from "../auth/guards";
+import type { RoutineRunner } from "./runner";
 import {
   RoutineNotFoundError,
+  RoutineOverlapError,
+  type RoutinePatch,
   RoutineRefusedError,
   type RoutineRunOutcome,
   type RoutineStore,
@@ -11,18 +16,16 @@ import {
 
 export type { RoutineStore } from "./store";
 
+export type RoutineRouteOptions = {
+  runner?: RoutineRunner;
+  auditStore?: AuditStore;
+};
+
 /**
- * The routines page: what a person's standing instructions are, and a switch to stop one.
+ * The routines page API. Creation stays conversational through the four `RoutineTools`; once a
+ * routine exists, this owner-scoped surface lists, edits, pauses, runs and removes it.
  *
- * THERE IS DELIBERATELY NO CREATE AND NO EDIT ENDPOINT HERE. Making a routine and changing one are
- * conversational — the four `RoutineTools` a Bot calls mid-chat, in `plugins/builtin-routines.ts` —
- * because the hard part of both is turning a sentence into a cron expression and a channel, which
- * is exactly what a conversation is for. This surface answers a narrower question: what is standing,
- * and does it stay standing. So it shows and it stops; it does not compose.
- *
- * THERE IS ALSO NO GET-BY-ID. A routine id is never a page's own state — nothing links to one, and
- * nothing needs to fetch one in isolation — so the list is the read, the same way the channel
- * roster is a list with no companion single-channel screen.
+ * There is no GET-by-id: the list is the editable record, while `/:id/runs` is its bounded ledger.
  *
  * Owner-scoped through the store on every route, never by filtering a broader read afterwards:
  * `listFor`, `setEnabled` and `remove` all take the caller's id and answer as if a routine that
@@ -32,8 +35,39 @@ export type { RoutineStore } from "./store";
 export function createRoutineRoutes(
   routineStore: RoutineStore,
   requireUser: MiddlewareHandler<{ Variables: AppVariables }>,
+  options: RoutineRouteOptions = {},
 ) {
   const routes = new Hono<{ Variables: AppVariables }>();
+
+  /** Record only control metadata; instructions and schedule contents never enter the audit row. */
+  const record = async (
+    context: Context<{ Variables: AppVariables }>,
+    eventType: Extract<AuditEventType, `routine.${string}`>,
+    routineId: string,
+    payload: Record<string, unknown> = {},
+  ) => {
+    if (!options.auditStore) return;
+    try {
+      await recordAuditEvent(options.auditStore, {
+        eventType,
+        targetType: "routine",
+        targetId: routineId,
+        ...(context.var.actor.email === "dev@openbot.local"
+          ? {}
+          : { actorUserId: context.var.actor.id }),
+        payload,
+      });
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          type: "routine-audit-write-failed",
+          eventType,
+          routineId,
+          error: String(error),
+        }),
+      );
+    }
+  };
 
   routes.get("/", requireUser, async (context) => {
     const routines = await routineStore.listFor(context.var.actor.id);
@@ -53,7 +87,71 @@ export function createRoutineRoutes(
         context.req.param("id"),
         enabled,
       );
+      await record(
+        context,
+        "routine.enabled_changed",
+        context.req.param("id"),
+        { enabled },
+      );
       return context.json({ enabled });
+    } catch (error) {
+      return mapStoreError(context, error);
+    }
+  });
+
+  routes.patch("/:id", requireUser, async (context) => {
+    const parsed = parsePatch(await context.req.json().catch(() => null));
+    if (!parsed.ok) return context.json({ error: parsed.error }, 400);
+    const id = context.req.param("id");
+    try {
+      await routineStore.update(context.var.actor.id, id, parsed.patch);
+      await record(context, "routine.updated", id, {
+        fields: Object.keys(parsed.patch).sort(),
+      });
+      return context.json({ updated: true });
+    } catch (error) {
+      return mapStoreError(context, error);
+    }
+  });
+
+  routes.get("/:id/runs", requireUser, async (context) => {
+    if (!routineStore.listRunsFor) {
+      return context.json({ error: "Routine history is not available." }, 503);
+    }
+    try {
+      const runs = await routineStore.listRunsFor(
+        context.var.actor.id,
+        context.req.param("id"),
+        20,
+      );
+      return context.json({
+        runs: runs.map((run) => ({
+          id: run.id,
+          startedAt: run.startedAt.toISOString(),
+          finishedAt: run.finishedAt?.toISOString() ?? null,
+          status: run.status,
+          durationMs: run.durationMs,
+          error: run.errorSummary,
+        })),
+      });
+    } catch (error) {
+      return mapStoreError(context, error);
+    }
+  });
+
+  routes.post("/:id/run", requireUser, async (context) => {
+    if (!routineStore.insertManualRun || !options.runner) {
+      return context.json({ error: "Manual runs are not available." }, 503);
+    }
+    const id = context.req.param("id");
+    try {
+      const { runId } = await routineStore.insertManualRun(
+        context.var.actor.id,
+        id,
+      );
+      await record(context, "routine.manual_run_requested", id, { runId });
+      void options.runner.run(runId).catch(() => {});
+      return context.json({ accepted: true, runId }, 202);
     } catch (error) {
       return mapStoreError(context, error);
     }
@@ -61,7 +159,9 @@ export function createRoutineRoutes(
 
   routes.delete("/:id", requireUser, async (context) => {
     try {
-      await routineStore.remove(context.var.actor.id, context.req.param("id"));
+      const id = context.req.param("id");
+      await routineStore.remove(context.var.actor.id, id);
+      await record(context, "routine.deleted", id);
       return context.body(null, 204);
     } catch (error) {
       return mapStoreError(context, error);
@@ -83,19 +183,24 @@ export function createRoutineRoutes(
  */
 type RoutineDto = {
   id: string;
+  agentId: string;
   schedule: string;
+  cron: string;
   timezone: string;
   instruction: string;
   channel: { id: string; name: string | null; gone: boolean };
   enabled: boolean;
   nextRunAt: string;
   lastRun: { status: RoutineRunOutcome | null; at: string | null } | null;
+  overlapPolicy: "skip";
 };
 
 function routineDto(routine: RoutineSummary): RoutineDto {
   return {
     id: routine.id,
+    agentId: routine.agentId,
     schedule: routine.schedule,
+    cron: routine.cron,
     timezone: routine.timezone,
     instruction: routine.instruction,
     channel: {
@@ -111,7 +216,53 @@ function routineDto(routine: RoutineSummary): RoutineDto {
           at: routine.lastRun.finishedAt?.toISOString() ?? null,
         }
       : null,
+    overlapPolicy: "skip",
   };
+}
+
+type ParsedPatch =
+  | { ok: true; patch: RoutinePatch }
+  | { ok: false; error: string };
+
+function parsePatch(input: unknown): ParsedPatch {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return { ok: false, error: "Routine input must be a JSON object." };
+  }
+  const body = input as Record<string, unknown>;
+  const allowed = new Set([
+    "instruction",
+    "cron",
+    "timezone",
+    "channelId",
+    "enabled",
+  ]);
+  const unknown = Object.keys(body).find((key) => !allowed.has(key));
+  if (unknown)
+    return { ok: false, error: `Unknown routine field: ${unknown}.` };
+
+  const patch: RoutinePatch = {};
+  for (const field of [
+    "instruction",
+    "cron",
+    "timezone",
+    "channelId",
+  ] as const) {
+    if (body[field] === undefined) continue;
+    if (typeof body[field] !== "string") {
+      return { ok: false, error: `${field} must be text.` };
+    }
+    patch[field] = body[field];
+  }
+  if (body.enabled !== undefined) {
+    if (typeof body.enabled !== "boolean") {
+      return { ok: false, error: "enabled must be true or false." };
+    }
+    patch.enabled = body.enabled;
+  }
+  if (Object.keys(patch).length === 0) {
+    return { ok: false, error: "Say what to change about that routine." };
+  }
+  return { ok: true, patch };
 }
 
 function mapStoreError(context: Context, error: unknown): Response {
@@ -122,6 +273,9 @@ function mapStoreError(context: Context, error: unknown): Response {
   }
   if (error instanceof RoutineRefusedError) {
     return context.json({ error: error.message }, 400);
+  }
+  if (error instanceof RoutineOverlapError) {
+    return context.json({ error: error.message }, 409);
   }
   throw error;
 }

@@ -57,6 +57,14 @@ export class RoutineRefusedError extends Error {
   }
 }
 
+/** A second firing is refused while the first still owns this routine's thread. */
+export class RoutineOverlapError extends Error {
+  constructor(message = "That routine is already running.") {
+    super(message);
+    this.name = "RoutineOverlapError";
+  }
+}
+
 /** A person may keep this many routines switched on. A constant with a reason, not a setting. */
 export const MAX_ENABLED_ROUTINES = 20;
 /** Same code-point cap discipline as channel activity. */
@@ -116,6 +124,8 @@ export type RoutineSummary = {
    * and the sweep both derive from the expression itself.
    */
   schedule: string;
+  /** The authoritative five-field expression, exposed only to the authenticated edit form. */
+  cron: string;
   timezone: string;
   enabled: boolean;
   nextRunAt: Date;
@@ -126,6 +136,16 @@ export type RoutineSummary = {
   channelDeleted: boolean;
   /** The most recent firing, or null when it has never fired. */
   lastRun: { status: RoutineRunOutcome | null; finishedAt: Date | null } | null;
+};
+
+export type RoutineRunHistory = {
+  id: string;
+  startedAt: Date;
+  finishedAt: Date | null;
+  status: RoutineRunOutcome | null;
+  durationMs: number | null;
+  /** A deliberately coarse sentence; the stored provider error is never returned to the browser. */
+  errorSummary: string | null;
 };
 
 export type RoutineInput = {
@@ -170,6 +190,14 @@ export type RoutineStore = {
   ): Promise<Routine>;
   remove(ownerUserId: string, id: string): Promise<void>;
   setEnabled(ownerUserId: string, id: string, enabled: boolean): Promise<void>;
+  /** Owner-scoped history for the schedules page. */
+  listRunsFor?(
+    ownerUserId: string,
+    id: string,
+    limit: number,
+  ): Promise<RoutineRunHistory[]>;
+  /** Owner-scoped, overlap-safe opening for the explicit Run now action. */
+  insertManualRun?(ownerUserId: string, id: string): Promise<{ runId: string }>;
 
   /* The sweep's half. Deliberately not owner-scoped — see the boundary comment below. */
 
@@ -184,8 +212,8 @@ export type RoutineStore = {
    * clock caught up — so the sweep passes `now` here and one advance makes the clock current.
    */
   advanceNextRun(id: string, from: Date, computeFrom?: Date): Promise<boolean>;
-  /** Open a run row. Its status stays null until something finishes it. */
-  insertRun(routineId: string): Promise<{ runId: string }>;
+  /** Open a scheduled run, or record a skip when the previous run is still active. */
+  insertRun(routineId: string): Promise<{ runId: string; skipped?: boolean }>;
   /**
    * The runner's read: an opened run row, joined to the routine it fires.
    *
@@ -271,6 +299,46 @@ function validInstruction(instruction: string): string {
 }
 
 /**
+ * Convert an internal/provider failure into a sentence safe for a member-facing run history.
+ *
+ * Provider errors may contain request fragments, URLs or credential-adjacent details. The database
+ * keeps the capped original for operators, while the schedules page gets only a small vocabulary of
+ * actionable categories. Unknown errors stay unknown instead of becoming an accidental log viewer.
+ */
+export function safeRoutineRunError(error: string | null): string | null {
+  if (!error) return null;
+  const normalized = error.toLowerCase();
+  if (
+    normalized.includes("invalid_grant") ||
+    normalized.includes("oauth") ||
+    normalized.includes("authorization expired") ||
+    (normalized.includes("google") && normalized.includes("authoriz"))
+  ) {
+    return "Google authorization needs to be reconnected.";
+  }
+  if (
+    normalized.includes("timeout") ||
+    normalized.includes("timed out") ||
+    normalized.includes("deadline")
+  ) {
+    return "The run timed out.";
+  }
+  if (normalized.includes("channel is gone")) {
+    return "The target channel is unavailable.";
+  }
+  if (normalized.includes("already running")) {
+    return "Skipped because the previous run was still active.";
+  }
+  if (normalized.includes("too long after the occurrence")) {
+    return "The scheduled time was missed while the worker was unavailable.";
+  }
+  if (normalized.includes("switched off") || normalized.includes("disabled")) {
+    return "The routine was paused before it could run.";
+  }
+  return "The run did not complete.";
+}
+
+/**
  * The schedule module owns both acceptance and the next occurrence, so its refusal sentence is the
  * one a person should read. It is carried through verbatim rather than reworded here: a model that
  * gets "Routines may run at most every 15 minutes" can propose a schedule that works, and a model
@@ -314,6 +382,52 @@ function nameThem(candidates: { id: string; name: string }[]): string {
 }
 
 export function createRoutineStore(database: Database): RoutineStore {
+  /**
+   * Open exactly one run per routine at a time.
+   *
+   * The advisory lock is shared by scheduled and manual openings. It closes the race where a click
+   * and a worker both observe no open row and start two turns on the same channel thread. Scheduled
+   * overlap is a finished `skipped` ledger row; an explicit click gets a 409-shaped error instead.
+   */
+  async function openRun(
+    handle: Transaction,
+    routineId: string,
+    overlap: "record-skip" | "refuse",
+  ): Promise<{ runId: string; skipped?: boolean }> {
+    await handle.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${`routine-run-${routineId}`}))`,
+    );
+    const open = await handle
+      .select({ id: routineRuns.id })
+      .from(routineRuns)
+      .where(
+        and(eq(routineRuns.routineId, routineId), isNull(routineRuns.status)),
+      )
+      .limit(1);
+    if (open.length > 0 && overlap === "refuse") {
+      throw new RoutineOverlapError();
+    }
+
+    const runId = `routine_run_${crypto.randomUUID()}`;
+    const skipped = open.length > 0;
+    const [row] = await handle
+      .insert(routineRuns)
+      .values({
+        id: runId,
+        routineId,
+        ...(skipped
+          ? {
+              status: "skipped" as const,
+              finishedAt: sql`now()`,
+              error: "another run was already running",
+            }
+          : {}),
+      })
+      .returning({ id: routineRuns.id });
+    if (!row) throw new Error("inserting a routine run returned no row");
+    return { runId: row.id, ...(skipped ? { skipped: true } : {}) };
+  }
+
   /**
    * Where the reply lands, decided here rather than at the tool boundary.
    *
@@ -612,6 +726,7 @@ export function createRoutineStore(database: Database): RoutineStore {
           agentId: routine.agentId,
           instruction: routine.instruction,
           schedule: describeCron(routine.cron),
+          cron: routine.cron,
           timezone: routine.timezone,
           enabled: routine.enabled,
           nextRunAt: routine.nextRunAt,
@@ -636,6 +751,48 @@ export function createRoutineStore(database: Database): RoutineStore {
       // One field through the same path, so enabling re-checks the cap and recomputes the next run
       // rather than having a second, quieter version of those rules.
       await update(ownerUserId, id, { enabled });
+    },
+
+    async listRunsFor(ownerUserId, id, limit) {
+      await loadOwned(ownerUserId, id);
+      const boundedLimit = Math.max(1, Math.min(50, Math.trunc(limit)));
+      const rows = await database
+        .select({
+          id: routineRuns.id,
+          startedAt: routineRuns.startedAt,
+          finishedAt: routineRuns.finishedAt,
+          status: routineRuns.status,
+          error: routineRuns.error,
+        })
+        .from(routineRuns)
+        .where(eq(routineRuns.routineId, id))
+        .orderBy(desc(routineRuns.startedAt), desc(routineRuns.id))
+        .limit(boundedLimit);
+      return rows.map((run) => ({
+        id: run.id,
+        startedAt: run.startedAt,
+        finishedAt: run.finishedAt,
+        status: run.status,
+        durationMs: run.finishedAt
+          ? Math.max(0, run.finishedAt.getTime() - run.startedAt.getTime())
+          : null,
+        errorSummary: safeRoutineRunError(run.error),
+      }));
+    },
+
+    async insertManualRun(ownerUserId, id) {
+      return await database.transaction(async (transaction) => {
+        const owned = await transaction
+          .select({ id: routines.id })
+          .from(routines)
+          .where(
+            and(eq(routines.id, id), eq(routines.ownerUserId, ownerUserId)),
+          )
+          .limit(1);
+        if (owned.length === 0) throw new RoutineNotFoundError();
+        const opened = await openRun(transaction, id, "refuse");
+        return { runId: opened.runId };
+      });
     },
 
     /* =========================================================================================
@@ -722,15 +879,9 @@ export function createRoutineStore(database: Database): RoutineStore {
     },
 
     async insertRun(routineId) {
-      const runId = `routine_run_${crypto.randomUUID()}`;
-      // `startedAt` defaults to the database's now, and `status` stays null: null is the in-flight
-      // state, which is the reason that column is nullable rather than defaulted to something.
-      const [row] = await database
-        .insert(routineRuns)
-        .values({ id: runId, routineId })
-        .returning({ id: routineRuns.id });
-      if (!row) throw new Error("inserting a routine run returned no row");
-      return { runId: row.id };
+      return await database.transaction((transaction) =>
+        openRun(transaction, routineId, "record-skip"),
+      );
     },
 
     async runContext(runId) {

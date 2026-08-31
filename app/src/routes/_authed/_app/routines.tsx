@@ -8,11 +8,8 @@ import { RoutinesList } from "@/components/routines/routines-list";
  * `_authed/_app`, not Admin: a routine is something anybody has, the same way a skill is — it is
  * scoped to the signed-in person on every read and write, not to the deployment.
  *
- * THERE IS DELIBERATELY NO CREATE AND NO EDIT FORM ON THIS PAGE. Turning a sentence into a cron
- * expression and a channel is conversational work — ask a Bot in a channel, "every weekday at 9,
- * post the standup notes here" — and that is exactly what a conversation is for. This screen answers
- * a narrower question: what is standing right now, and does it stay standing. It shows and it stops;
- * it does not compose. Absent on purpose, not an omission.
+ * Creation remains conversational, while this page owns the operational controls a person needs
+ * after creation: edit, pause/resume, run now, history and deletion.
  */
 export const Route = createFileRoute("/_authed/_app/routines")({
   component: RoutinesPage,

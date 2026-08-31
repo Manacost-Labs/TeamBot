@@ -5,9 +5,8 @@ import { routineKeys } from "./queries";
 /**
  * Writes against a person's own standing instructions.
  *
- * THERE IS NO CREATE AND NO EDIT HERE, on purpose: this page only shows and stops. Making a routine
- * and changing one are conversational, through the `RoutineTools` a Bot calls mid-chat — see
- * `server/src/routines/routes.ts` for the full reasoning.
+ * Creation remains conversational through `RoutineTools`; direct controls here edit an existing
+ * routine, pause/resume it, run it now and remove it.
  */
 
 const FALLBACK = "That routine could not be changed.";
@@ -37,5 +36,39 @@ export function deleteRoutineMutationOptions(queryClient: QueryClient) {
         fallback: FALLBACK,
       }),
     onSuccess: () => invalidateRoutines(queryClient),
+  });
+}
+
+export type RoutineUpdate = {
+  id: string;
+  instruction: string;
+  cron: string;
+  timezone: string;
+};
+
+export function updateRoutineMutationOptions(queryClient: QueryClient) {
+  return mutationOptions({
+    mutationFn: ({ id, ...body }: RoutineUpdate) =>
+      client(`/api/routines/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body,
+        fallback: FALLBACK,
+      }),
+    onSuccess: () => invalidateRoutines(queryClient),
+  });
+}
+
+export function runRoutineNowMutationOptions(queryClient: QueryClient) {
+  return mutationOptions({
+    mutationFn: (id: string) =>
+      client(`/api/routines/${encodeURIComponent(id)}/run`, {
+        method: "POST",
+        fallback: "That routine could not be started.",
+      }),
+    onSuccess: (_data, id) =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: routineKeys.list() }),
+        queryClient.invalidateQueries({ queryKey: routineKeys.runs(id) }),
+      ]),
   });
 }

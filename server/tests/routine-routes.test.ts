@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
+import type { AuditEventInput, AuditStore } from "../src/audit";
 import type { AppVariables } from "../src/auth/guards";
 import { createRoutineRoutes } from "../src/routines/routes";
 import {
   RoutineNotFoundError,
+  RoutineOverlapError,
   RoutineRefusedError,
   type RoutineStore,
   type RoutineSummary,
@@ -22,6 +24,7 @@ function summary(overrides: Partial<RoutineSummary> = {}): RoutineSummary {
     agentId: "agent-1",
     instruction: "Post the weather every weekday morning.",
     schedule: "Weekdays at 09:00",
+    cron: "0 9 * * 1-5",
     timezone: "UTC",
     enabled: true,
     nextRunAt: new Date("2026-08-27T09:00:00.000Z"),
@@ -97,9 +100,10 @@ const denied: MiddlewareHandler<{ Variables: AppVariables }> = (context) =>
 function appFor(
   store: RoutineStore,
   middleware: MiddlewareHandler<{ Variables: AppVariables }> = requireUser,
+  options: Parameters<typeof createRoutineRoutes>[2] = {},
 ) {
   const app = new Hono<{ Variables: AppVariables }>();
-  app.route("/", createRoutineRoutes(store, middleware));
+  app.route("/", createRoutineRoutes(store, middleware, options));
   return app;
 }
 
@@ -117,13 +121,16 @@ describe("GET /", () => {
       routines: [
         {
           id: "routine-1",
+          agentId: "agent-1",
           schedule: "Weekdays at 09:00",
+          cron: "0 9 * * 1-5",
           timezone: "UTC",
           instruction: "Post the weather every weekday morning.",
           channel: { id: "channel-1", name: "Assistant channel", gone: false },
           enabled: true,
           nextRunAt: "2026-08-27T09:00:00.000Z",
           lastRun: { status: "succeeded", at: "2026-08-26T09:00:00.000Z" },
+          overlapPolicy: "skip",
         },
       ],
     });
@@ -168,13 +175,14 @@ describe("GET /", () => {
     });
   });
 
-  test("the DTO carries the schedule as words and never a cron field", async () => {
+  test("the DTO carries both display words and authoritative cron for editing", async () => {
     const store = fakeStore();
     const response = await appFor(store).request("http://openbot.test/");
     const body = await json(response);
 
     expect(body.routines[0].schedule).toBe("Weekdays at 09:00");
-    expect(JSON.stringify(body)).not.toContain("cron");
+    expect(body.routines[0].cron).toBe("0 9 * * 1-5");
+    expect(body.routines[0].overlapPolicy).toBe("skip");
   });
 
   test("refuses without a session, before the store is asked", async () => {
@@ -185,6 +193,182 @@ describe("GET /", () => {
 
     expect(response.status).toBe(401);
     expect(store.calls).toEqual([]);
+  });
+});
+
+describe("PATCH /:id", () => {
+  test("updates through the owner and audits field names without field contents", async () => {
+    const updates: unknown[] = [];
+    const events: AuditEventInput[] = [];
+    const store = fakeStore({
+      async update(ownerUserId, id, patch) {
+        updates.push([ownerUserId, id, patch]);
+        return {} as never;
+      },
+    });
+    const auditStore: AuditStore = {
+      insert: async (event) => {
+        events.push(event);
+      },
+    };
+    const response = await appFor(store, requireUser, { auditStore }).request(
+      "http://openbot.test/routine-1",
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          instruction: "private scheduled instruction",
+          cron: "30 8 * * 1-5",
+          timezone: "Europe/Warsaw",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(updates).toEqual([
+      [
+        actor.id,
+        "routine-1",
+        {
+          instruction: "private scheduled instruction",
+          cron: "30 8 * * 1-5",
+          timezone: "Europe/Warsaw",
+        },
+      ],
+    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      eventType: "routine.updated",
+      targetType: "routine",
+      targetId: "routine-1",
+      actorUserId: actor.id,
+      payload: { fields: ["cron", "instruction", "timezone"] },
+    });
+    const auditJson = JSON.stringify(events);
+    expect(auditJson).not.toContain("private scheduled instruction");
+    expect(auditJson).not.toContain("30 8 * * 1-5");
+    expect(auditJson).not.toContain("Europe/Warsaw");
+  });
+
+  test("rejects unknown fields before touching the store or audit", async () => {
+    const store = fakeStore();
+    const events: AuditEventInput[] = [];
+    const response = await appFor(store, requireUser, {
+      auditStore: { insert: async (event) => void events.push(event) },
+    }).request("http://openbot.test/routine-1", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agentId: "somebody-else" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(events).toEqual([]);
+  });
+});
+
+describe("GET /:id/runs", () => {
+  test("returns bounded safe history through an owner-scoped read", async () => {
+    const calls: unknown[] = [];
+    const store = fakeStore({
+      async listRunsFor(ownerUserId, id, limit) {
+        calls.push([ownerUserId, id, limit]);
+        return [
+          {
+            id: "run-1",
+            startedAt: new Date("2026-08-27T09:00:00.000Z"),
+            finishedAt: new Date("2026-08-27T09:00:38.000Z"),
+            status: "failed",
+            durationMs: 38_000,
+            errorSummary: "Google authorization needs to be reconnected.",
+          },
+        ];
+      },
+    });
+    const response = await appFor(store).request(
+      "http://openbot.test/routine-1/runs",
+    );
+
+    expect(response.status).toBe(200);
+    expect(calls).toEqual([[actor.id, "routine-1", 20]]);
+    expect(await json(response)).toEqual({
+      runs: [
+        {
+          id: "run-1",
+          startedAt: "2026-08-27T09:00:00.000Z",
+          finishedAt: "2026-08-27T09:00:38.000Z",
+          status: "failed",
+          durationMs: 38_000,
+          error: "Google authorization needs to be reconnected.",
+        },
+      ],
+    });
+  });
+});
+
+describe("POST /:id/run", () => {
+  test("opens one owner-scoped run, audits safe metadata, and uses the routine runner", async () => {
+    const opened: unknown[] = [];
+    const ran: string[] = [];
+    const events: AuditEventInput[] = [];
+    const store = fakeStore({
+      async insertManualRun(ownerUserId, id) {
+        opened.push([ownerUserId, id]);
+        return { runId: "run-manual-1" };
+      },
+    });
+    const response = await appFor(store, requireUser, {
+      runner: { run: async (id) => void ran.push(id) },
+      auditStore: { insert: async (event) => void events.push(event) },
+    }).request("http://openbot.test/routine-1/run", { method: "POST" });
+
+    expect(response.status).toBe(202);
+    expect(opened).toEqual([[actor.id, "routine-1"]]);
+    expect(ran).toEqual(["run-manual-1"]);
+    expect(events).toEqual([
+      {
+        eventType: "routine.manual_run_requested",
+        targetType: "routine",
+        targetId: "routine-1",
+        actorUserId: actor.id,
+        payload: { runId: "run-manual-1" },
+      },
+    ]);
+  });
+
+  test("returns conflict and starts nothing when the routine is already running", async () => {
+    const ran: string[] = [];
+    const events: AuditEventInput[] = [];
+    const store = fakeStore({
+      async insertManualRun() {
+        throw new RoutineOverlapError();
+      },
+    });
+    const response = await appFor(store, requireUser, {
+      runner: { run: async (id) => void ran.push(id) },
+      auditStore: { insert: async (event) => void events.push(event) },
+    }).request("http://openbot.test/routine-1/run", { method: "POST" });
+
+    expect(response.status).toBe(409);
+    expect(ran).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  test("authentication runs before an owner or runner can be touched", async () => {
+    const opened: string[] = [];
+    const ran: string[] = [];
+    const store = fakeStore({
+      async insertManualRun() {
+        opened.push("opened");
+        return { runId: "run-1" };
+      },
+    });
+    const response = await appFor(store, denied, {
+      runner: { run: async (id) => void ran.push(id) },
+    }).request("http://openbot.test/routine-1/run", { method: "POST" });
+
+    expect(response.status).toBe(401);
+    expect(opened).toEqual([]);
+    expect(ran).toEqual([]);
   });
 });
 

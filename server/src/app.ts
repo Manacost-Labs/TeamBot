@@ -851,7 +851,13 @@ export function createApp(
   }
 
   if (routineStore) {
-    app.route("/api/routines", createRoutineRoutes(routineStore, requireUser));
+    app.route(
+      "/api/routines",
+      createRoutineRoutes(routineStore, requireUser, {
+        runner: routineRunner,
+        auditStore,
+      }),
+    );
   }
 
   if (componentStore) {

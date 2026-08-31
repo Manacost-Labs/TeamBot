@@ -12,7 +12,9 @@ import { client } from "@/lib/client";
  */
 export type RoutineRecord = {
   id: string;
+  agentId: string;
   schedule: string;
+  cron: string;
   timezone: string;
   instruction: string;
   channel: { id: string; name: string | null; gone: boolean };
@@ -27,11 +29,22 @@ export type RoutineRecord = {
     status: "succeeded" | "failed" | "skipped" | null;
     at: string | null;
   } | null;
+  overlapPolicy: "skip";
+};
+
+export type RoutineRunRecord = {
+  id: string;
+  startedAt: string;
+  finishedAt: string | null;
+  status: "succeeded" | "failed" | "skipped" | null;
+  durationMs: number | null;
+  error: string | null;
 };
 
 export const routineKeys = {
   all: ["routines"] as const,
   list: () => ["routines", "list"] as const,
+  runs: (id: string) => ["routines", id, "runs"] as const,
 };
 
 /**
@@ -47,5 +60,17 @@ export function routinesQueryOptions() {
       client("/api/routines", "routines", {
         fallback: "Your routines could not be loaded.",
       }),
+  });
+}
+
+export function routineRunsQueryOptions(id: string | null) {
+  return queryOptions({
+    queryKey: routineKeys.runs(id ?? "closed"),
+    enabled: id !== null,
+    queryFn: (): Promise<RoutineRunRecord[]> =>
+      client(`/api/routines/${encodeURIComponent(id ?? "")}/runs`, "runs", {
+        fallback: "Routine history could not be loaded.",
+      }),
+    refetchInterval: 10_000,
   });
 }

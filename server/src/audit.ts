@@ -386,6 +386,10 @@ export const auditEventTypes = [
    * withholds; the offered credential never does.
    */
   "routines.dispatch_refused",
+  "routine.updated",
+  "routine.enabled_changed",
+  "routine.deleted",
+  "routine.manual_run_requested",
 ] as const;
 
 export type AuditEventType = (typeof auditEventTypes)[number];
