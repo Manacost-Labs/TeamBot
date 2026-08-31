@@ -307,16 +307,9 @@ describe("granting one Bot to another", () => {
   });
 });
 
-/**
- * A grant that could never do anything.
- *
- * Handing work to another Bot is a tool this deployment executes, so it can only be offered to a run
- * this deployment builds. A Bot at its own endpoint runs its own loop and is handed descriptions of
- * what it may call back for; there is no callback path that would execute a hop. Stored anyway, the
- * grant reads as configured and nothing ever happens.
- */
+/** A remote AG-UI Bot calls deployment-owned handoff tools back with its signed run assertion. */
 describe("granting a hop to a Bot that runs somewhere else", () => {
-  test("is refused, and says why", async () => {
+  test("is stored so the callback can offer it on the next run", async () => {
     const { calls, app } = grantsApp();
 
     const response = await app.request(
@@ -332,9 +325,8 @@ describe("granting a hop to a Bot that runs somewhere else", () => {
       },
     );
 
-    expect(response.status).toBe(403);
-    expect((await response.json()).error).toContain("its own endpoint");
-    expect(calls).toEqual([]);
+    expect(response.status).toBe(200);
+    expect(calls).toEqual([{ verb: "grant", kind: "bot", ref: "knowledge" }]);
   });
 
   test("a Bot nobody has heard of is refused too", async () => {
@@ -424,10 +416,12 @@ describe("what a bot grant refusal reveals", () => {
     );
   });
 
-  test("an administrator still gets the reason", async () => {
-    expect((await refusalFor("at-an-endpoint", "admin")).body.error).toContain(
-      "its own endpoint",
-    );
+  test("an administrator may grant a remote Bot, but still sees a missing one", async () => {
+    const remote = await refusalFor("at-an-endpoint", "admin");
+    expect(remote.status).toBe(200);
+    expect(remote.calls).toEqual([
+      { verb: "grant", kind: "bot", ref: "knowledge" },
+    ]);
     expect((await refusalFor("never-registered", "admin")).body.error).toBe(
       "There is no such Bot.",
     );

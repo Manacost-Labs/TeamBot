@@ -180,6 +180,7 @@ services:
       dockerfile: agent-codex/Dockerfile
     restart: unless-stopped
     environment:
+      <<: *research-provider-credentials
       PORT: "4202"
       MANAGED_AGENT_TOKEN: ${MANAGED_AGENT_TOKEN}
       AGENT_TOOL_TOKEN: ${AGENT_TOOL_TOKEN}

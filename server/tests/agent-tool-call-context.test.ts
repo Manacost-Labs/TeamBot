@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { z } from "zod";
 import { mintRunAssertion } from "../src/agents/callback-token";
-import { createApp } from "../src/app";
+import { type CallbackRunTools, createApp } from "../src/app";
 import { loadConfig } from "../src/config";
+import type { GrantedTool } from "../src/plugins/tools";
 import { vendorToolConnection } from "../src/plugins/transport";
 import { testEnvironment } from "./support/environment";
 
@@ -16,7 +18,7 @@ type CapturedCall = {
   threadId?: string;
 };
 
-function testApp(calls: CapturedCall[]) {
+function testApp(calls: CapturedCall[], callbackRunTools?: CallbackRunTools) {
   const config = loadConfig(
     testEnvironment({ AGENT_TOOL_TOKEN: LEGACY_TOKEN }),
   );
@@ -42,6 +44,18 @@ function testApp(calls: CapturedCall[]) {
     undefined, // auditStore
     undefined, // componentStore
     pluginStore as never,
+    undefined, // sandboxedStore
+    undefined, // threadIdentity
+    undefined, // peopleStore
+    undefined, // identityProviders
+    undefined, // intentRouter
+    undefined, // pageFrames
+    undefined, // routineRunner
+    undefined, // routineStore
+    undefined, // workspaceTimingStore
+    undefined, // attachmentRoutes
+    undefined, // googleDocumentEdits
+    callbackRunTools,
   ];
   return {
     app: createApp(...args),
@@ -97,6 +111,72 @@ describe("the trusted context of an agent tool call", () => {
         threadId: "signed-thread",
       },
     ]);
+  });
+
+  test("rebuilds a remote handoff tool only from the signed run", async () => {
+    const calls: CapturedCall[] = [];
+    const trustedRuns: Parameters<CallbackRunTools>[0][] = [];
+    const executed: unknown[] = [];
+    const callbackTool: GrantedTool = {
+      ref: "bot/message_bot",
+      name: "message_bot",
+      description: "Hand work to another Bot.",
+      parameters: z.object({ bot: z.string(), task: z.string() }),
+      execute: async (args) => {
+        executed.push(args);
+        return "sent securely";
+      },
+    };
+    const { app, config } = testApp(calls, async (run) => {
+      trustedRuns.push(run);
+      return [callbackTool];
+    });
+    const args = {
+      bot: "Editor",
+      task: "Tighten the copy",
+      actorId: "forged-actor",
+      botId: "forged-bot",
+      depth: 99,
+    };
+    const run = mintRunAssertion(
+      {
+        actorId: "signed-actor",
+        botId: "signed-bot",
+        runId: "signed-run",
+        threadId: "signed-thread",
+        depth: 2,
+      },
+      config.keyEncryptionKey,
+    );
+
+    const response = await app.request(
+      "http://openbot.test/api/agent-tools/call",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-openbot-agent-token": LEGACY_TOKEN,
+        },
+        body: JSON.stringify({ name: "message_bot", args, run }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      text: "sent securely",
+      isError: false,
+    });
+    expect(trustedRuns).toEqual([
+      {
+        actorId: "signed-actor",
+        botId: "signed-bot",
+        runId: "signed-run",
+        threadId: "signed-thread",
+        depth: 2,
+      },
+    ]);
+    expect(executed).toEqual([args]);
+    expect(calls).toEqual([]);
   });
 
   test("is copied to a transport connection without consulting tool arguments", () => {

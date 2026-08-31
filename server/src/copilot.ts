@@ -477,22 +477,16 @@ async function buildAgent(
 
   if (agent.type === "remote_ag_ui") {
     /*
-     * The remote path narrows inside its own middleware rather than by being wrapped.
+     * The remote path narrows and adds run-scoped handoff tools inside its own middleware rather
+     * than by being wrapped.
      *
      * `.use()` middleware is applied by `runAgent`, not by `run`, so an outer agent delegating to
      * `remote.run(input)` skips it: the endpoint would get a run with no standing role, no holdings
      * message, no tools and no signed assertion, and every one of those failures is silent.
      *
-     * WHICH IS ALSO WHY A REMOTE BOT IS OFFERED NEITHER `message_bot` NOR `ask_person`. Both are
-     * executed here, by the wrapper below, against this deployment's grants and caps. A Bot at an
-     * endpoint runs its own loop and is handed descriptions of tools it may call back for, and the
-     * callback path executes MCP refs only — so a described `message_bot` would be a tool it could
-     * announce and never invoke. Granting one is refused at the door rather than stored dead: see
-     * `enablementRefusal` in plugins/routes.ts.
-     *
-     * Making this work is a feature rather than a fix: the callback would have to carry a run
-     * assertion the endpoint cannot forge, and execute a hop on its behalf. Worth doing; not done
-     * here, and worth knowing it is missing rather than assuming it is not.
+     * Remote Bots call every deployment-owned tool back through `/api/agent-tools/call`. That route
+     * rebuilds these two tools from the signed run assertion, so their grants, actor, thread and
+     * depth are never taken from model output and a revoked grant applies to the next call.
      */
     return remoteAgentWithStandingRole(
       agent,
@@ -502,6 +496,7 @@ async function buildAgent(
       connectedVendors,
       narrowing ? offeredFor : undefined,
       agentFetch,
+      handoff,
     );
   }
 
@@ -634,6 +629,8 @@ function remoteAgentWithStandingRole(
   narrow?: (input: RunAgentInput) => Promise<GrantedTool[]>,
   /** The fetch this agent is dialled with. See {@link buildAgents}. */
   agentFetch?: AgentFetch,
+  /** Run-scoped handoff and escalation tools, executed by this deployment on callback. */
+  handoff?: HandoffForRun,
 ) {
   const remote = new HttpAgent({
     url: agent.endpoint,
@@ -769,9 +766,14 @@ function remoteAgentWithStandingRole(
    */
   remote.use((input, next) =>
     defer(() =>
-      from(narrow ? narrow(input) : Promise.resolve(tools)).pipe(
-        switchMap((offered) => runWith(offered, input, next)),
-      ),
+      from(
+        Promise.all([
+          narrow ? narrow(input) : Promise.resolve(tools),
+          handoff?.(agent.id, input) ?? Promise.resolve([]),
+        ]).then(([offered, passing]) =>
+          passing.length > 0 ? [...offered, ...passing] : offered,
+        ),
+      ).pipe(switchMap((offered) => runWith(offered, input, next))),
     ),
   );
 

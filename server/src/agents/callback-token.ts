@@ -193,6 +193,8 @@ export type CallVerdict =
       actorId: string;
       runId: string;
       threadId?: string;
+      /** Trusted chain depth, carried into server-side handoff tools. */
+      depth: number;
     }
   | { ok: false; status: 401 | 403; reason: string };
 
@@ -266,5 +268,6 @@ export async function authoriseAgentCall(options: {
     actorId: assertion.actorId,
     runId: assertion.runId,
     ...(assertion.threadId ? { threadId: assertion.threadId } : {}),
+    depth: assertion.depth ?? 0,
   };
 }

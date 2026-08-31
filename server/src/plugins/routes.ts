@@ -708,15 +708,10 @@ export function createPluginRoutes(
       if (intent === "revoke") return null;
 
       /*
-       * A grant that could never do anything is refused rather than stored, from both ends.
-       *
-       * The GRANTEE has to run here, because handing work on is a tool this deployment executes: a
-       * Bot at an endpoint runs its own loop and is handed descriptions of what it may call back
-       * for, and there is no callback path that would execute a hop.
-       *
-       * The TARGET only has to exist. Being handed work is not the same as being able to hand it on,
-       * so a target at its own endpoint is perfectly ordinary — but `ref` is bare text with no
-       * foreign key, so a typo stored happily and every hop then refused as not-granted.
+       * Both Bots have to exist. Either may run at its own AG-UI endpoint: the grantee receives a
+       * run-scoped `message_bot` description and calls this deployment back with the signed run,
+       * while the target is delivered through the same runtime path as an ordinary conversation.
+       * `ref` is bare text with no foreign key, so validate it before storing a dead grant.
        */
       /*
        * A Bot cannot be granted itself. The desk refuses a self-hop outright — "a Bot cannot hand
@@ -725,11 +720,8 @@ export function createPluginRoutes(
       if (ref === agentId) {
         return "A Bot cannot be granted itself to hand work to.";
       }
-      const runsHere = await store.agentRunsHere(agentId);
-      if (runsHere === undefined) return "There is no such Bot.";
-      if (!runsHere) {
-        return `${agentId} runs at its own endpoint, so this deployment cannot offer it a tool for handing work on. Only a Bot that runs here can be given one.`;
-      }
+      if (!(await store.agentIsRegistered(agentId)))
+        return "There is no such Bot.";
       if (!(await store.agentIsRegistered(ref))) {
         return `There is no Bot called ${ref} to hand work to.`;
       }

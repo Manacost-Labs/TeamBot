@@ -5,7 +5,11 @@ import {
 } from "@copilotkit/runtime/v2";
 import { serve } from "bun";
 import { COMPUTER_GUIDANCE } from "../../shared/bot-prompt";
-import { mintRunAssertion, readRunAssertion } from "./agents/callback-token";
+import {
+  mintRunAssertion,
+  type RunAssertion,
+  readRunAssertion,
+} from "./agents/callback-token";
 import { createAgentFetch } from "./agents/endpoint";
 import { askTheirOwnPerson, escalationTool } from "./agents/escalation";
 import { createHandoffDesk } from "./agents/handoff";
@@ -799,6 +803,55 @@ const routineRunner = createRoutineRunner({
 });
 
 /**
+ * Rebuild the tools that reach beyond one Bot from trusted run identity.
+ *
+ * Shared by built-in runs and remote AG-UI callbacks so both paths enforce the same grants, caps,
+ * queue and audit behaviour. Callers must supply values this deployment authenticated or signed.
+ */
+const handoffToolsForRun = async (run: RunAssertion) => {
+  /*
+   * The caps are checked BEFORE the grants query, not inside the tool that would discard it.
+   *
+   * `handoffTool` short-circuits on all three of these, but only after being handed a
+   * `hasSomebodyToAsk` that costs a query. So a deployment which switched the capability off still
+   * paid one grants read per run of every Bot, for a tool it was never going to be offered, and a
+   * run already at the cap paid it again.
+   */
+  const couldHandOn =
+    config.handoff.maxDepth > 0 &&
+    config.handoff.maxPerRun > 0 &&
+    (run.depth ?? 0) < config.handoff.maxDepth;
+
+  const passing = couldHandOn
+    ? handoffTool({
+        desk: handoffDesk,
+        from: run,
+        // Read now rather than at boot, so a grant made a minute ago counts and one revoked a
+        // minute ago stops counting.
+        hasSomebodyToAsk:
+          (
+            await pluginStore
+              .botsReachableFrom(run.botId)
+              .catch(() => [] as string[])
+          ).length > 0,
+        maxDepth: config.handoff.maxDepth,
+        maxPerRun: config.handoff.maxPerRun,
+      })
+    : null;
+
+  /*
+   * The way to stop and ask is offered whether or not there is a Bot to hand to. It costs no second
+   * model run and cannot be aimed anywhere outside the conversation.
+   */
+  const asking = escalationTool({
+    from: run,
+    route: askTheirOwnPerson,
+    auditStore: bootAuditStore,
+  });
+  return passing ? [passing, asking] : [asking];
+};
+
+/**
  * The runtime, and the two things beside it a hop needs.
  *
  * `agentFor` builds the addressed Bot exactly the way a person's run builds it, and `history` reads
@@ -836,65 +889,14 @@ const copilotRuntime = mountCopilotRuntime(
         ?.openbotRun,
       config.keyEncryptionKey,
     );
-    const run = {
+    const run: RunAssertion = {
       botId,
       actorId,
       runId: input.runId,
       threadId: input.threadId,
       depth: from?.depth ?? 0,
     };
-    /*
-     * The caps are checked BEFORE the grants query, not inside the tool that would discard it.
-     *
-     * `handoffTool` short-circuits on all three of these, but only after being handed a
-     * `hasSomebodyToAsk` that costs a query. So a deployment which switched the capability off
-     * still paid one grants read per run of every Bot, for a tool it was never going to be offered,
-     * and a run already at the cap paid it again.
-     */
-    const couldHandOn =
-      config.handoff.maxDepth > 0 &&
-      config.handoff.maxPerRun > 0 &&
-      run.depth < config.handoff.maxDepth;
-
-    const passing = couldHandOn
-      ? handoffTool({
-          desk: handoffDesk,
-          /*
-           * How deep this run already is comes from the assertion the deployment signed when it handed
-           * this work on. A run a person started carries none, and none means zero.
-           *
-           * NOT `from.botId`. The assertion proves what this run is, and the Bot is whichever one the
-           * runtime is building right now: on a hop those agree, and taking the id from the signed
-           * value rather than from the build would let a stale assertion aim the next hop at the
-           * wrong Bot's grants.
-           */
-          from: run,
-          // Read now rather than at boot, so a grant made a minute ago counts and one revoked a
-          // minute ago stops counting.
-          hasSomebodyToAsk:
-            (
-              await pluginStore
-                .botsReachableFrom(botId)
-                .catch(() => [] as string[])
-            ).length > 0,
-          maxDepth: config.handoff.maxDepth,
-          maxPerRun: config.handoff.maxPerRun,
-        })
-      : null;
-    /*
-     * The way to stop and ask is offered whether or not there is a Bot to hand to.
-     *
-     * It is the cheaper of the two and the one a Bot should reach for first: asking the person who
-     * is already in the conversation spends nothing and cannot be aimed anywhere they cannot see.
-     * A deployment that offered only the expensive exit would push every unanswerable question
-     * sideways into another run.
-     */
-    const asking = escalationTool({
-      from: run,
-      route: askTheirOwnPerson,
-      auditStore: bootAuditStore,
-    });
-    return passing ? [passing, asking] : [asking];
+    return handoffToolsForRun(run);
   },
   undefined,
   prepareRunInputForActor,
@@ -1153,6 +1155,8 @@ const app = createApp(
     maxUploadBytes: config.attachments.maxBytes,
   },
   googleDocumentEdits,
+  // Remote AG-UI Bots execute handoff and escalation here, from the signed callback context.
+  handoffToolsForRun,
 );
 
 /**

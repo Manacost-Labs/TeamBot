@@ -526,6 +526,43 @@ describe("a remote Bot", () => {
     expect(offered).toContain("mcp__drive__tool_7");
   });
 
+  test("is sent run-scoped handoff tools for signed callbacks", async () => {
+    const passing: GrantedTool = {
+      ref: "bot/message_bot",
+      name: "message_bot",
+      description: "Hand this work to another Bot.",
+      parameters: z.object({ bot: z.string(), task: z.string() }),
+      execute: async () => "sent",
+    };
+    const agents = await buildAgents(
+      [remoteAgent()],
+      model,
+      "test-key",
+      undefined,
+      async () => [],
+      () => "signed-assertion",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      async (botId, input) => {
+        expect(botId).toBe("risk");
+        expect(input.runId).toBeTruthy();
+        return [passing];
+      },
+    );
+
+    await ask(agents.risk as never, "ask the specialist");
+
+    expect(sentToRemote[0]?.tools).toContain("message_bot");
+    expect(sentToRemote[0]?.forwardedProps?.openbotDeploymentTools).toContain(
+      "message_bot",
+    );
+    expect(sentToRemote[0]?.forwardedProps?.openbotRun).toBe(
+      "signed-assertion",
+    );
+  });
+
   test("still gets its standing role, its holdings and its signed run", async () => {
     /*
      * THIS IS THE TEST THAT CAUGHT THE REAL BUG. Narrowing was first built by wrapping the agent and

@@ -210,16 +210,11 @@ afterAll(async () => {
    * use. This suite did exactly that once: it ran, and a Bot silently stopped being able to search
    * Drive, with an audit row showing the grant had been made and nothing showing it removed.
    *
-   * The primary key is (kind, ref, agent_id). Two of the three are not a row.
+   * The suite-scoped Bot ids are the boundary, so this also removes its Bot-to-Bot grant.
    */
   await database
     .delete(pluginGrants)
-    .where(
-      and(
-        eq(pluginGrants.ref, ref),
-        inArray(pluginGrants.agentId, [holderId, strangerId]),
-      ),
-    );
+    .where(inArray(pluginGrants.agentId, [holderId, strangerId]));
   // Suite-scoped, so it is this suite's whatever else is true of the server.
   await database
     .delete(mcpTools)
@@ -245,6 +240,12 @@ afterAll(async () => {
 });
 
 describe("a grant is the permission", () => {
+  test("a remote AG-UI Bot can read the Bots it may hand work to", async () => {
+    await store.grant("bot", strangerId, holderId, "admin@openbot.local");
+
+    expect(await store.botsReachableFrom(holderId)).toContain(strangerId);
+  });
+
   test("a Bot that was never granted a tool is refused, and the refusal is recorded", async () => {
     await expect(
       store.callTool({

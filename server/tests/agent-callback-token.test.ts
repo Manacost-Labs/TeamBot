@@ -131,6 +131,7 @@ describe("who may call a tool back, and as whom", () => {
       botId: AGENT_A,
       actorId: "visitor_9",
       runId: "r1",
+      depth: 0,
     });
   });
 
@@ -184,6 +185,7 @@ describe("who may call a tool back, and as whom", () => {
       botId: AGENT_A,
       actorId: "visitor_9",
       runId: "r1",
+      depth: 0,
     });
   });
 
@@ -207,6 +209,7 @@ describe("who may call a tool back, and as whom", () => {
       actorId: "visitor_9",
       runId: "run_with_files",
       threadId: "thread_with_files",
+      depth: 0,
     });
   });
 

@@ -48,7 +48,7 @@ import { createIntelligenceClient } from "./intelligence-client";
 import type { PeopleStore } from "./people/store";
 import { createPluginRoutes } from "./plugins/routes";
 import type { PluginStore } from "./plugins/store";
-import { REFUSAL_MARKER } from "./plugins/tools";
+import { type GrantedTool, REFUSAL_MARKER } from "./plugins/tools";
 import { createRoutineRoutes, type RoutineStore } from "./routines/routes";
 import type { RoutineRunner } from "./routines/runner";
 import type { IntentRouter } from "./routing/classify";
@@ -85,6 +85,23 @@ async function recordPersonEvent(
     payload: { email: person.email, ...payload },
   });
 }
+
+/**
+ * Server-side tools reconstructed from the run assertion of a remote AG-UI callback.
+ *
+ * The callback route supplies only values this deployment signed. The remote process contributes
+ * the tool name and its arguments, but never the Bot, person, thread or handoff depth.
+ */
+export type CallbackRunTools = (run: {
+  botId: string;
+  actorId: string;
+  runId: string;
+  threadId?: string;
+  depth: number;
+}) => Promise<readonly GrantedTool[]>;
+
+/** Names owned by the run callback rather than by an MCP server. */
+const CALLBACK_RUN_TOOL_NAMES = new Set(["message_bot", "ask_person"]);
 
 export function createApp(
   config: DeploymentConfig,
@@ -210,6 +227,8 @@ export function createApp(
   attachmentRoutes?: AttachmentRouteDependencies,
   /** Human-confirmed Google Docs write-back; appended to preserve positional call sites. */
   googleDocumentEdits?: GoogleDocumentEditService,
+  /** Run-scoped tools for remote AG-UI callbacks; appended to preserve positional call sites. */
+  callbackRunTools?: CallbackRunTools,
 ) {
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -998,6 +1017,31 @@ export function createApp(
       }
 
       try {
+        /*
+         * A remote AG-UI Bot runs its own model loop, but `message_bot` and `ask_person` belong to
+         * this deployment: they use its queue, grants, caps and audit trail. Rebuild them from the
+         * signed run on every callback so revocation and depth limits apply immediately. A tool not
+         * returned here falls through to the ordinary plugin store and its normal refusal path.
+         */
+        const callbackTool =
+          callbackRunTools && CALLBACK_RUN_TOOL_NAMES.has(body.name)
+            ? (
+                await callbackRunTools({
+                  botId: verdict.botId,
+                  actorId: verdict.actorId,
+                  runId: verdict.runId,
+                  ...(verdict.threadId ? { threadId: verdict.threadId } : {}),
+                  depth: verdict.depth,
+                })
+              ).find((tool) => tool.name === body.name)
+            : undefined;
+        if (callbackTool) {
+          return context.json({
+            text: await callbackTool.execute(body.args ?? {}),
+            isError: false,
+          });
+        }
+
         const result = await pluginStore.callTool({
           // The model is offered `mcp__server__tool`; the store speaks `server/tool`.
           ref: body.name.replace(/^mcp__/, "").replace("__", "/"),
