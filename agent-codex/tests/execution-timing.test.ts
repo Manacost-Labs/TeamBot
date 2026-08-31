@@ -263,6 +263,7 @@ describe("agent-codex execution timing", () => {
       sink: (record) => records.push(record),
     });
     let releaseRun = () => {};
+    let settled = 0;
     let markStarted = () => {};
     let markFinished = () => {};
     const started = new Promise<void>((resolve) => {
@@ -274,6 +275,9 @@ describe("agent-codex execution timing", () => {
 
     const response = createAgentResponse(input, {
       timing,
+      onSettled: () => {
+        settled += 1;
+      },
       run: async () => {
         markStarted();
         await new Promise<void>((resolve) => {
@@ -287,6 +291,7 @@ describe("agent-codex execution timing", () => {
     expect(reader).toBeDefined();
     await reader?.read();
     await reader?.cancel();
+    expect(settled).toBe(0);
     releaseRun();
     await finished;
     await Promise.resolve();
@@ -295,6 +300,7 @@ describe("agent-codex execution timing", () => {
       records.filter((record) => record.phase === "stream_cancelled"),
     ).toHaveLength(1);
     expect(records.map((record) => record.phase)).toContain("run_completed");
+    expect(settled).toBe(1);
   });
 });
 

@@ -5,6 +5,7 @@ import type {
   ExecutionTimingRecord,
 } from "../src/execution-timing";
 import { createAgentRequestHandler } from "../src/request-handler";
+import { RunAdmission } from "../src/run-admission";
 
 const TOKEN = "managed-test-token";
 
@@ -134,5 +135,49 @@ describe("agent-codex request boundary", () => {
     ]);
     expect(records.at(-1)?.errorType).toBe("InvalidRequest");
     expect(JSON.stringify(records)).not.toContain("PRIVATE");
+  });
+
+  test("returns an explicit 429 without starting a run when admission is full", async () => {
+    const admission = new RunAdmission({
+      globalLimit: 1,
+      perAgentLimit: 1,
+      queueLimit: 0,
+      maxWaitMs: 1_000,
+      sink: () => {},
+    });
+    let settleFirst: (() => void) | undefined;
+    let starts = 0;
+    const handle = createAgentRequestHandler({
+      managedAgentToken: TOKEN,
+      agentId: "agent-codex",
+      admission,
+      respond: (_input, _timing, onSettled) => {
+        starts += 1;
+        settleFirst ??= onSettled;
+        return new Response(null, { status: 202 });
+      },
+    });
+    const body = JSON.stringify({
+      threadId: "thread-admission",
+      runId: "run-admission",
+      state: {},
+      messages: [],
+      tools: [],
+      context: [],
+      forwardedProps: { openbotBotId: "editor" },
+    });
+
+    expect((await handle(request(body))).status).toBe(202);
+    const refused = await handle(request(body));
+    expect(refused.status).toBe(429);
+    expect(refused.headers.get("retry-after")).toBe("5");
+    expect(await refused.json()).toEqual({
+      error: "Managed run queue is full.",
+    });
+    expect(starts).toBe(1);
+
+    settleFirst?.();
+    expect((await handle(request(body))).status).toBe(202);
+    expect(starts).toBe(2);
   });
 });

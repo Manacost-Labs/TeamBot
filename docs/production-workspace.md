@@ -148,9 +148,15 @@ ATTACHMENT_STORAGE_DIR=/var/lib/openbot/attachments
 ATTACHMENT_MAX_BYTES=26214400
 ARTIFACT_RENDERER_URL=http://artifact-renderer:8080
 SERVER_INTERNAL_URL=http://127.0.0.1:3001
+CODEX_MAX_ACTIVE_RUNS=4
+CODEX_MAX_ACTIVE_RUNS_PER_AGENT=2
+CODEX_MAX_QUEUED_RUNS=32
+CODEX_MAX_QUEUE_WAIT_MS=60000
 ```
 
 Также явно задаются URL CopilotKit Intelligence, модели и допустимые уровни reasoning/effort, если они отличаются от проектных defaults.
+
+`agent-codex` допускает одновременно не больше `CODEX_MAX_ACTIVE_RUNS` процессов и не больше `CODEX_MAX_ACTIVE_RUNS_PER_AGENT` процессов одного агента. Остальные запросы ждут в ограниченной очереди. Переполнение возвращает HTTP 429, превышение времени ожидания — HTTP 503; оба ответа содержат `Retry-After`. Отмена HTTP-потока освобождает слот только после фактического завершения процесса Codex, поэтому счётчик не занижает реальную нагрузку. `/health` показывает только безопасные счётчики и лимиты в поле `managedRuns`, без пользовательского содержимого.
 
 `OPENBOT_PUBLIC_URL` определяет OAuth callback. `OPENBOT_APP_URL` определяет, куда браузер вернётся после callback. Оба значения должны указывать на фактически доступный origin и совпадать с настройками reverse proxy.
 

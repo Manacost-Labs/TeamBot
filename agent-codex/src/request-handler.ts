@@ -6,13 +6,24 @@ import {
   createAgentExecutionTiming,
   type ExecutionTimingRecord,
 } from "./execution-timing";
+import {
+  type RunAdmission,
+  RunQueueAbortedError,
+  RunQueueFullError,
+  RunQueueTimeoutError,
+} from "./run-admission";
 
 type AgentRequestHandlerOptions = {
   managedAgentToken: string;
   agentId: string;
   now?: () => number;
   sink?: (record: ExecutionTimingRecord) => void;
-  respond?: (input: RunAgentInput, timing: AgentExecutionTiming) => Response;
+  admission?: RunAdmission;
+  respond?: (
+    input: RunAgentInput,
+    timing: AgentExecutionTiming,
+    onSettled: () => void,
+  ) => Response;
 };
 
 /**
@@ -45,13 +56,27 @@ function invalidFields(
   ];
 }
 
+function admissionAgentId(input: RunAgentInput, fallback: string): string {
+  const forwarded = input.forwardedProps as
+    | { openbotBotId?: unknown }
+    | undefined;
+  const candidate = forwarded?.openbotBotId;
+  return typeof candidate === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(candidate)
+    ? candidate
+    : fallback;
+}
+
 /** Authenticate, parse and validate one AG-UI request while timing even pre-run failures. */
 export function createAgentRequestHandler(options: AgentRequestHandlerOptions) {
   const now = options.now ?? (() => performance.now());
   const respond =
     options.respond ??
-    ((input: RunAgentInput, timing: AgentExecutionTiming) =>
-      createAgentResponse(input, { timing }));
+    ((
+      input: RunAgentInput,
+      timing: AgentExecutionTiming,
+      onSettled: () => void,
+    ) => createAgentResponse(input, { timing, onSettled }));
 
   return async (request: Request): Promise<Response> => {
     const receivedAt = now();
@@ -90,6 +115,54 @@ export function createAgentRequestHandler(options: AgentRequestHandlerOptions) {
 
     timing.correlate(parsed.data, options.agentId);
     timing.record("request_accepted");
-    return respond(parsed.data, timing);
+    let release = () => {};
+    if (options.admission) {
+      try {
+        const lease = await options.admission.acquire(
+          admissionAgentId(parsed.data, options.agentId),
+          request.signal,
+        );
+        release = lease.release;
+      } catch (error) {
+        const queueFailure =
+          error instanceof RunQueueFullError
+            ? {
+                status: 429,
+                errorType: "RunQueueFull",
+                message: "Managed run queue is full.",
+              }
+            : error instanceof RunQueueTimeoutError
+              ? {
+                  status: 503,
+                  errorType: "RunQueueTimeout",
+                  message: "Managed run queue timed out.",
+                }
+              : error instanceof RunQueueAbortedError
+                ? {
+                    status: 499,
+                    errorType: "RunQueueAborted",
+                    message: "Managed run request was cancelled.",
+                  }
+                : undefined;
+        if (!queueFailure) throw error;
+        timing.record("run_error", { errorType: queueFailure.errorType });
+        return Response.json(
+          { error: queueFailure.message },
+          {
+            status: queueFailure.status,
+            ...(queueFailure.status === 499
+              ? {}
+              : { headers: { "retry-after": "5" } }),
+          },
+        );
+      }
+    }
+
+    try {
+      return respond(parsed.data, timing, release);
+    } catch (error) {
+      release();
+      throw error;
+    }
   };
 }

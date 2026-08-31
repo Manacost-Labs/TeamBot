@@ -14,6 +14,8 @@ export type AgentRun = (
 export type AgentResponseOptions = {
   timing: AgentExecutionTiming;
   run?: AgentRun;
+  /** Called only when the real run settles, not when an HTTP consumer disconnects. */
+  onSettled?: () => void;
 };
 
 /** Translate a Codex app-server run into genuine AG-UI deltas without manufacturing progress events. */
@@ -159,7 +161,11 @@ export function createAgentResponse(
         });
       } finally {
         clearInterval(keepAlive);
-        output.close();
+        try {
+          output.close();
+        } finally {
+          options.onSettled?.();
+        }
       }
     },
     cancel() {
