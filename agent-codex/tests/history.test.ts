@@ -226,6 +226,26 @@ describe("Codex prompt translation", () => {
     expect([...deploymentToolNames(input)]).toEqual(["allowed"]);
   });
 
+  test("requires an explicit governed handoff when message_bot is offered", () => {
+    const withHandoff = {
+      ...input,
+      forwardedProps: { openbotDeploymentTools: ["message_bot"] },
+    } as unknown as RunAgentInput;
+
+    expect(instructionsFor(withHandoff)).toContain(
+      "call `message_bot` exactly once",
+    );
+    expect(instructionsFor(withHandoff)).toContain(
+      "An @mention of another Bot",
+    );
+    expect(instructionsFor(withHandoff)).toContain(
+      "Never claim a handoff succeeded",
+    );
+    expect(instructionsFor(input)).not.toContain(
+      "call `message_bot` exactly once",
+    );
+  });
+
   test("keeps data-control history bounded to the last outcome and current firing", () => {
     const dataControl = {
       ...input,

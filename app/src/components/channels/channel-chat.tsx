@@ -13,7 +13,10 @@ import {
   takeFirstMessage,
   transcriptMessages,
 } from "@/components/channels/transcript-messages";
-import { agentListQueryOptions } from "@/lib/agents/queries";
+import {
+  agentHandoffQueryOptions,
+  agentListQueryOptions,
+} from "@/lib/agents/queries";
 import {
   type AttachmentDescriptor,
   attachmentRefsFromContent,
@@ -105,8 +108,13 @@ export function ChannelChat({
   }, []);
   // The core attaches the frontend tool registry; direct agent runs do not.
   const { copilotkit } = useCopilotKit();
-  // Mentions are scoped to the channel's permitted agents.
+  // Mentions include this channel and the coworkers its Bot may hand work to.
   const { data: agentProfiles } = useQuery(agentListQueryOptions());
+  const { data: handoff } = useQuery(agentHandoffQueryOptions(runtimeAgentId));
+  const reachableHandoffIds = handoff?.enabled ? handoff.reachable : [];
+  const mentionAgentIds = [
+    ...new Set([...channel.agentIds, ...reachableHandoffIds]),
+  ];
   const { agent, isReady } = useAgent({
     agentId: `channel:${channel.id}`,
     runtimeAgentId,
@@ -872,7 +880,7 @@ export function ChannelChat({
   return (
     <ConversationProvider ask={askFromComponent}>
       <ConversationView
-        agents={toAgentOptions(agentProfiles, channel.agentIds)}
+        agents={toAgentOptions(agentProfiles, mentionAgentIds)}
         /*
          * THE TURN, not the run. `say` waits for the runtime agent and the join before a run starts,
          * and `agent.isRunning` alone leaves that gap unmarked — which is the one moment the
@@ -918,10 +926,9 @@ export function ChannelChat({
           </>
         }
         onSubmit={async (draft, attachments) => {
-          // `draft.agentId` carries the @mentioned coworker, but nothing routes on it yet: this
-          // channel is pinned to one `runtimeAgentId` for the life of its thread, so honouring a
-          // per-message mention is a change to that binding, not to the composer.
-          //
+          // A reachable @mention stays in the person's visible message. The current Bot receives
+          // that message with its governed `message_bot` tool and performs the signed handoff; the
+          // channel itself remains bound to this Bot and never impersonates the selected coworker.
           // `commandIds` are the `/` chips that survived into the send, in the order they were
           // typed. Resolved against the same list the menu was built from, so a chip left over from
           // a skill that has since been revoked resolves to nothing rather than to a stale

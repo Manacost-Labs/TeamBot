@@ -127,8 +127,15 @@ export function instructionsFor(input: RunAgentInput): string {
               "Use only the OpenBot tools supplied as dynamic tools. Never use built-in shell, filesystem, patch, web, app, MCP, skill, or delegation tools. The OpenBot tools are the governed boundary for every action.",
             ];
 
+  const handoffInstructions = deploymentToolNames(input).has("message_bot")
+    ? [
+        "An administrator has permitted this Bot to hand work to at least one coworker through the governed `message_bot` tool. A grant is permission, not an automatic workflow. An @mention of another Bot in the latest user message is an explicit routing choice: call `message_bot` exactly once for that named Bot, preserve the person's constraints and requested output, and do not do the receiving coworker's work yourself. Do the same when the person explicitly asks to pass or delegate work without using @. Never claim a handoff succeeded until the tool reports success; on refusal, explain that nothing was sent.",
+      ]
+    : [];
+
   return [
     ...runtimeInstructions,
+    ...handoffInstructions,
     COMPUTER_GUIDANCE,
     PROVENANCE_GUIDANCE,
     supplied,
