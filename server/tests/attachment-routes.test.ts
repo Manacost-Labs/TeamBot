@@ -817,6 +817,11 @@ describe("attachment download route", () => {
 describe("artifact preview route", () => {
   test.each([
     ["text/markdown", "text/markdown; charset=utf-8"],
+    ["text/plain", "text/plain; charset=utf-8"],
+    ["application/json", "text/plain; charset=utf-8"],
+    ["text/csv", "text/plain; charset=utf-8"],
+    ["image/svg+xml", "text/plain; charset=utf-8"],
+    ["text/html", "text/plain; charset=utf-8"],
     ["application/pdf", "application/pdf"],
   ])(
     "streams a private generated %s artifact inline",
@@ -848,13 +853,13 @@ describe("artifact preview route", () => {
     },
   );
 
-  test("does not open user uploads or unsupported active content", async () => {
+  test("does not open user uploads or unsupported content", async () => {
     for (const unavailable of [
       attachment,
       {
         ...attachment,
         messageId: "artifact:10000000-0000-4000-8000-000000000002",
-        mimeType: "text/html",
+        mimeType: "image/png",
         source: "agent_generated" as const,
       },
     ]) {

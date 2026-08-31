@@ -21,6 +21,15 @@ import { AttachmentValidationError } from "./validation";
 const DEFAULT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 const MAX_PAGE_SIZE = 100;
 const MAX_MULTIPART_OVERHEAD_BYTES = 64 * 1024;
+const ARTIFACT_PREVIEW_MIME_TYPES = new Set([
+  "text/markdown",
+  "text/plain",
+  "application/json",
+  "text/csv",
+  "image/svg+xml",
+  "text/html",
+  "application/pdf",
+]);
 
 type AttachmentReadStore = Pick<AttachmentStore, "delete" | "get" | "list">;
 type AttachmentBlobReader = {
@@ -493,9 +502,16 @@ function isPreviewableArtifact(record: AttachmentRecord): boolean {
   return (
     record.source === "agent_generated" &&
     record.messageId?.startsWith("artifact:") === true &&
-    (record.mimeType === "text/markdown" ||
-      record.mimeType === "application/pdf")
+    ARTIFACT_PREVIEW_MIME_TYPES.has(record.mimeType)
   );
+}
+
+function artifactPreviewContentType(mimeType: string): string {
+  if (mimeType === "application/pdf") return mimeType;
+  if (mimeType === "text/markdown") return "text/markdown; charset=utf-8";
+  // HTML and SVG are deliberately source previews. text/plain prevents parsing, script execution,
+  // resource requests, cookies and storage even if the model-authored bytes contain active markup.
+  return "text/plain; charset=utf-8";
 }
 
 export function createAttachmentRoutes(
@@ -610,10 +626,7 @@ export function createAttachmentRoutes(
             "content-disposition": encodedFilename(record.name, "inline"),
             "content-length": String(record.size),
             "content-security-policy": "default-src 'none'; sandbox",
-            "content-type":
-              record.mimeType === "text/markdown"
-                ? "text/markdown; charset=utf-8"
-                : "application/pdf",
+            "content-type": artifactPreviewContentType(record.mimeType),
             "cross-origin-resource-policy": "same-origin",
             "referrer-policy": "no-referrer",
             "x-content-type-options": "nosniff",

@@ -29,6 +29,18 @@ describe("built-in artifact transport", () => {
       "mimeType",
     ]);
     expect(tool?.inputSchema.oneOf).toHaveLength(2);
+    const properties = tool?.inputSchema.properties as
+      | { mimeType?: { enum?: unknown } }
+      | undefined;
+    expect(properties?.mimeType?.enum).toEqual([
+      "text/markdown",
+      "text/plain",
+      "application/json",
+      "text/csv",
+      "image/svg+xml",
+      "text/html",
+      "application/pdf",
+    ]);
   });
 
   test("passes only trusted connection identity to the installed service", async () => {

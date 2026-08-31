@@ -29,6 +29,22 @@ describe("artifact v1 tool-result contract", () => {
     ).toEqual(envelope);
   });
 
+  test.each([
+    ["notes.txt", "text/plain"],
+    ["data.json", "application/json"],
+    ["table.csv", "text/csv"],
+    ["diagram.svg", "image/svg+xml"],
+    ["page.html", "text/html"],
+    ["report.pdf", "application/pdf"],
+  ] as const)("accepts the governed %s result", (filename, mimeType) => {
+    expect(
+      parseArtifactResult({
+        ...envelope,
+        artifact: { ...envelope.artifact, filename, mimeType },
+      }),
+    ).not.toBeNull();
+  });
+
   test("accepts only the exact first-party tool name", () => {
     const result = JSON.stringify(envelope);
     expect(parseArtifactToolResult(CREATE_ARTIFACT_TOOL_NAME, result)).toEqual(
@@ -58,7 +74,27 @@ describe("artifact v1 tool-result contract", () => {
     expect(
       parseArtifactResult({
         ...envelope,
-        artifact: { ...envelope.artifact, mimeType: "text/html" },
+        artifact: {
+          ...envelope.artifact,
+          filename: "../page.html",
+          mimeType: "text/html",
+        },
+      }),
+    ).toBe(null);
+    expect(
+      parseArtifactResult({
+        ...envelope,
+        artifact: { ...envelope.artifact, mimeType: "application/zip" },
+      }),
+    ).toBe(null);
+    expect(
+      parseArtifactResult({
+        ...envelope,
+        artifact: {
+          ...envelope.artifact,
+          filename: "spoofed.txt",
+          mimeType: "text/html",
+        },
       }),
     ).toBe(null);
     expect(

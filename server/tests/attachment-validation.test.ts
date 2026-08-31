@@ -14,6 +14,7 @@ const MIME = {
   csv: "text/csv",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   gif: "image/gif",
+  html: "text/html",
   jpeg: "image/jpeg",
   json: "application/json",
   markdown: "text/markdown",
@@ -40,6 +41,7 @@ async function validate(
   name: string,
   claimedMimeType: string,
   content: Uint8Array | string,
+  source?: "agent_generated" | "user_upload",
 ) {
   const root = await mkdtemp(join(tmpdir(), "teambot-validation-"));
   roots.push(root);
@@ -50,6 +52,7 @@ async function validate(
   return validateStoredAttachment({
     name,
     claimedMimeType,
+    source,
     openStream: async () =>
       new ReadableStream<Uint8Array>({
         start(controller) {
@@ -164,6 +167,18 @@ describe("attachment metadata validation", () => {
       validate("image.png", `${MIME.png}; charset=binary`, png()),
       "mime_mismatch",
     );
+  });
+
+  test("reserves HTML for trusted generated artifacts", async () => {
+    const html =
+      '<!doctype html><script src="https://attacker.test/x.js"></script>';
+    await expectValidationError(
+      validate("page.html", MIME.html, html, "user_upload"),
+      "unsupported_type",
+    );
+    await expect(
+      validate("page.html", MIME.html, html, "agent_generated"),
+    ).resolves.toEqual({ name: "page.html", mimeType: MIME.html });
   });
 });
 

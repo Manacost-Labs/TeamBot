@@ -499,6 +499,7 @@ export async function executeFencedAttachmentUpload(options: {
                   options.validator({
                     name: options.input.name,
                     claimedMimeType: options.input.mimeType,
+                    source: options.source,
                     openStream: () => {
                       requireValidationScope();
                       return blob.openTemporary();

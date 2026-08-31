@@ -3,7 +3,7 @@ import {
   artifactDownloadUrl,
   artifactPreviewUrl,
   readArtifactMetadata,
-  readMarkdownArtifactPreview,
+  readArtifactTextPreview,
 } from "./api";
 
 const originalFetch = globalThis.fetch;
@@ -57,14 +57,37 @@ describe("artifact API", () => {
       Response.json({
         attachment: {
           id: "69bb8eb0-1ac8-4c67-aeca-2362e2f507ce",
-          name: "active.html",
-          mimeType: "text/html",
+          name: "archive.zip",
+          mimeType: "application/zip",
           size: 12,
           messageId: "artifact:69bb8eb0-1ac8-4c67-aeca-2362e2f507ca",
           source: "agent_generated",
         },
       })) as unknown as typeof fetch;
 
+    await expect(
+      readArtifactMetadata("channel-a", attachmentId),
+    ).rejects.toThrow("некорректные данные");
+  });
+
+  test("accepts safe-source artifact formats and enforces their extension", async () => {
+    let filename = "page.html";
+    globalThis.fetch = (async () =>
+      Response.json({
+        attachment: {
+          id: attachmentId,
+          name: filename,
+          mimeType: "text/html",
+          size: 91,
+          messageId: "artifact:69bb8eb0-1ac8-4c67-aeca-2362e2f507ca",
+          source: "agent_generated",
+        },
+      })) as unknown as typeof fetch;
+
+    await expect(
+      readArtifactMetadata("channel-a", attachmentId),
+    ).resolves.toMatchObject({ filename: "page.html", mimeType: "text/html" });
+    filename = "spoofed.txt";
     await expect(
       readArtifactMetadata("channel-a", attachmentId),
     ).rejects.toThrow("некорректные данные");
@@ -88,7 +111,7 @@ describe("artifact API", () => {
     ).rejects.toThrow("некорректные данные");
   });
 
-  test("reads markdown previews with credentials and a display cap", async () => {
+  test("reads inert text previews with credentials and a display cap", async () => {
     globalThis.fetch = (async (_input, init) => {
       expect(init?.credentials).toBe("include");
       return new Response("a".repeat(100_100), {
@@ -97,7 +120,7 @@ describe("artifact API", () => {
     }) as typeof fetch;
 
     expect(
-      (await readMarkdownArtifactPreview("channel-a", attachmentId)).length,
+      (await readArtifactTextPreview("channel-a", attachmentId)).length,
     ).toBe(100_000);
   });
 });

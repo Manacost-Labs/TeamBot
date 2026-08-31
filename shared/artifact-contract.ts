@@ -6,10 +6,27 @@ export const ARTIFACT_RESULT_SCHEMA = "openbot.artifact.v1" as const;
 
 export const ARTIFACT_MIME_TYPES = [
   "text/markdown",
+  "text/plain",
+  "application/json",
+  "text/csv",
+  "image/svg+xml",
+  "text/html",
   "application/pdf",
 ] as const;
 
 export type ArtifactMimeType = (typeof ARTIFACT_MIME_TYPES)[number];
+
+export const ARTIFACT_EXTENSION_BY_MIME_TYPE: Readonly<
+  Record<ArtifactMimeType, string>
+> = Object.freeze({
+  "text/markdown": ".md",
+  "text/plain": ".txt",
+  "application/json": ".json",
+  "text/csv": ".csv",
+  "image/svg+xml": ".svg",
+  "text/html": ".html",
+  "application/pdf": ".pdf",
+});
 
 export type ArtifactResult = Readonly<{
   schema: typeof ARTIFACT_RESULT_SCHEMA;
@@ -24,6 +41,38 @@ export type ArtifactResult = Readonly<{
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const MIME_TYPES = new Set<string>(ARTIFACT_MIME_TYPES);
+const WINDOWS_RESERVED_NAME =
+  /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu;
+
+export function isArtifactMimeType(value: string): value is ArtifactMimeType {
+  return MIME_TYPES.has(value);
+}
+
+export function artifactFilenameMatchesMimeType(
+  filename: string,
+  mimeType: ArtifactMimeType,
+): boolean {
+  return (
+    filename === filename.normalize("NFC").trim() &&
+    filename.length > 0 &&
+    [...filename].length <= 255 &&
+    !hasControl(filename) &&
+    !filename.includes("/") &&
+    !filename.includes("\\") &&
+    !filename.startsWith(".") &&
+    !filename.endsWith(".") &&
+    !/^[a-z]:/iu.test(filename) &&
+    !WINDOWS_RESERVED_NAME.test(filename) &&
+    filename.toLowerCase().endsWith(ARTIFACT_EXTENSION_BY_MIME_TYPE[mimeType])
+  );
+}
+
+function hasControl(value: string): boolean {
+  return [...value].some((character) => {
+    const point = character.codePointAt(0) ?? 0;
+    return point <= 0x1f || (point >= 0x7f && point <= 0x9f);
+  });
+}
 
 /**
  * Parse the deliberately small, versioned value persisted in an AG-UI tool message.
@@ -44,7 +93,8 @@ export function parseArtifactResult(value: unknown): ArtifactResult | null {
     typeof filename !== "string" ||
     filename.length === 0 ||
     typeof mimeType !== "string" ||
-    !MIME_TYPES.has(mimeType) ||
+    !isArtifactMimeType(mimeType) ||
+    !artifactFilenameMatchesMimeType(filename, mimeType) ||
     typeof size !== "number" ||
     !Number.isSafeInteger(size) ||
     size <= 0 ||
@@ -59,7 +109,7 @@ export function parseArtifactResult(value: unknown): ArtifactResult | null {
     artifact: {
       attachmentId,
       filename,
-      mimeType: mimeType as ArtifactMimeType,
+      mimeType,
       size,
       title,
     },

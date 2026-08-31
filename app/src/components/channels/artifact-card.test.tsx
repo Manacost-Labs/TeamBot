@@ -113,6 +113,48 @@ describe("artifact card", () => {
     ).toBe("_blank");
   });
 
+  test("shows HTML as inert source only after an explicit request", async () => {
+    const active =
+      '<script>window.leaked = true</script><a href="https://attacker.test">leak</a><img src="https://attacker.test/track.png">';
+    let requests = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requests += 1;
+      if (String(input).endsWith("/preview")) {
+        return new Response(active, {
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        });
+      }
+      return Response.json({
+        attachment: {
+          id: attachmentId,
+          name: "page.html",
+          mimeType: "text/html",
+          size: active.length,
+          messageId: "artifact:69bb8eb0-1ac8-4c67-aeca-2362e2f507ca",
+          source: "agent_generated",
+        },
+      });
+    }) as unknown as typeof fetch;
+
+    const view = render(
+      <ArtifactCard
+        artifact={artifact}
+        channelId="channel-a"
+        toolCallId="call-html"
+      />,
+    );
+    await view.findByText(/page\.html · HTML/);
+    expect(requests).toBe(1);
+
+    fireEvent.click(view.getByRole("button", { name: "Предпросмотр" }));
+    await view.findByText(active);
+    expect(requests).toBe(2);
+    expect(view.container.querySelector("script")).toBeNull();
+    expect(view.queryByRole("link", { name: "leak" })).toBeNull();
+    expect(view.container.querySelector("img")).toBeNull();
+    expect(view.queryByTitle("Предпросмотр page.html")).toBeNull();
+  });
+
   test("offers a retry without exposing links when metadata is unavailable", async () => {
     let attempts = 0;
     globalThis.fetch = (async () => {

@@ -8,6 +8,7 @@ import {
   validateFileName,
   type ZipFile,
 } from "yauzl";
+import type { AttachmentSource } from "./store";
 
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const MAX_XML_BYTES = 5 * 1024 * 1024;
@@ -34,6 +35,7 @@ const MIME_BY_EXTENSION = {
   csv: "text/csv",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   gif: "image/gif",
+  html: "text/html",
   jpeg: "image/jpeg",
   jpg: "image/jpeg",
   json: "application/json",
@@ -81,6 +83,8 @@ export type ValidatedAttachmentMetadata = {
 export type StoredAttachmentValidationInput = {
   name: string;
   claimedMimeType: string;
+  /** HTML is reserved for trusted generated artifacts and is never accepted from upload routes. */
+  source?: AttachmentSource;
   /** A fresh stream over the private stored object. The validator never returns its bytes. */
   openStream?: () => Promise<ReadableStream<Uint8Array>>;
   /** Keeps the backing path inside the store's lifetime while yauzl performs random-access reads. */
@@ -103,7 +107,11 @@ type OoxmlInspectionContext = {
 export async function validateStoredAttachment(
   input: StoredAttachmentValidationInput,
 ): Promise<ValidatedAttachmentMetadata> {
-  const metadata = normalizeMetadata(input.name, input.claimedMimeType);
+  const metadata = normalizeMetadata(
+    input.name,
+    input.claimedMimeType,
+    input.source,
+  );
 
   try {
     if (metadata.extension === "docx" || metadata.extension === "xlsx") {
@@ -144,6 +152,7 @@ export async function validateStoredAttachment(
 function normalizeMetadata(
   suppliedName: string,
   claimedMimeType: string,
+  source: StoredAttachmentValidationInput["source"],
 ): NormalizedMetadata {
   if (typeof suppliedName !== "string") {
     throw validationError("invalid_name", "Attachment name is invalid");
@@ -167,6 +176,9 @@ function normalizeMetadata(
   }
   const extension = name.slice(dot + 1).toLowerCase();
   if (!isAllowedExtension(extension)) {
+    throw validationError("unsupported_type", "Attachment type is not allowed");
+  }
+  if (extension === "html" && source !== "agent_generated") {
     throw validationError("unsupported_type", "Attachment type is not allowed");
   }
 
@@ -245,6 +257,7 @@ async function inspectStream(
     case "txt":
     case "md":
     case "csv":
+    case "html":
     case "yaml":
     case "yml":
       await readUtf8(openStream, MAX_ATTACHMENT_BYTES);

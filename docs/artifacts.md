@@ -1,18 +1,29 @@
 # Generated artifacts
 
-OpenBot can turn a Bot's result into a private file card in the current conversation. The first
-contract supports editable Markdown and a rendered PDF. The card is durable conversation state: it
+OpenBot can turn a Bot's result into a private file card in the current conversation. The governed
+contract supports Markdown, text, JSON, CSV, SVG, HTML and rendered PDF. The card is durable conversation state: it
 survives streaming reconnects, history replay and route changes, and offers an authenticated preview
 and download without revealing a filesystem path or storage key.
 
 ## User flow
 
 A Bot granted `artifacts/create_artifact` calls `create_artifact` with a title, filename, MIME type
-and inline Markdown content. Use `text/markdown` for an editable `.md` download or
-`application/pdf` for a `.pdf`; PDF input is still Markdown and is converted by the trusted
-renderer. A successful tool result is the versioned `openbot.artifact.v1` envelope. The frontend
-recognises that envelope only for the exact first-party tool name, then reads authoritative metadata
-through the signed-in user's channel boundary before drawing the card.
+and inline content. The filename extension must exactly match its MIME family:
+
+| Output | MIME type | Extension | Input and preview |
+| --- | --- | --- | --- |
+| Markdown | `text/markdown` | `.md` | Markdown; rendered with external media blocked |
+| Text | `text/plain` | `.txt` | inert source text |
+| JSON | `application/json` | `.json` | valid, bounded JSON; inert source text |
+| CSV | `text/csv` | `.csv` | inert source text |
+| SVG | `image/svg+xml` | `.svg` | parsed, passive SVG only; inert source text |
+| HTML | `text/html` | `.html` | generated artifacts only; inert source text |
+| PDF | `application/pdf` | `.pdf` | Markdown rendered by the isolated PDF service |
+
+A successful tool result is the versioned `openbot.artifact.v1` envelope. The frontend recognises
+that envelope only for the exact first-party tool name, then reads authoritative metadata through
+the signed-in user's channel boundary before drawing the card. Inline content is limited to 1 MiB
+of UTF-8. JSON additionally has bounded depth and node count before any export lease is claimed.
 
 `workspacePath` is reserved in the tool schema but currently returns `CAPABILITY_UNAVAILABLE`.
 Managed workspaces are deliberately not exposed through the attachment service. A future workspace
@@ -30,8 +41,16 @@ Artifact creation requires all of the following:
 
 The result is stored through the normal attachment lifecycle with `source=agent_generated` and an
 opaque attachment ID. Only the signed-in channel member can read metadata or bytes. Preview refuses
-ordinary user uploads, active HTML and every MIME type other than Markdown/PDF. Responses use
-`private, no-store`, `nosniff`, a restrictive CSP and same-origin resource policy.
+ordinary user uploads and every MIME type outside the artifact contract. Responses use `private,
+no-store`, `nosniff`, a restrictive CSP and same-origin resource policy.
+
+HTML is intentionally not rendered: its preview response is `text/plain` and React inserts the
+bytes as a text node. SVG receives the existing strict XML/SVG validation that rejects scripts,
+event handlers, `foreignObject`, external or data references, and CSS resource loading; its preview
+is still source text. The same inert source path is used for text, JSON and CSV. Preview is fetched
+only after the user clicks **Предпросмотр**. Downloads always use `Content-Disposition: attachment`
+with `nosniff` and a sandboxing CSP, so the application never executes artifact markup. Downloaded
+files remain untrusted data if a user later opens them in another program.
 
 One logical request is keyed by actor, channel, Bot, run and a content fingerprint. A database-clock
 lease prevents simultaneous replicas from publishing duplicates. A retry returns the already-ready
@@ -69,8 +88,8 @@ ARTIFACT_RENDERER_TOKEN=<dedicated random value of at least 32 characters>
 ```
 
 If only one variable is set, or the token is shorter than 32 characters, the API server refuses to
-start. If neither is set, Markdown artifacts remain available and PDF creation reports that the
-capability is not configured.
+start. If neither is set, every non-PDF artifact remains available and PDF creation reports that
+the capability is not configured.
 
 ## Operations and troubleshooting
 

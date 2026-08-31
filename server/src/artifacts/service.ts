@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import { sql } from "drizzle-orm";
 import {
+  artifactFilenameMatchesMimeType,
   ARTIFACT_RESULT_SCHEMA,
   type ArtifactMimeType,
   type ArtifactResult,
+  isArtifactMimeType,
 } from "../../../shared/artifact-contract";
 import type { AttachmentUploadService } from "../attachments/lifecycle";
 import type { AttachmentRecord, AttachmentStore } from "../attachments/store";
@@ -25,6 +27,8 @@ const MAX_INLINE_CONTENT_BYTES = 1024 * 1024;
 const MAX_TITLE_CODE_POINTS = 200;
 const MAX_FILENAME_CODE_POINTS = 255;
 const MAX_WORKSPACE_PATH_CODE_UNITS = 4_096;
+const MAX_JSON_DEPTH = 100;
+const MAX_JSON_NODES = 100_000;
 const WINDOWS_RESERVED_NAME =
   /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu;
 
@@ -150,6 +154,31 @@ function safeFilename(value: unknown): string | null {
   return normalized;
 }
 
+function validJsonContent(content: string): boolean {
+  let root: unknown;
+  try {
+    root = JSON.parse(content);
+  } catch {
+    return false;
+  }
+
+  const pending: Array<{ depth: number; value: unknown }> = [
+    { depth: 1, value: root },
+  ];
+  let nodes = 0;
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current) break;
+    nodes += 1;
+    if (nodes > MAX_JSON_NODES || current.depth > MAX_JSON_DEPTH) return false;
+    if (typeof current.value !== "object" || current.value === null) continue;
+    for (const value of Object.values(current.value)) {
+      pending.push({ depth: current.depth + 1, value });
+    }
+  }
+  return true;
+}
+
 export function parseCreateArtifactArgs(
   value: unknown,
 ): CreateArtifactArgs | null {
@@ -166,11 +195,10 @@ export function parseCreateArtifactArgs(
   const filename = safeFilename(value.filename);
   if (!title || !filename) return null;
   const mimeType = value.mimeType;
-  if (mimeType !== "text/markdown" && mimeType !== "application/pdf") {
+  if (typeof mimeType !== "string" || !isArtifactMimeType(mimeType)) {
     return null;
   }
-  const expectedExtension = mimeType === "application/pdf" ? ".pdf" : ".md";
-  if (!filename.toLowerCase().endsWith(expectedExtension)) return null;
+  if (!artifactFilenameMatchesMimeType(filename, mimeType)) return null;
 
   const hasContent = typeof value.content === "string";
   const hasWorkspacePath = typeof value.workspacePath === "string";
@@ -194,6 +222,9 @@ export function parseCreateArtifactArgs(
     const content = value.content as string;
     const size = Buffer.byteLength(content, "utf8");
     if (size < 1 || size > MAX_INLINE_CONTENT_BYTES) return null;
+    if (mimeType === "application/json" && !validJsonContent(content)) {
+      return null;
+    }
     return { title, filename, mimeType, content };
   }
 
@@ -236,8 +267,8 @@ function artifactResult(
   attachment: AttachmentRecord,
 ): ArtifactToolResult {
   if (
-    attachment.mimeType !== "text/markdown" &&
-    attachment.mimeType !== "application/pdf"
+    !isArtifactMimeType(attachment.mimeType) ||
+    !artifactFilenameMatchesMimeType(attachment.name, attachment.mimeType)
   ) {
     return UNAVAILABLE;
   }

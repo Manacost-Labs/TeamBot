@@ -1,4 +1,8 @@
-import type { ArtifactMimeType } from "./contract";
+import {
+  artifactFilenameMatchesMimeType,
+  ARTIFACT_MIME_TYPES,
+  type ArtifactMimeType,
+} from "./contract";
 
 export type ArtifactMetadata = Readonly<{
   id: string;
@@ -22,10 +26,7 @@ type AttachmentResponse = {
   error?: unknown;
 };
 
-const ARTIFACT_MIME_TYPES = new Set<ArtifactMimeType>([
-  "text/markdown",
-  "application/pdf",
-]);
+const ARTIFACT_MIME_TYPE_SET = new Set<string>(ARTIFACT_MIME_TYPES);
 
 function attachmentEndpoint(channelId: string, attachmentId: string): string {
   return `/api/channels/${encodeURIComponent(channelId)}/attachments/${encodeURIComponent(attachmentId)}`;
@@ -59,7 +60,11 @@ export async function readArtifactMetadata(
     typeof filename !== "string" ||
     filename.length === 0 ||
     typeof attachment.mimeType !== "string" ||
-    !ARTIFACT_MIME_TYPES.has(attachment.mimeType as ArtifactMimeType) ||
+    !ARTIFACT_MIME_TYPE_SET.has(attachment.mimeType) ||
+    !artifactFilenameMatchesMimeType(
+      filename,
+      attachment.mimeType as ArtifactMimeType,
+    ) ||
     typeof attachment.size !== "number" ||
     !Number.isSafeInteger(attachment.size) ||
     attachment.size <= 0 ||
@@ -94,15 +99,15 @@ export function artifactPreviewUrl(
   return `${attachmentEndpoint(channelId, attachmentId)}/preview`;
 }
 
-/** Markdown previews are server-bounded; the client applies a second display-only cap. */
-export async function readMarkdownArtifactPreview(
+/** Text/source previews are server-bounded; the client applies a second display-only cap. */
+export async function readArtifactTextPreview(
   channelId: string,
   attachmentId: string,
   signal?: AbortSignal,
 ): Promise<string> {
   const response = await fetch(artifactPreviewUrl(channelId, attachmentId), {
     credentials: "include",
-    headers: { accept: "text/markdown, text/plain;q=0.9" },
+    headers: { accept: "text/plain, text/markdown;q=0.9" },
     signal,
   });
   if (!response.ok) throw new Error("Не удалось открыть предпросмотр.");

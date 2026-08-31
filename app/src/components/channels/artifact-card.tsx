@@ -14,9 +14,12 @@ import {
   artifactDownloadUrl,
   artifactPreviewUrl,
   readArtifactMetadata,
-  readMarkdownArtifactPreview,
+  readArtifactTextPreview,
 } from "@/lib/artifacts/api";
-import type { ArtifactResult } from "@/lib/artifacts/contract";
+import type {
+  ArtifactMimeType,
+  ArtifactResult,
+} from "@/lib/artifacts/contract";
 import {
   artifactMarkdownComponents,
   artifactMarkdownUrlTransform,
@@ -35,8 +38,18 @@ type MetadataState =
 
 type PreviewState =
   | { status: "idle" | "loading" }
-  | { status: "ready"; markdown: string }
+  | { status: "ready"; text: string }
   | { status: "error" };
+
+const ARTIFACT_TYPE_LABELS: Readonly<Record<ArtifactMimeType, string>> = {
+  "text/markdown": "Markdown",
+  "text/plain": "Текст",
+  "application/json": "JSON",
+  "text/csv": "CSV",
+  "image/svg+xml": "SVG",
+  "text/html": "HTML",
+  "application/pdf": "PDF",
+};
 
 export function ArtifactCard({
   artifact,
@@ -87,23 +100,29 @@ export function ArtifactCard({
   }, [metadata.status, toolCallId, trackPaint]);
 
   const current = metadata.status === "ready" ? metadata.value : null;
+  const currentMimeType = current?.mimeType;
   useEffect(() => {
-    if (!previewOpen || current?.mimeType !== "text/markdown") return;
+    if (
+      !previewOpen ||
+      currentMimeType === undefined ||
+      currentMimeType === "application/pdf"
+    )
+      return;
     const controller = new AbortController();
     setPreview({ status: "loading" });
-    void readMarkdownArtifactPreview(
+    void readArtifactTextPreview(
       channelId,
       artifact.attachmentId,
       controller.signal,
     )
-      .then((markdown) => setPreview({ status: "ready", markdown }))
+      .then((text) => setPreview({ status: "ready", text }))
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
           setPreview({ status: "error" });
         }
       });
     return () => controller.abort();
-  }, [artifact.attachmentId, channelId, current?.mimeType, previewOpen]);
+  }, [artifact.attachmentId, channelId, currentMimeType, previewOpen]);
 
   if (metadata.status === "loading") {
     return (
@@ -153,6 +172,7 @@ export function ArtifactCard({
   const downloadUrl = artifactDownloadUrl(channelId, ready.id);
   const previewUrl = artifactPreviewUrl(channelId, ready.id);
   const isPdf = ready.mimeType === "application/pdf";
+  const isMarkdown = ready.mimeType === "text/markdown";
 
   return (
     <section
@@ -178,7 +198,7 @@ export function ArtifactCard({
             className="block truncate text-muted-foreground text-xs"
             title={ready.filename}
           >
-            {ready.filename} · {isPdf ? "PDF" : "Markdown"} ·{" "}
+            {ready.filename} · {ARTIFACT_TYPE_LABELS[ready.mimeType]} ·{" "}
             {formatBytes(ready.size)}
           </span>
         </span>
@@ -234,15 +254,21 @@ export function ArtifactCard({
               </a>
             </div>
           ) : preview.status === "ready" ? (
-            <div className="min-w-0 overflow-x-auto text-sm">
-              <Streamdown
-                components={artifactMarkdownComponents}
-                mode="static"
-                urlTransform={artifactMarkdownUrlTransform}
-              >
-                {preview.markdown}
-              </Streamdown>
-            </div>
+            isMarkdown ? (
+              <div className="min-w-0 overflow-x-auto text-sm">
+                <Streamdown
+                  components={artifactMarkdownComponents}
+                  mode="static"
+                  urlTransform={artifactMarkdownUrlTransform}
+                >
+                  {preview.text}
+                </Streamdown>
+              </div>
+            ) : (
+              <pre className="whitespace-pre-wrap break-words font-mono text-xs">
+                {preview.text}
+              </pre>
+            )
           ) : preview.status === "error" ? (
             <p className="m-auto text-muted-foreground text-sm" role="status">
               Предпросмотр сейчас недоступен.

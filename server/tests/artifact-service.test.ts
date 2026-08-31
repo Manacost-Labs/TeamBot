@@ -126,7 +126,7 @@ function dependencies(
 }
 
 describe("create artifact argument contract", () => {
-  test("accepts bounded Markdown and PDF inputs", () => {
+  test("accepts every bounded governed MIME/extension pair", () => {
     expect(
       parseCreateArtifactArgs({
         title: " Отчёт ",
@@ -141,14 +141,44 @@ describe("create artifact argument contract", () => {
       mimeType: "text/markdown",
       content: "# Report",
     });
+    for (const [filename, mimeType, content] of [
+      ["notes.txt", "text/plain", "Notes"],
+      ["data.json", "application/json", '{"safe":true}'],
+      ["table.csv", "text/csv", "name,value\nSafe,1"],
+      [
+        "diagram.svg",
+        "image/svg+xml",
+        '<svg xmlns="http://www.w3.org/2000/svg"/>',
+      ],
+      ["page.html", "text/html", "<!doctype html><p>Report</p>"],
+      ["report.pdf", "application/pdf", "# Report"],
+    ] as const) {
+      expect(
+        parseCreateArtifactArgs({
+          title: "Report",
+          filename,
+          mimeType,
+          content,
+        })?.mimeType,
+      ).toBe(mimeType);
+    }
+  });
+
+  test("rejects malformed or excessively nested JSON", () => {
+    const input = {
+      title: "Data",
+      filename: "data.json",
+      mimeType: "application/json",
+    };
     expect(
-      parseCreateArtifactArgs({
-        title: "Report",
-        filename: "report.pdf",
-        mimeType: "application/pdf",
-        content: "# Report",
-      })?.mimeType,
-    ).toBe("application/pdf");
+      parseCreateArtifactArgs({ ...input, content: '{"open":' }),
+    ).toBeNull();
+
+    let nested = "0";
+    for (let depth = 0; depth < 101; depth += 1) {
+      nested = `{"child":${nested}}`;
+    }
+    expect(parseCreateArtifactArgs({ ...input, content: nested })).toBeNull();
   });
 
   test("rejects path tricks, reserved names, extension spoofing and two sources", () => {
@@ -213,6 +243,44 @@ describe("governed artifact creation", () => {
     });
     expect(calls.complete).toEqual([[exportId, leaseToken, attachmentId]]);
   });
+
+  test.each([
+    ["notes.txt", "text/plain", "Notes"],
+    ["data.json", "application/json", '{"safe":true}'],
+    ["table.csv", "text/csv", "name,value\nSafe,1"],
+    [
+      "diagram.svg",
+      "image/svg+xml",
+      '<svg xmlns="http://www.w3.org/2000/svg"/>',
+    ],
+    ["page.html", "text/html", "<!doctype html><p>Report</p>"],
+  ] as const)(
+    "stores %s without invoking the PDF renderer",
+    async (filename, mimeType, content) => {
+      const generated = record({
+        name: filename,
+        mimeType,
+        size: Buffer.byteLength(content),
+      });
+      const { calls, tools } = dependencies({ uploaded: generated });
+
+      const result = await tools.createArtifact(context, {
+        title: "Report",
+        filename,
+        mimeType,
+        content,
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        value: { artifact: { filename, mimeType } },
+      });
+      expect(calls.upload?.[0]?.[4]).toMatchObject({
+        name: filename,
+        mimeType,
+      });
+    },
+  );
 
   test("renders PDF only through the configured isolated renderer", async () => {
     const pdfRecord = record({
