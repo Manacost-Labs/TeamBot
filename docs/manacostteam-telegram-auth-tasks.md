@@ -682,13 +682,13 @@ browser and store the completed auth document in the encrypted vault.
 
 **Acceptance criteria:**
 
-- [ ] The card displays the official verification URL/code and clear expiry/progress without requesting a password.
-- [ ] Polling stops on completion, failure, expiry, unmount and sign-out.
-- [ ] Provider replacement requires explicit confirmation and never exposes the previous credential.
+- [x] The card displays the official verification URL/code and clear expiry/progress without requesting a password.
+- [x] Polling stops on completion, failure, expiry, unmount and sign-out.
+- [x] Provider replacement requires explicit confirmation and never exposes the previous credential.
 
 **Verification:**
 
-- [ ] `bun test app/src/routes/_authed/settings/ai-connections.test.tsx`
+- [x] `bun test app/src/routes/_authed/settings/ai-connections.test.tsx`
 
 **Dependencies:** Task 23.
 
@@ -703,9 +703,9 @@ browser and store the completed auth document in the encrypted vault.
 
 ## Checkpoint H — ChatGPT connection flow
 
-- [ ] Tasks 22–24 pass without a live account through fixtures and start/cancel probe.
-- [ ] Browser network/DOM fixtures contain no auth document, refresh token or password field.
-- [ ] A flow is visible and mutable only to its initiating actor.
+- [x] Tasks 22–24 pass without a live account through fixtures and start/cancel probe.
+- [x] Browser network/DOM fixtures contain no auth document, refresh token or password field.
+- [x] A flow is visible and mutable only to its initiating actor.
 
 ### Task 25: ChatGPT profile materialization and refresh
 

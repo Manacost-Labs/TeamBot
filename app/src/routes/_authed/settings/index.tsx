@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   PageRows,
   PageSection,
   PageShell,
 } from "@/components/layout/page-shell";
+import { ChatGptConnectionCard } from "@/components/settings/chatgpt-connection-card";
 import { useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,10 +21,12 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import {
   type AiConnectionMutationError,
+  clearPersonalAiClientState,
   connectOpenRouterMutationOptions,
   disconnectPersonalAiMutationOptions,
 } from "@/lib/ai-connections/mutations";
 import { personalAiConnectionQueryOptions } from "@/lib/ai-connections/queries";
+import { authKeys, currentUserQueryOptions } from "@/lib/auth/queries";
 
 export const Route = createFileRoute("/_authed/settings/")({
   component: RouteComponent,
@@ -65,6 +68,7 @@ function RouteComponent() {
         </PageRows>
       </PageSection>
       <OpenRouterSettingsCard />
+      <ChatGptConnectionCard />
     </PageShell>
   );
 }
@@ -88,7 +92,16 @@ function connectFailure(error: AiConnectionMutationError | null) {
 export function OpenRouterSettingsCard() {
   const queryClient = useQueryClient();
   const keyInput = useRef<HTMLInputElement>(null);
-  const connection = useQuery(personalAiConnectionQueryOptions());
+  const replacementButton = useRef<HTMLButtonElement>(null);
+  const replacementConfirmButton = useRef<HTMLButtonElement>(null);
+  const [confirmingReplacement, setConfirmingReplacement] = useState(false);
+  const [replacementApproved, setReplacementApproved] = useState(false);
+  const currentUser = useQuery(currentUserQueryOptions());
+  const actorId = currentUser.data?.id ?? "";
+  const actorIdRef = useRef(actorId);
+  actorIdRef.current = actorId;
+  const previousActorId = useRef(actorId);
+  const connection = useQuery(personalAiConnectionQueryOptions(actorId));
   const takeApiKey = () => {
     const input = keyInput.current;
     if (!input) return "";
@@ -97,14 +110,31 @@ export function OpenRouterSettingsCard() {
     return value;
   };
   const connect = useMutation(
-    connectOpenRouterMutationOptions(queryClient, takeApiKey),
+    connectOpenRouterMutationOptions(
+      queryClient,
+      actorId,
+      takeApiKey,
+      () =>
+        actorIdRef.current === actorId &&
+        queryClient.getQueryData<{ id: string }>(authKeys.currentUser())?.id ===
+          actorId,
+    ),
   );
   const disconnect = useMutation(
-    disconnectPersonalAiMutationOptions(queryClient),
+    disconnectPersonalAiMutationOptions(
+      queryClient,
+      actorId,
+      () =>
+        actorIdRef.current === actorId &&
+        queryClient.getQueryData<{ id: string }>(authKeys.currentUser())?.id ===
+          actorId,
+    ),
   );
   const active = connection.data?.state === "active";
   const openRouterActive = active && connection.data?.provider === "openrouter";
   const replacing = connect.isPending && active;
+  const replacingChatGpt =
+    active && connection.data?.provider === "chatgpt" && !replacementApproved;
 
   useEffect(() => {
     const input = keyInput.current;
@@ -112,6 +142,29 @@ export function OpenRouterSettingsCard() {
       if (input) input.value = "";
     };
   }, []);
+
+  useEffect(() => {
+    const previous = previousActorId.current;
+    previousActorId.current = actorId;
+    if (previous === actorId) return;
+    if (keyInput.current) keyInput.current.value = "";
+    setConfirmingReplacement(false);
+    setReplacementApproved(false);
+    connect.reset();
+    disconnect.reset();
+    if (previous) void clearPersonalAiClientState(queryClient, previous);
+  }, [actorId, connect, disconnect, queryClient]);
+
+  useEffect(() => {
+    if (confirmingReplacement) replacementConfirmButton.current?.focus();
+  }, [confirmingReplacement]);
+
+  useEffect(() => {
+    if (!active || connection.data?.provider !== "chatgpt") {
+      setConfirmingReplacement(false);
+      setReplacementApproved(false);
+    }
+  }, [active, connection.data?.provider]);
 
   let status = "OpenRouter не подключён";
   if (connection.isPending) status = "Проверяем подключение…";
@@ -158,6 +211,11 @@ export function OpenRouterSettingsCard() {
             className="mt-4 flex flex-col gap-3"
             onSubmit={(event) => {
               event.preventDefault();
+              if (replacingChatGpt) {
+                if (keyInput.current) keyInput.current.value = "";
+                setConfirmingReplacement(true);
+                return;
+              }
               connect.mutate();
             }}
           >
@@ -168,7 +226,7 @@ export function OpenRouterSettingsCard() {
                 aria-invalid={connect.isError}
                 autoCapitalize="none"
                 autoComplete="off"
-                disabled={busy}
+                disabled={busy || replacingChatGpt}
                 id="openrouter-api-key"
                 name="openrouter-api-key"
                 onInput={() => connect.reset()}
@@ -192,9 +250,60 @@ export function OpenRouterSettingsCard() {
               </p>
             ) : null}
 
+            {confirmingReplacement ? (
+              <section
+                aria-labelledby="openrouter-replacement-title"
+                className="flex flex-col gap-3 rounded-lg border border-border p-3"
+              >
+                <p
+                  className="font-medium text-sm"
+                  id="openrouter-replacement-title"
+                >
+                  Заменить ChatGPT на OpenRouter?
+                </p>
+                <p className="text-muted-foreground text-sm">
+                  Подтвердите смену провайдера, затем вставьте новый ключ.
+                  Данные текущего подключения не показываются.
+                </p>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Button
+                    onClick={() => {
+                      setConfirmingReplacement(false);
+                      setReplacementApproved(true);
+                      requestAnimationFrame(() => keyInput.current?.focus());
+                    }}
+                    ref={replacementConfirmButton}
+                    type="button"
+                  >
+                    Подтвердить замену
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setConfirmingReplacement(false);
+                      requestAnimationFrame(() =>
+                        replacementButton.current?.focus(),
+                      );
+                    }}
+                    type="button"
+                    variant="outline"
+                  >
+                    Отмена
+                  </Button>
+                </div>
+              </section>
+            ) : null}
+
             <div className="flex flex-col gap-2 sm:flex-row">
-              <Button disabled={busy || connection.isPending} type="submit">
-                {openRouterActive ? "Заменить ключ" : "Подключить OpenRouter"}
+              <Button
+                disabled={busy || connection.isPending || !actorId}
+                ref={replacementButton}
+                type="submit"
+              >
+                {openRouterActive
+                  ? "Заменить ключ"
+                  : replacingChatGpt
+                    ? "Заменить ChatGPT на OpenRouter"
+                    : "Подключить OpenRouter"}
               </Button>
               {openRouterActive ? (
                 <Button

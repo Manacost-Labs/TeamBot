@@ -1,5 +1,5 @@
 import { queryOptions } from "@tanstack/react-query";
-import { client } from "@/lib/client";
+import { client, tryClient } from "@/lib/client";
 
 export type PersonalAiSafeMetadata = {
   usageUsd?: number;
@@ -17,9 +17,69 @@ export type PersonalAiConnection = {
   safeMetadata: PersonalAiSafeMetadata;
 };
 
+export type ChatGptDeviceFlowState =
+  | "pending"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "expired";
+
+export type ChatGptDeviceFlow = {
+  flowId: string;
+  state: ChatGptDeviceFlowState;
+  expiresAt: string;
+  retryable: boolean;
+  verificationUrl?: "https://auth.openai.com/codex/device";
+  userCode?: string;
+};
+
+export type ChatGptDeviceFlowQueryFailure =
+  | "not-authorized"
+  | "unavailable"
+  | "invalid-response";
+
+export class ChatGptDeviceFlowQueryError extends Error {
+  readonly reason: ChatGptDeviceFlowQueryFailure;
+
+  constructor(reason: ChatGptDeviceFlowQueryFailure) {
+    super("ChatGPT connection status could not be checked");
+    this.name = "ChatGptDeviceFlowQueryError";
+    this.reason = reason;
+  }
+}
+
+const CHATGPT_DEVICE_FLOW_PATH = "/api/ai-connections/chatgpt/device-flow";
+const CHATGPT_VERIFICATION_URL = "https://auth.openai.com/codex/device";
+const FLOW_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const USER_CODE = /^[A-Z0-9]{4}(?:-[A-Z0-9]{4})+$/;
+const FLOW_STATES = new Set<ChatGptDeviceFlowState>([
+  "pending",
+  "completed",
+  "failed",
+  "cancelled",
+  "expired",
+]);
+
 export const aiConnectionKeys = {
   all: ["personal-ai-connection"] as const,
-  status: () => [...aiConnectionKeys.all, "status"] as const,
+  actor: (actorId: string) => [...aiConnectionKeys.all, actorId] as const,
+  status: (actorId: string) =>
+    [...aiConnectionKeys.actor(actorId), "status"] as const,
+  deviceFlow: (actorId: string, flowId: string) =>
+    [
+      ...aiConnectionKeys.actor(actorId),
+      "chatgpt-device-flow",
+      flowId,
+    ] as const,
+};
+
+const signedOutAiConnectionKeys = {
+  status: ["signed-out-personal-ai-connection", "status"] as const,
+  deviceFlow: [
+    "signed-out-personal-ai-connection",
+    "chatgpt-device-flow",
+  ] as const,
 };
 
 function finiteNonNegative(value: unknown): number | undefined {
@@ -56,6 +116,119 @@ function canonicalTimestamp(value: unknown): string | undefined {
   const parsed = new Date(value);
   if (!Number.isFinite(parsed.getTime())) return undefined;
   return parsed.toISOString() === value ? value : undefined;
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function flowFailure(status: number): ChatGptDeviceFlowQueryFailure {
+  return status === 401 || status === 403 ? "not-authorized" : "unavailable";
+}
+
+/**
+ * Project the device-flow response before it reaches component or query state. Unknown response
+ * fields are deliberately discarded, so a future server regression cannot make auth material part
+ * of browser state or rendered diagnostics.
+ */
+export function projectChatGptDeviceFlow(
+  value: unknown,
+  expectedFlowId: string,
+  requireVerification = false,
+): ChatGptDeviceFlow {
+  const source = objectValue(value);
+  const flowId = typeof source?.flowId === "string" ? source.flowId : "";
+  const state = source?.state;
+  const expiresAt = canonicalTimestamp(source?.expiresAt);
+  const retryable = source?.retryable;
+  const verificationUrl = source?.verificationUrl;
+  const userCode = source?.userCode;
+  if (
+    !FLOW_ID.test(expectedFlowId) ||
+    flowId !== expectedFlowId ||
+    typeof state !== "string" ||
+    !FLOW_STATES.has(state as ChatGptDeviceFlowState) ||
+    !expiresAt ||
+    typeof retryable !== "boolean" ||
+    ((state === "pending" || state === "completed") && retryable) ||
+    ((state === "failed" || state === "cancelled" || state === "expired") &&
+      !retryable)
+  ) {
+    throw new ChatGptDeviceFlowQueryError("invalid-response");
+  }
+  if (
+    requireVerification &&
+    (state !== "pending" ||
+      verificationUrl !== CHATGPT_VERIFICATION_URL ||
+      typeof userCode !== "string" ||
+      !USER_CODE.test(userCode))
+  ) {
+    throw new ChatGptDeviceFlowQueryError("invalid-response");
+  }
+
+  const projected: ChatGptDeviceFlow = {
+    flowId,
+    state: state as ChatGptDeviceFlowState,
+    expiresAt,
+    retryable,
+  };
+  if (requireVerification) {
+    projected.verificationUrl = CHATGPT_VERIFICATION_URL;
+    projected.userCode = userCode as string;
+  }
+  return projected;
+}
+
+export async function projectChatGptDeviceFlowEnvelope(
+  response: Response,
+  expectedFlowId: string,
+  requireVerification = false,
+): Promise<ChatGptDeviceFlow> {
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new ChatGptDeviceFlowQueryError("invalid-response");
+  }
+  return projectChatGptDeviceFlow(
+    objectValue(body)?.flow,
+    expectedFlowId,
+    requireVerification,
+  );
+}
+
+export async function fetchChatGptDeviceFlow(
+  flowId: string,
+  signal?: AbortSignal,
+): Promise<ChatGptDeviceFlow> {
+  if (!FLOW_ID.test(flowId)) {
+    throw new ChatGptDeviceFlowQueryError("invalid-response");
+  }
+  const response = await tryClient(
+    `${CHATGPT_DEVICE_FLOW_PATH}/${encodeURIComponent(flowId)}`,
+    { signal },
+  ).catch(() => {
+    throw new ChatGptDeviceFlowQueryError("unavailable");
+  });
+  if (!response.ok) {
+    throw new ChatGptDeviceFlowQueryError(flowFailure(response.status));
+  }
+  return projectChatGptDeviceFlowEnvelope(response, flowId);
+}
+
+export function chatGptDeviceFlowQueryOptions(actorId: string, flowId: string) {
+  return queryOptions({
+    queryKey:
+      actorId && flowId
+        ? aiConnectionKeys.deviceFlow(actorId, flowId)
+        : signedOutAiConnectionKeys.deviceFlow,
+    queryFn: ({ signal }) => fetchChatGptDeviceFlow(flowId, signal),
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
 }
 
 /**
@@ -107,10 +280,13 @@ export async function fetchPersonalAiConnection(): Promise<PersonalAiConnection 
   return projectPersonalAiConnection(connection);
 }
 
-export function personalAiConnectionQueryOptions() {
+export function personalAiConnectionQueryOptions(actorId: string) {
   return queryOptions({
-    queryKey: aiConnectionKeys.status(),
+    queryKey: actorId
+      ? aiConnectionKeys.status(actorId)
+      : signedOutAiConnectionKeys.status,
     queryFn: fetchPersonalAiConnection,
+    enabled: Boolean(actorId),
     staleTime: 30_000,
   });
 }
