@@ -27,7 +27,7 @@ function RouteComponent() {
         className="h-svh overflow-hidden"
         style={
           {
-            "--sidebar-width": "340px",
+            "--sidebar-width": "304px",
             "--sidebar-width-mobile": "20rem",
           } as React.CSSProperties
         }

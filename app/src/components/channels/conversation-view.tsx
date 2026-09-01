@@ -17,11 +17,15 @@ import {
   type QueuedMessage,
   reduceQueue,
 } from "@/components/channels/composer";
+import type { HistoryPage } from "@/lib/copilot/conversation-store";
 import type { AgentRunState } from "@/lib/copilot/run-state";
 import { newId } from "../../lib/new-id";
 
 export function ConversationView({
   messages,
+  hasOlder,
+  loadingOlder,
+  onLoadOlder,
   busy = false,
   notice,
   agents = [],
@@ -41,6 +45,9 @@ export function ConversationView({
   onRetry,
 }: {
   messages: readonly Message[];
+  hasOlder?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => Promise<HistoryPage | null>;
   busy?: boolean;
   /** Shown above the composer. An error, or why this conversation is read-only. */
   notice?: ReactNode;
@@ -244,6 +251,9 @@ export function ConversationView({
             .map((command) => command.name)
             .join(",")}
           messages={messages}
+          hasOlder={hasOlder}
+          loadingOlder={loadingOlder}
+          {...(onLoadOlder ? { onLoadOlder } : {})}
           {...(conversationKey ? { conversationKey } : {})}
           onRemoveQueued={(id) => {
             apply({ id, type: "remove" });
@@ -255,7 +265,7 @@ export function ConversationView({
           {...(stopped ? { stopped } : {})}
         />
       </div>
-      <div className="max-w-2xl mx-auto w-full px-0 pb-4 shrink-0">
+      <div className="mx-auto w-full max-w-3xl shrink-0 px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-4">
         {notice}
         <Composer
           agents={agents}

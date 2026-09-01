@@ -166,7 +166,7 @@ function BotChatSurface({
           agentId={agentId}
           key={`${agentId}:${threadId}`}
           threadId={threadId}
-          throttleMs={50}
+          throttleMs={32}
         />
       </div>
     </div>

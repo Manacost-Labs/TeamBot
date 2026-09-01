@@ -1,5 +1,8 @@
 import { type Message, MessageSchema } from "@ag-ui/core";
 import { client } from "@/lib/client";
+import type { HistoryPage } from "./conversation-store";
+
+export type { HistoryPage } from "./conversation-store";
 
 /**
  * The messages a thread already holds, for restoring a conversation somebody comes back to.
@@ -42,6 +45,14 @@ import { client } from "@/lib/client";
 export type StoredThread = {
   messages: Message[];
   /** Zero on every ordinary read. Above zero means the history store holds something unreadable. */
+  unreadable: number;
+  /** Present when the server returned the bounded history contract. */
+  olderCursor?: string | null;
+  hasOlder?: boolean;
+  revision?: string;
+};
+
+export type StoredHistoryPage = HistoryPage & {
   unreadable: number;
 };
 
@@ -113,13 +124,20 @@ export class ThreadHistoryCache {
     value: StoredThread,
   ): CachedStoredThread {
     const key = historyCacheKey(sessionScope, threadId, agentId);
-    const complete = value.messages.length <= this.maxMessagesPerEntry;
+    const complete =
+      value.hasOlder !== true &&
+      value.messages.length <= this.maxMessagesPerEntry;
     const cached: CachedStoredThread = {
       messages: value.messages.slice(-this.maxMessagesPerEntry),
       unreadable: value.unreadable,
       cachedAt: this.now(),
       stale: true,
       complete,
+      ...(value.olderCursor !== undefined
+        ? { olderCursor: value.olderCursor }
+        : {}),
+      ...(value.hasOlder !== undefined ? { hasOlder: value.hasOlder } : {}),
+      ...(value.revision !== undefined ? { revision: value.revision } : {}),
     };
     this.entries.delete(key);
     this.entries.set(key, cached);
@@ -349,6 +367,44 @@ function argumentsOf(args: unknown): string {
   }
 }
 
+/** Parse both the current full-history response and the future cursor page response. */
+export function readableHistoryPage(
+  payload: unknown,
+  fallbackRevision = "legacy",
+): StoredHistoryPage {
+  if (typeof payload !== "object" || payload === null) {
+    throw new Error("Не удалось прочитать историю диалога.");
+  }
+  const record = payload as Record<string, unknown>;
+  if (!Array.isArray(record.messages)) {
+    throw new Error("Не удалось прочитать историю диалога.");
+  }
+  const readable = readableTurns(record.messages);
+  const olderCursor =
+    typeof record.olderCursor === "string" ? record.olderCursor : null;
+  return {
+    messages: readable.messages,
+    olderCursor,
+    hasOlder:
+      typeof record.hasOlder === "boolean"
+        ? record.hasOlder
+        : olderCursor !== null,
+    revision:
+      typeof record.revision === "string" ? record.revision : fallbackRevision,
+    unreadable: readable.unreadable,
+  };
+}
+
+function threadHistoryPath(
+  threadId: string,
+  agentId: string,
+  olderCursor?: string | null,
+): string {
+  const params = new URLSearchParams({ agentId });
+  if (olderCursor) params.set("before", olderCursor);
+  return `/api/copilotkit/threads/${encodeURIComponent(threadId)}/messages?${params.toString()}`;
+}
+
 export async function readThreadMessages(
   threadId: string,
   agentId: string,
@@ -375,18 +431,18 @@ export async function refreshThreadMessages(
   options: { signal?: AbortSignal } = {},
 ): Promise<StoredThread> {
   const cacheEpoch = threadHistoryCache.epoch(sessionScope);
-  const response = await client(
-    `/api/copilotkit/threads/${encodeURIComponent(threadId)}/messages?agentId=${encodeURIComponent(agentId)}`,
-    {
-      fallback: "Не удалось обновить историю диалога",
-      ...(options.signal ? { signal: options.signal } : {}),
-    },
-  );
-  const stored = (await response.json())?.messages;
-  if (!Array.isArray(stored)) {
-    throw new Error("Не удалось прочитать историю диалога.");
-  }
-  const result = readableTurns(stored);
+  const response = await client(threadHistoryPath(threadId, agentId), {
+    fallback: "Не удалось обновить историю диалога",
+    ...(options.signal ? { signal: options.signal } : {}),
+  });
+  const page = readableHistoryPage(await response.json());
+  const result: StoredThread = {
+    messages: page.messages,
+    unreadable: page.unreadable,
+    hasOlder: page.hasOlder,
+    olderCursor: page.olderCursor,
+    revision: page.revision,
+  };
   // A sign-out or scope switch can happen while response JSON is being parsed. The signal is the
   // fast cancellation path; the captured epoch also covers authoritative refreshes with no signal.
   options.signal?.throwIfAborted();
@@ -398,6 +454,25 @@ export async function refreshThreadMessages(
     result,
   );
   return result;
+}
+
+/** Read one bounded page when the runtime exposes the cursor history contract. */
+export async function refreshThreadHistoryPage(
+  _sessionScope: string,
+  threadId: string,
+  agentId: string,
+  options: { olderCursor?: string | null; signal?: AbortSignal } = {},
+): Promise<StoredHistoryPage> {
+  const response = await client(
+    threadHistoryPath(threadId, agentId, options.olderCursor),
+    {
+      fallback: "Не удалось обновить историю диалога",
+      ...(options.signal ? { signal: options.signal } : {}),
+    },
+  );
+  const page = readableHistoryPage(await response.json());
+  options.signal?.throwIfAborted();
+  return page;
 }
 
 /** Warm a channel from roster hover/focus without producing duplicate requests or hidden errors. */

@@ -3,6 +3,7 @@ import { useRenderToolCall } from "@copilotkit/react-core/v2";
 import { IconBox, IconDownload, IconFile } from "@tabler/icons-react";
 import {
   memo,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -40,10 +41,13 @@ import {
   TRANSCRIPT_HISTORY_PAGE_SIZE,
   TRANSCRIPT_HISTORY_WINDOW_MAX,
 } from "@/lib/channels/conversation-state";
+import type { HistoryPage } from "@/lib/copilot/conversation-store";
 import {
   type AgentRunState,
   agentRunStatusLabel,
+  formatElapsedMs,
 } from "@/lib/copilot/run-state";
+import { StreamTextScheduler } from "@/lib/copilot/stream-text-scheduler";
 import { parseGoogleWorkspaceResult } from "@/lib/google-workspace/result";
 import { markdownComponents, markdownUrlTransform } from "@/lib/markdown";
 import {
@@ -52,13 +56,20 @@ import {
 } from "@/lib/performance/workspace-timing";
 import { readToolName } from "@/lib/plugins/tool-name";
 import { asText, forDisplay, REFUSAL_MARKER } from "@/lib/plugins/tool-result";
-import { projectTranscriptWindow } from "./chat-messages";
+import {
+  type ActivitySnapshot,
+  activitySnapshotFor,
+  projectTranscriptWindow,
+} from "./chat-messages";
 import type { QueuedMessage } from "./composer";
 import { ToolRenderBoundary } from "./tool-boundary";
 import { ToolLine } from "./tool-line";
 
 type ChatTranscriptProps = {
   busy?: boolean;
+  hasOlder?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => Promise<HistoryPage | null>;
   /** Comma-separated `/` command names, used to tell a skill chip from a leading slash. */
   commandNames?: string;
   messages: ReadonlyArray<Readonly<Message>>;
@@ -93,6 +104,34 @@ type ChatTranscriptProps = {
 
 /** One shared empty array, so a screen without a queue does not hand down a new one per render. */
 const EMPTY_QUEUE: readonly QueuedMessage[] = [];
+const EMPTY_ATTACHMENTS_JSON = "[]";
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
+/**
+ * AG-UI may update structured content and tool calls in place. React dependency comparison cannot
+ * see a nested mutation when the array object itself remains stable, so keep a bounded signature
+ * for only the two live-edge rows that can still change.
+ */
+function mutableProjectionSignature(message: Readonly<Message> | undefined) {
+  if (!message) return "";
+  try {
+    return JSON.stringify({
+      content: typeof message.content === "string" ? null : message.content,
+      toolCalls: message.role === "assistant" ? message.toolCalls : null,
+    });
+  } catch {
+    // A malformed circular value will be rejected at the protocol boundary; rendering must still
+    // remain live until that happens.
+    return `${message.id}:${message.role}`;
+  }
+}
 
 type HistoryWindowState = {
   /** Null follows the live tail; an id pins the first mounted row while reading older history. */
@@ -282,10 +321,19 @@ function ScrollNewestQueuedIntoView({ newest }: { newest: string | null }) {
   return null;
 }
 
-/** Stable layout wrapper. Replayed and live rows never synthesize an entrance/typing animation. */
-function MessageLayout({ children }: { children: React.ReactNode }) {
+/** Stable layout wrapper. Only a newly appended live row gets the short entrance animation. */
+function MessageLayout({
+  arriving = false,
+  children,
+}: {
+  arriving?: boolean;
+  children: React.ReactNode;
+}) {
   return (
-    <div data-slot="message-arriving" className="flex w-full flex-col">
+    <div
+      className={`flex w-full flex-col${arriving ? " transcript-row-enter" : ""}`}
+      data-slot="message-arriving"
+    >
       {children}
     </div>
   );
@@ -313,6 +361,7 @@ const TranscriptMessage = memo(function TranscriptMessage({
   role,
   streaming = false,
   text,
+  arriving = false,
 }: {
   attachmentsJson?: string;
   channelId?: string;
@@ -322,6 +371,7 @@ const TranscriptMessage = memo(function TranscriptMessage({
   role: "user" | "assistant";
   streaming?: boolean;
   text: string;
+  arriving?: boolean;
 }) {
   onRender?.(id);
   const isUser = role === "user";
@@ -334,7 +384,7 @@ const TranscriptMessage = memo(function TranscriptMessage({
   return (
     <MessageRow align={align}>
       <MessageContent>
-        <MessageLayout>
+        <MessageLayout arriving={arriving}>
           {isUser && attachments.length > 0 ? (
             <AttachmentCards attachments={attachments} channelId={channelId} />
           ) : null}
@@ -347,9 +397,11 @@ const TranscriptMessage = memo(function TranscriptMessage({
             <Bubble
               align={align}
               variant={isUser ? "muted" : "ghost"}
-              className={isUser ? undefined : "w-full"}
+              className={isUser ? "rounded-2xl" : "w-full"}
             >
-              <BubbleContent className={isUser ? undefined : "w-full"}>
+              <BubbleContent
+                className={isUser ? "rounded-2xl px-4 py-2.5" : "w-full"}
+              >
                 {isUser ? (
                   // A person's own message is shown exactly as they typed it. Rendering it as markdown
                   // would silently reformat what they said, and an asterisk in a sentence is not
@@ -500,6 +552,7 @@ const TranscriptToolCall = memo(function TranscriptToolCall({
   args,
   result,
   live,
+  arriving = false,
 }: {
   channelId?: string;
   id: string;
@@ -509,6 +562,7 @@ const TranscriptToolCall = memo(function TranscriptToolCall({
   args: string;
   result?: string;
   live?: boolean;
+  arriving?: boolean;
 }) {
   onRender?.(id);
   const artifact = parseArtifactToolResult(name, result)?.artifact ?? null;
@@ -539,7 +593,7 @@ const TranscriptToolCall = memo(function TranscriptToolCall({
   );
 
   return (
-    <MessageLayout>
+    <MessageLayout arriving={arriving}>
       <ToolRenderBoundary name={name}>
         {artifact && channelId ? (
           <ArtifactCard
@@ -646,12 +700,71 @@ function ServerToolLine({ name, result }: { name: string; result?: string }) {
   );
 }
 
+function activityActionLabel(count: number): string {
+  if (count % 10 === 1 && count % 100 !== 11) return "действие";
+  if (
+    count % 10 >= 2 &&
+    count % 10 <= 4 &&
+    (count % 100 < 10 || count % 100 >= 20)
+  ) {
+    return "действия";
+  }
+  return "действий";
+}
+
+/** A quiet activity summary keeps tool noise secondary to the answer while retaining full detail. */
+function ActivitySummary({
+  busy,
+  snapshot,
+}: {
+  busy: boolean;
+  snapshot: ActivitySnapshot;
+}) {
+  const duration =
+    snapshot.elapsedMs > 0 ? ` · ${formatElapsedMs(snapshot.elapsedMs)}` : "";
+  return (
+    <details
+      className="rounded-xl border border-border/70 bg-muted/20 px-3 py-2"
+      data-testid="transcript-activity"
+      open={busy}
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-2 text-muted-foreground text-sm [&::-webkit-details-marker]:hidden">
+        <span
+          aria-hidden="true"
+          className={`size-1.5 shrink-0 rounded-full ${busy ? "animate-pulse bg-primary motion-reduce:animate-none" : snapshot.status === "stopped" ? "bg-destructive" : "bg-muted-foreground/60"}`}
+        />
+        <span className="min-w-0 truncate">{snapshot.label}</span>
+        <span className="shrink-0 text-xs opacity-70">
+          · {snapshot.toolCount} {activityActionLabel(snapshot.toolCount)}
+          {duration}
+        </span>
+      </summary>
+      {snapshot.steps.length > 0 ? (
+        <ol className="mt-2 flex flex-col gap-1 border-border border-l pl-3 text-muted-foreground text-xs">
+          {snapshot.steps.map((step) => (
+            <li className="flex items-center gap-2" key={step.id}>
+              <span
+                aria-hidden="true"
+                className={`size-1.5 shrink-0 rounded-full ${step.state === "active" ? "bg-primary" : step.state === "warning" ? "bg-destructive" : "bg-muted-foreground/40"}`}
+              />
+              <span>{step.label}</span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+    </details>
+  );
+}
+
 export function ChatTranscript({
   busy = false,
+  hasOlder = false,
+  loadingOlder = false,
   channelId,
   commandNames = "",
   conversationKey,
   messages,
+  onLoadOlder,
   onRowRender,
   onRemoveQueued,
   queued = EMPTY_QUEUE,
@@ -676,11 +789,39 @@ export function ChatTranscript({
    * walks from the durable tail and only returns the mounted window; expensive markdown/tool rows
    * below remain memoised on primitive props.
    */
-  const visible = projectTranscriptWindow(messages, {
-    size: historyWindow.size,
-    startId: historyWindow.startId,
-    olderStep: TRANSCRIPT_HISTORY_PAGE_SIZE,
-  });
+  const projectionTail = messages.at(-1);
+  const projectionTailBefore = messages.at(-2);
+  const projectionTailMutable = mutableProjectionSignature(projectionTail);
+  const projectionTailBeforeMutable =
+    mutableProjectionSignature(projectionTailBefore);
+  // AG-UI mutates the message array in place while streaming. Scalar tail dependencies preserve
+  // correctness for those mutations without re-projecting the full history on unrelated run state.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mutable AG-UI arrays are tracked by length and tail snapshots.
+  const visible = useMemo(
+    () =>
+      projectTranscriptWindow(messages, {
+        size: historyWindow.size,
+        startId: historyWindow.startId,
+        olderStep: TRANSCRIPT_HISTORY_PAGE_SIZE,
+      }),
+    [
+      historyWindow.size,
+      historyWindow.startId,
+      messages.length,
+      projectionTail?.content,
+      projectionTail?.id,
+      projectionTail?.role,
+      projectionTailMutable,
+      projectionTailBefore?.content,
+      projectionTailBefore?.id,
+      projectionTailBefore?.role,
+      projectionTailBeforeMutable,
+    ],
+  );
+  const activity = useMemo(
+    () => activitySnapshotFor(visible.items, busy, stopped, run),
+    [busy, run, stopped, visible.items],
+  );
   const viewportRef = useRef<HTMLDivElement>(null);
   const restoredScroll = useRef(false);
   const revealAnchor = useRef<{
@@ -689,8 +830,16 @@ export function ChatTranscript({
     scrollTop: number;
   } | null>(null);
   const scrollToLiveTail = useRef(false);
+  const scrollToLiveTailBehavior = useRef<ScrollBehavior>("auto");
+  const transcriptPainted = useRef(false);
+  const seenRowIds = useRef(new Set<string>());
+  const suppressNextEntrance = useRef(false);
+  const previousUserMessageId = useRef<string | null>(null);
 
-  useLayoutEffect(() => {
+  // The scroller's own initial-position layout effect runs in the provider above this component.
+  // Restore in a passive effect so its default "end" position cannot overwrite a saved channel
+  // position during a route switch.
+  useEffect(() => {
     const viewport = viewportRef.current;
     if (
       !viewport ||
@@ -713,18 +862,22 @@ export function ChatTranscript({
     restoredScroll.current = true;
   }, [conversationKey, restoring, visible.items.length]);
 
+  // This effect is driven by window/row transitions held in refs; the explicit scalar dependencies
+  // make prepend and return-to-tail corrections run after their DOM commit.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll correction intentionally reruns after bounded window changes.
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
     if (viewport && scrollToLiveTail.current) {
-      viewport.scrollTop = Math.max(
-        0,
-        viewport.scrollHeight - viewport.clientHeight,
-      );
+      const target = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+      viewport.scrollTo({
+        behavior: scrollToLiveTailBehavior.current,
+        top: target,
+      });
       scrollToLiveTail.current = false;
       revealAnchor.current = null;
       if (conversationKey) {
         conversationStateCache.setScroll(conversationKey, {
-          scrollTop: viewport.scrollTop,
+          scrollTop: target,
           distanceFromEnd: 0,
         });
       }
@@ -741,14 +894,22 @@ export function ChatTranscript({
       );
     }
     revealAnchor.current = null;
-  });
+  }, [
+    conversationKey,
+    historyWindow.size,
+    historyWindow.startId,
+    visible.items.length,
+  ]);
 
-  const rememberHistoryWindow = (next: HistoryWindowState) => {
-    if (conversationKey) {
-      conversationStateCache.setHistoryWindow(conversationKey, next);
-    }
-    setHistoryWindow(next);
-  };
+  const rememberHistoryWindow = useCallback(
+    (next: HistoryWindowState) => {
+      if (conversationKey) {
+        conversationStateCache.setHistoryWindow(conversationKey, next);
+      }
+      setHistoryWindow(next);
+    },
+    [conversationKey],
+  );
 
   const rememberVisibleAnchor = () => {
     const viewport = viewportRef.current;
@@ -775,40 +936,149 @@ export function ChatTranscript({
           historyWindow.size + TRANSCRIPT_HISTORY_PAGE_SIZE,
         ),
       });
+      return;
     }
+
+    if (!hasOlder || !onLoadOlder || loadingOlder) return;
+    void onLoadOlder().then((page) => {
+      if (!page || page.messages.length === 0) return;
+      const firstId = page.messages[0]?.id;
+      if (!firstId) return;
+      rememberHistoryWindow({
+        startId: firstId,
+        size: Math.min(
+          TRANSCRIPT_HISTORY_WINDOW_MAX,
+          historyWindow.size + page.messages.length,
+        ),
+      });
+    });
   };
 
-  const returnToLatest = () => {
+  const returnToLatest = useCallback(() => {
     scrollToLiveTail.current = true;
+    scrollToLiveTailBehavior.current = prefersReducedMotion()
+      ? "auto"
+      : "smooth";
+    suppressNextEntrance.current = true;
     rememberHistoryWindow({
       startId: null,
       size: TRANSCRIPT_HISTORY_PAGE_SIZE,
     });
+  }, [rememberHistoryWindow]);
+
+  const latestUserMessageId =
+    messages.findLast((message) => message.role === "user")?.id ?? null;
+
+  useEffect(() => {
+    if (latestUserMessageId === null) return;
+    if (previousUserMessageId.current === null) {
+      previousUserMessageId.current = latestUserMessageId;
+      return;
+    }
+    if (previousUserMessageId.current === latestUserMessageId) return;
+    previousUserMessageId.current = latestUserMessageId;
+
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    if (visible.hiddenAfter > 0) {
+      returnToLatest();
+      return;
+    }
+    viewport.scrollTo({
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+      top: Math.max(0, viewport.scrollHeight - viewport.clientHeight),
+    });
+  }, [latestUserMessageId, returnToLatest, visible.hiddenAfter]);
+
+  const rowIsArriving = (id: string): boolean => {
+    if (!transcriptPainted.current) return false;
+    const canAnimate =
+      historyWindow.startId === null &&
+      visible.hiddenAfter === 0 &&
+      !suppressNextEntrance.current;
+    if (!canAnimate) {
+      return false;
+    }
+    return !seenRowIds.current.has(id);
+  };
+
+  // Mark only committed rows as seen. Mutating this set during render would make an abandoned
+  // concurrent render suppress the entrance animation of a row that never reached the screen.
+  useEffect(() => {
+    for (const item of visible.items) seenRowIds.current.add(item.id);
+  }, [visible.items]);
+
+  // Reset after the history window commits, so rows revealed from history never animate.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: window transitions intentionally reset a render-only ref.
+  useEffect(() => {
+    transcriptPainted.current = true;
+    suppressNextEntrance.current = false;
+  }, [historyWindow.size, historyWindow.startId]);
+
+  const persistScroll = useCallback(
+    (snapshot: { scrollTop: number; distanceFromEnd: number }) => {
+      if (!conversationKey) return;
+      conversationStateCache.setScroll(conversationKey, snapshot);
+    },
+    [conversationKey],
+  );
+
+  const persistScrollRef = useRef(persistScroll);
+  persistScrollRef.current = persistScroll;
+  const pendingScrollSnapshot = useRef<{
+    scrollTop: number;
+    distanceFromEnd: number;
+  } | null>(null);
+  const scrollSchedulerRef = useRef<StreamTextScheduler | null>(null);
+  if (scrollSchedulerRef.current === null) {
+    scrollSchedulerRef.current = new StreamTextScheduler(() => {
+      const snapshot = pendingScrollSnapshot.current;
+      if (!snapshot) return;
+      pendingScrollSnapshot.current = null;
+      persistScrollRef.current(snapshot);
+    });
+  }
+  const scrollScheduler = scrollSchedulerRef.current;
+  useEffect(
+    () => () => {
+      // A route switch is a real boundary, not a reason to lose the last wheel/touch position.
+      // Commit that final snapshot before cancelling the timer for the unmounted transcript.
+      scrollScheduler.flush();
+      scrollScheduler.cancelPending();
+    },
+    [scrollScheduler],
+  );
+
+  const schedulePersistScroll = (viewport: HTMLElement) => {
+    if (!conversationKey) return;
+    // The latest scroll snapshot is enough; avoid touching the cache for every wheel event.
+    pendingScrollSnapshot.current = {
+      scrollTop: viewport.scrollTop,
+      distanceFromEnd: Math.max(
+        0,
+        viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop,
+      ),
+    };
+    scrollScheduler.push(
+      `${viewport.scrollTop}:${viewport.scrollHeight}:${viewport.clientHeight}`,
+    );
   };
 
   return (
-    <MessageScrollerProvider autoScroll>
+    <MessageScrollerProvider autoScroll scrollEdgeThreshold={80}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <MessageScroller className="min-h-0 flex-1">
           <MessageScrollerViewport
             onScroll={(event) => {
-              if (!conversationKey) return;
-              const viewport = event.currentTarget;
-              conversationStateCache.setScroll(conversationKey, {
-                scrollTop: viewport.scrollTop,
-                distanceFromEnd: Math.max(
-                  0,
-                  viewport.scrollHeight -
-                    viewport.clientHeight -
-                    viewport.scrollTop,
-                ),
-              });
+              schedulePersistScroll(event.currentTarget);
             }}
+            aria-label="История диалога"
             ref={viewportRef}
+            preserveScrollOnPrepend
           >
             <MessageScrollerContent
               aria-busy={busy}
-              className="mx-auto w-full max-w-2xl px-4 py-6"
+              className="mx-auto w-full max-w-3xl gap-5 px-3 py-4 sm:px-4 sm:py-6"
             >
               {/*
                * The memo boundary is INSIDE the scroller item, not around it. `MessageScrollerItem`
@@ -820,14 +1090,20 @@ export function ChatTranscript({
               {visible.items.length === 0 && restoring ? (
                 <RestoringTranscript />
               ) : null}
-              {visible.hiddenBefore > 0 ? (
+              {visible.hiddenBefore > 0 || hasOlder ? (
                 <div className="flex justify-center pb-6">
                   <button
-                    className="rounded-full border border-border bg-background px-4 py-2 text-muted-foreground text-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                    aria-busy={loadingOlder}
+                    className="rounded-full border border-border bg-background px-4 py-2 text-muted-foreground text-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-wait disabled:opacity-60"
+                    disabled={loadingOlder}
                     onClick={revealOlder}
                     type="button"
                   >
-                    Показать предыдущие сообщения ({visible.hiddenBefore})
+                    {loadingOlder
+                      ? "Загрузка предыдущих сообщений…"
+                      : visible.hiddenBefore > 0
+                        ? `Показать предыдущие сообщения (${visible.hiddenBefore})`
+                        : "Загрузить предыдущие сообщения"}
                   </button>
                 </div>
               ) : null}
@@ -844,6 +1120,7 @@ export function ChatTranscript({
                         ? { channelId: artifactChannelId }
                         : {})}
                       id={item.id}
+                      arriving={rowIsArriving(item.id)}
                       live={
                         busy &&
                         visible.hiddenAfter === 0 &&
@@ -863,7 +1140,11 @@ export function ChatTranscript({
                     messageId={item.id}
                   >
                     <TranscriptMessage
-                      attachmentsJson={JSON.stringify(item.attachments ?? [])}
+                      attachmentsJson={
+                        item.attachments
+                          ? JSON.stringify(item.attachments)
+                          : EMPTY_ATTACHMENTS_JSON
+                      }
                       {...(conversationKey
                         ? { channelId: conversationKey }
                         : {})}
@@ -878,6 +1159,7 @@ export function ChatTranscript({
                         index === visible.items.length - 1
                       }
                       text={item.text}
+                      arriving={rowIsArriving(item.id)}
                     />
                   </MessageScrollerItem>
                 ),
@@ -893,7 +1175,10 @@ export function ChatTranscript({
                   </button>
                 </div>
               ) : null}
-              {busy ? (
+              {activity.toolCount > 0 ? (
+                <ActivitySummary busy={busy} snapshot={activity} />
+              ) : null}
+              {busy && activity.toolCount === 0 ? (
                 <p
                   className="flex items-center gap-2 text-muted-foreground text-sm"
                   data-testid="transcript-run-status"
@@ -932,7 +1217,13 @@ export function ChatTranscript({
               ))}
             </MessageScrollerContent>
           </MessageScrollerViewport>
-          <MessageScrollerButton />
+          <MessageScrollerButton
+            aria-label={`Перейти к последним сообщениям${visible.hiddenAfter > 0 ? `: ${visible.hiddenAfter} новых` : ""}`}
+            onClick={(event) => {
+              event.preventDefault();
+              returnToLatest();
+            }}
+          />
           <ScrollNewestQueuedIntoView newest={queued.at(-1)?.id ?? null} />
         </MessageScroller>
       </div>

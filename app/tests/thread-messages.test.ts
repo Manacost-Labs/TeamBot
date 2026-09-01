@@ -5,7 +5,9 @@ import {
   createThreadHistoryCache,
   mergeAuthoritativeThreadMessages,
   mergeThreadMessagesById,
+  readableHistoryPage,
   readableTurns,
+  refreshThreadHistoryPage,
   refreshThreadMessages,
 } from "../src/lib/copilot/thread-messages";
 
@@ -266,6 +268,49 @@ describe("shapes a real thread contains", () => {
 });
 
 describe("bounded stale-while-revalidate history", () => {
+  test("reads a cursor page without exposing the cursor as a message field", () => {
+    const page = readableHistoryPage({
+      messages: [{ id: "one", role: "assistant", content: "One" }],
+      olderCursor: "opaque-before-one",
+      hasOlder: true,
+      revision: "rev-7",
+    });
+
+    expect(page.messages).toHaveLength(1);
+    expect(page.olderCursor).toBe("opaque-before-one");
+    expect(page.hasOlder).toBe(true);
+    expect(page.revision).toBe("rev-7");
+    expect(page.unreadable).toBe(0);
+  });
+
+  test("requests an older page through the opaque before cursor", async () => {
+    let requestedUrl = "";
+    globalThis.fetch = (async (url: unknown) => {
+      requestedUrl = String(url);
+      return {
+        ok: true,
+        json: async () => ({
+          messages: [{ id: "older", role: "assistant", content: "Older" }],
+          olderCursor: null,
+          hasOlder: false,
+          revision: "rev-7",
+        }),
+      } as Response;
+    }) as typeof fetch;
+
+    const result = await refreshThreadHistoryPage(
+      "user-a",
+      "thread with spaces",
+      "agent/a",
+      { olderCursor: "cursor/opaque" },
+    );
+
+    expect(requestedUrl).toContain("agentId=agent%2Fa");
+    expect(requestedUrl).toContain("before=cursor%2Fopaque");
+    expect(result.messages[0]?.id).toBe("older");
+    expect(result.hasOlder).toBe(false);
+  });
+
   test("returns a cached 500-message tail immediately and marks it stale", () => {
     const cache = createThreadHistoryCache({
       maxEntries: 2,
@@ -299,6 +344,23 @@ describe("bounded stale-while-revalidate history", () => {
     });
 
     expect(cache.peek("user-a", "thread-a", "agent")?.complete).toBe(true);
+  });
+
+  test("keeps a bounded server page marked incomplete while older history exists", () => {
+    const cache = createThreadHistoryCache({ maxMessagesPerEntry: 500 });
+    cache.set("user-a", "thread-a", "agent", {
+      messages: Array.from({ length: 60 }, (_, index) => ({
+        id: `message-${index}`,
+        role: "assistant" as const,
+        content: `Answer ${index}`,
+      })),
+      unreadable: 0,
+      olderCursor: "opaque-cursor",
+      hasOlder: true,
+      revision: "revision-1",
+    });
+
+    expect(cache.peek("user-a", "thread-a", "agent")?.complete).toBe(false);
   });
 
   test("keeps cache content isolated by authenticated user scope", () => {

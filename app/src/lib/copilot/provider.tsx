@@ -24,7 +24,7 @@ import { SandboxedTools } from "./sandboxed-tools";
 export function CopilotProvider({ children }: { children: ReactNode }) {
   return (
     <CopilotKitProvider
-      defaultThrottleMs={50}
+      defaultThrottleMs={32}
       runtimeUrl="/api/copilotkit"
       credentials="include"
     >

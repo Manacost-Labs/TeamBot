@@ -245,6 +245,32 @@ body {
 }
 
 /*
+ * New live rows arrive with a small spatial cue. The class is applied once per stable message id;
+ * streamed text updates do not remount the row, so the animation never restarts on every token.
+ * Opacity and transform keep the effect compositor-friendly and short enough not to delay reading.
+ */
+.transcript-row-enter {
+  animation: transcript-row-enter 160ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+@keyframes transcript-row-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .transcript-row-enter {
+    animation: none;
+  }
+}
+
+/*
  * Row descriptions wrap on sense rather than on width.
  *
  * Here rather than on the `ItemDescription` primitive, which is where this started. That file has an

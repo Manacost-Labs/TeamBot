@@ -27,7 +27,15 @@ import { recordChannelActivityMutationOptions } from "@/lib/channels/mutations";
 import type { AgentChannel } from "@/lib/channels/queries";
 import { useActiveBot } from "@/lib/copilot/active-bot";
 import { ConversationProvider } from "@/lib/copilot/conversation";
+import {
+  createConversationStore,
+  type HistoryPage,
+} from "@/lib/copilot/conversation-store";
 import { createStableHistoryHydration } from "@/lib/copilot/history-hydration";
+import {
+  ConversationHistoryPaginator,
+  useHistoryPagination,
+} from "@/lib/copilot/history-pagination";
 import { afterMs, joinWithin } from "@/lib/copilot/join-thread";
 import { repairUnansweredToolCalls } from "@/lib/copilot/repair-history";
 import {
@@ -45,6 +53,7 @@ import {
   invalidateThreadMessagesCache,
   mergeAuthoritativeThreadMessages,
   mergeThreadMessagesById,
+  refreshThreadHistoryPage,
   refreshThreadMessages,
   type StoredThread,
 } from "@/lib/copilot/thread-messages";
@@ -74,6 +83,31 @@ const SEND_WITHOUT_RUNTIME_AFTER_MS = 1500;
 
 /** A history request must not hold the first send gate indefinitely. */
 const HISTORY_REFRESH_DEADLINE_MS = 4_000;
+
+function historyPageFromStored(stored: StoredThread): HistoryPage {
+  return {
+    messages: stored.messages,
+    olderCursor: stored.olderCursor ?? null,
+    hasOlder: stored.hasOlder ?? stored.olderCursor !== null,
+    revision: stored.revision ?? "legacy",
+  };
+}
+
+/** Merge a refreshed bounded tail into pages the reader has already loaded above it. */
+function mergeLatestHistoryWindow(
+  previous: readonly Message[],
+  latest: readonly Message[],
+): Message[] {
+  const latestById = new Map(latest.map((message) => [message.id, message]));
+  const previousIds = new Set(previous.map((message) => message.id));
+  const merged = previous.map(
+    (message) => latestById.get(message.id) ?? message,
+  );
+  for (const message of latest) {
+    if (!previousIds.has(message.id)) merged.push(message);
+  }
+  return merged;
+}
 
 function isTransportFailure(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -123,6 +157,8 @@ export function ChannelChat({
       UseAgentUpdate.OnMessagesChanged,
       UseAgentUpdate.OnRunStatusChanged,
     ],
+    // Coalesce high-frequency deltas while keeping lifecycle callbacks immediate.
+    throttleMs: 32,
   });
 
   /**
@@ -238,6 +274,31 @@ export function ChannelChat({
     initialHistoryRef.current?.unreadable ?? 0,
   );
   const historyIdentity = `${historyScope}\u0000${channel.threadId}\u0000${runtimeAgentId}`;
+  // The identity intentionally resets this external store when the visible channel changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: identity token scopes the store instance.
+  const historyStore = useMemo(
+    () => createConversationStore(),
+    [historyIdentity],
+  );
+  const historyPaginator = useMemo(
+    () =>
+      new ConversationHistoryPaginator({
+        ...(initialHistoryRef.current
+          ? { initialPage: historyPageFromStored(initialHistoryRef.current) }
+          : {}),
+        loadPage: ({ olderCursor, signal }) =>
+          refreshThreadHistoryPage(
+            historyScope,
+            channel.threadId,
+            runtimeAgentId,
+            { olderCursor, signal },
+          ),
+        store: historyStore,
+      }),
+    [channel.threadId, historyScope, historyStore, runtimeAgentId],
+  );
+  const historyPagination = useHistoryPagination(historyPaginator);
+  useEffect(() => () => historyPaginator.dispose(), [historyPaginator]);
   const historyHydrationState = useMemo(
     () => ({
       identity: historyIdentity,
@@ -253,18 +314,23 @@ export function ChannelChat({
   const historyIsAuthoritative =
     authoritativeHistoryIdentity === historyHydrationState.identity;
   const presentAuthoritativeHistory = useCallback(
-    (stored: StoredThread) => {
+    (stored: StoredThread, mode: "initial" | "latest" = "latest") => {
       markChannelTiming(channel.id, "fresh_history_loaded");
-      setHistoryPreview((preview) =>
-        mergeThreadMessagesById(preview, stored.messages, {
-          retainMissing: false,
-        }),
-      );
+      const page = historyPageFromStored(stored);
+      if (mode === "initial") {
+        historyPaginator.setLatestPage(page);
+        setHistoryPreview(stored.messages);
+      } else {
+        historyPaginator.observeLatestPage(page);
+        setHistoryPreview((preview) =>
+          mergeLatestHistoryWindow(preview, stored.messages),
+        );
+      }
       setUnreadable(stored.unreadable);
       setHistoryError(null);
       setAuthoritativeHistoryIdentity(historyHydrationState.identity);
     },
-    [channel.id, historyHydrationState.identity, historyHydrationState],
+    [channel.id, historyHydrationState.identity, historyPaginator],
   );
   const pendingFirstTextPaint = useRef<string | null>(null);
   useEffect(
@@ -316,7 +382,7 @@ export function ChannelChat({
       );
       if (!current) return;
       if (outcome.status === "ready") {
-        presentAuthoritativeHistory(outcome.value);
+        presentAuthoritativeHistory(outcome.value, "initial");
       } else {
         setHistoryError(
           outcome.error instanceof Error
@@ -478,6 +544,7 @@ export function ChannelChat({
           runtimeAgentId,
           { signal: AbortSignal.timeout(HISTORY_REFRESH_DEADLINE_MS) },
         );
+        presentAuthoritativeHistory(stored);
         refreshFailure = null;
         const merged = mergeThreadMessagesById(
           target.messages,
@@ -853,6 +920,27 @@ export function ChannelChat({
     // Keep `seed` in state; transcriptMessages gives it up once the agent holds a user turn.
   }, []);
 
+  const loadOlderHistory = useCallback(async () => {
+    try {
+      const page = await historyPaginator.loadOlder();
+      if (!page || !mounted.current) return page;
+      setHistoryPreview((preview) =>
+        mergeThreadMessagesById(preview, page.messages),
+      );
+      setHistoryError(null);
+      return page;
+    } catch (error) {
+      if (mounted.current) {
+        setHistoryError(
+          error instanceof Error
+            ? error.message
+            : "Не удалось загрузить предыдущие сообщения.",
+        );
+      }
+      return null;
+    }
+  }, [historyPaginator]);
+
   const currentMessages =
     agent.messages.length > 0 ? agent.messages : historyPreview;
   const messageIds = new Set(currentMessages.map((message) => message.id));
@@ -898,6 +986,9 @@ export function ChannelChat({
         // Readiness is handled by `say`; deletion is the only disabled-chat state.
         disabled={!channel.active}
         messages={visibleMessages}
+        hasOlder={historyPagination.hasOlder}
+        loadingOlder={historyPagination.isLoading}
+        onLoadOlder={loadOlderHistory}
         notice={
           /*
            * Two things can be worth saying at once — a deleted coworker and a history with holes in

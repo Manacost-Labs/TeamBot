@@ -286,6 +286,23 @@ describe("projectTranscriptWindow", () => {
     expect(window.olderStartId).toBe("message-380");
   });
 
+  test.each([2_000, 10_000])(
+    "keeps a %s-message transcript bounded at the live edge",
+    (historySize) => {
+      const history = Array.from({ length: historySize }, (_, index) => ({
+        id: `large-message-${index}`,
+        role: "assistant" as const,
+        content: `Answer ${index}`,
+      }));
+
+      const window = projectTranscriptWindow(history, { size: 60 });
+
+      expect(window.items).toHaveLength(60);
+      expect(window.items.at(-1)?.id).toBe(`large-message-${historySize - 1}`);
+      expect(window.hiddenBefore).toBe(historySize - 60);
+    },
+  );
+
   test("shifts a fixed-size window older and stays pinned when the live tail grows", () => {
     const tail = projectTranscriptWindow(longHistory, { size: 180 });
     const older = projectTranscriptWindow(longHistory, {

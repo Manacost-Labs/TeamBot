@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import type { Message } from "@ag-ui/core";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { cleanup, fireEvent, render } from "@testing-library/react";
+import { useState } from "react";
 import { conversationStateCache } from "@/lib/channels/conversation-state";
 import { ChatTranscript } from "./chat-transcript";
 
@@ -39,6 +40,32 @@ function messages(count: number): Message[] {
     role: "assistant",
     content: `Answer ${index}`,
   }));
+}
+
+function PaginatedTranscriptFixture() {
+  const [current, setCurrent] = useState(messages(60));
+  const [hasOlder, setHasOlder] = useState(true);
+  return (
+    <ChatTranscript
+      hasOlder={hasOlder}
+      messages={current}
+      onLoadOlder={async () => {
+        const page = {
+          hasOlder: false,
+          messages: Array.from({ length: 5 }, (_, index) => ({
+            id: `older-${index}`,
+            role: "assistant" as const,
+            content: `Older ${index}`,
+          })),
+          olderCursor: null,
+          revision: "test-revision",
+        };
+        setCurrent((latest) => [...page.messages, ...latest]);
+        setHasOlder(false);
+        return page;
+      }}
+    />
+  );
 }
 
 describe("transcript windowing", () => {
@@ -130,6 +157,25 @@ describe("transcript windowing", () => {
     expect(view.getByText("Answer 199 delta")).toBeTruthy();
   });
 
+  test("reprojects nested content mutation from a stable AG-UI message array", () => {
+    const content = [{ type: "text" as const, text: "First content" }];
+    const stableMessages: Message[] = [
+      {
+        id: "mutable-user",
+        role: "user",
+        content,
+      },
+    ];
+    const view = render(<ChatTranscript messages={stableMessages} />);
+
+    expect(view.getByText("First content")).toBeTruthy();
+    content[0].text = "Second content";
+    view.rerender(<ChatTranscript messages={stableMessages} />);
+
+    expect(view.queryByText("First content")).toBeNull();
+    expect(view.getByText("Second content")).toBeTruthy();
+  });
+
   test("never renders unmarked reasoning-role content", () => {
     const view = render(
       <ChatTranscript
@@ -219,6 +265,20 @@ describe("transcript windowing", () => {
     expect(
       view.getByRole("button", { name: /Вернуться к последним сообщениям/ }),
     ).toBeTruthy();
+  });
+
+  test("loads and reveals an older bounded server page", async () => {
+    const view = render(<PaginatedTranscriptFixture />);
+
+    fireEvent.click(
+      view.getByRole("button", { name: "Загрузить предыдущие сообщения" }),
+    );
+
+    expect(await view.findByText("Older 0")).toBeTruthy();
+    expect(view.getByText("Answer 59")).toBeTruthy();
+    expect(
+      view.queryByRole("button", { name: /предыдущие сообщения/i }),
+    ).toBeNull();
   });
 
   test.each([

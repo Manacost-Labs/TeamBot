@@ -29,6 +29,7 @@ import {
 import { onComputerActivity } from "@/lib/copilot/computer-activity";
 import { useAgentRunActivity } from "@/lib/copilot/run-activity-store";
 import { agentRunStatusLabel } from "@/lib/copilot/run-state";
+import { EASE_OUT, ENTRANCE_SECONDS } from "@/lib/motion";
 
 const chatSearchSchema = z.object({
   settings: z.boolean().optional(),
@@ -36,9 +37,6 @@ const chatSearchSchema = z.object({
   watch: z.boolean().optional(),
 });
 
-const EASE_OUT = [0.23, 1, 0.32, 1] as const;
-
-const HEADING_ENTRANCE_SECONDS = 0.18;
 const HEADING_ENTRANCE_OFFSET = "translateY(4px)";
 
 /** Shared detail pane width for the live screen view. */
@@ -179,7 +177,7 @@ function RouteComponent() {
       }
     >
       <div className="flex flex-col">
-        <div className="h-12 border-b border-border sticky top-0 flex flex-row items-center justify-between px-3 gap-2">
+        <div className="sticky top-0 flex h-12 flex-row items-center justify-between gap-2 border-border border-b px-3">
           {/* Keyed on the displayed name so cold channel loads animate the resolved name, not the id. */}
           <div className="flex min-w-0 items-center gap-1.5">
             <motion.div
@@ -188,7 +186,7 @@ function RouteComponent() {
               initial={{ opacity: 0 }}
               key={`avatar:${channel.data?.name ?? channelId}`}
               transition={{
-                duration: HEADING_ENTRANCE_SECONDS,
+                duration: ENTRANCE_SECONDS,
                 ease: EASE_OUT,
               }}
             >
@@ -212,7 +210,7 @@ function RouteComponent() {
                 }
                 key={`name:${channel.data?.name ?? channelId}`}
                 transition={{
-                  duration: HEADING_ENTRANCE_SECONDS,
+                  duration: ENTRANCE_SECONDS,
                   ease: EASE_OUT,
                 }}
               >
