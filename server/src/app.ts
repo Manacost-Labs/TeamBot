@@ -6,6 +6,10 @@ import type { BotAccessCheck } from "./agents/profile-policy";
 import type { AgentProfileStore } from "./agents/profile-store";
 import { createAgentRoutes } from "./agents/routes";
 import {
+  createPersonalAiConnectionRoutes,
+  type PersonalAiConnectionRoutesOptions,
+} from "./ai-connections/routes";
+import {
   type AttachmentRouteDependencies,
   createAttachmentRoutes,
 } from "./attachments/routes";
@@ -229,6 +233,11 @@ export function createApp(
   googleDocumentEdits?: GoogleDocumentEditService,
   /** Run-scoped tools for remote AG-UI callbacks; appended to preserve positional call sites. */
   callbackRunTools?: CallbackRunTools,
+  /** Actor-owned personal AI settings; appended to preserve positional call sites. */
+  personalAiConnections?: Omit<
+    PersonalAiConnectionRoutesOptions,
+    "requireUser"
+  >,
 ) {
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -812,6 +821,16 @@ export function createApp(
         legacyAgentToken: config.agentToolToken ?? "",
         agentProfiles: agentProfileStore,
         allowedOrigins: [config.appUrl, config.publicUrl],
+      }),
+    );
+  }
+
+  if (personalAiConnections) {
+    app.route(
+      "/",
+      createPersonalAiConnectionRoutes({
+        ...personalAiConnections,
+        requireUser,
       }),
     );
   }

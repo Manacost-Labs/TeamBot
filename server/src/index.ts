@@ -20,6 +20,8 @@ import { handoffTool } from "./agents/handoff-tool";
 import { createAgentProfileStore } from "./agents/profile-store";
 import type { AgentActor } from "./agents/profile-types";
 import { createRuntimeAgentLoader } from "./agents/runtime-agents";
+import { createOpenRouterKeyValidator } from "./ai-connections/openrouter";
+import { createPersonalAiConnectionStore } from "./ai-connections/store";
 import { createApp } from "./app";
 import { createArtifactExportStore } from "./artifacts/export-store";
 import { createArtifactRenderer } from "./artifacts/renderer-client";
@@ -171,6 +173,11 @@ await initializeDevActorUser(database, config.singleUser);
 // The vault, built before the agent store because a customer's agent may sit behind a key and that
 // key belongs here rather than on the agent row. See agents/auth-header.ts.
 const credentialStore = createCredentialStore(database);
+const personalAiConnectionStore = createPersonalAiConnectionStore({
+  database,
+  encryptionKey: config.keyEncryptionKey,
+});
+const openRouterKeyValidator = createOpenRouterKeyValidator();
 const agentVault = {
   store: credentialStore,
   reader: credentialStore,
@@ -1169,6 +1176,13 @@ const app = createApp(
   googleDocumentEdits,
   // Remote AG-UI Bots execute handoff and escalation here, from the signed callback context.
   handoffToolsForRun,
+  {
+    store: personalAiConnectionStore,
+    validator: openRouterKeyValidator,
+    allowedOrigins: [config.appUrl, config.publicUrl].filter(
+      (origin): origin is string => origin !== undefined,
+    ),
+  },
 );
 
 /**

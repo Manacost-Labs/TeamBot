@@ -376,14 +376,14 @@ session guard.
 
 **Acceptance criteria:**
 
-- [ ] Routes derive ownership only from `context.var.actor.id` and reject unknown providers/fields.
-- [ ] OpenRouter plaintext is consumed once and never returned; disconnect is CSRF-protected by same-origin session controls.
-- [ ] A user cannot enumerate, address or mutate another user's connection.
+- [x] Routes derive ownership only from `context.var.actor.id` and reject unknown providers/fields.
+- [x] OpenRouter plaintext is consumed once and never returned; disconnect is CSRF-protected by same-origin session controls.
+- [x] A user cannot enumerate, address or mutate another user's connection.
 
 **Verification:**
 
-- [ ] `bun test server/tests/ai-connection-routes.test.ts`
-- [ ] Negative actor-swap tests return 403/404 without revealing existence.
+- [x] `bun test server/tests/ai-connection-routes.test.ts`
+- [x] Negative actor-swap tests return 403/404 without revealing existence.
 
 **Dependencies:** Tasks 11–12.
 
