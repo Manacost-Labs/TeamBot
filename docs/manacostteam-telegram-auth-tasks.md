@@ -886,18 +886,40 @@ fix only findings caused by this feature.
 **Acceptance criteria:**
 
 - [ ] Full format, lint, typecheck, test, build and project quality commands pass.
-- [ ] Security check has no unresolved feature-introduced critical/high finding.
-- [ ] Secret-canary scan, cross-user probes and rollback rehearsal tests are green.
+- [x] Security check has no unresolved feature-introduced critical/high finding.
+- [x] Secret-canary scan, cross-user probes and rollback rehearsal tests are green.
 
 **Verification:**
 
-- [ ] `bun run format:check`
-- [ ] `bun run lint`
-- [ ] `bun run typecheck`
-- [ ] `bun run test:ci`
-- [ ] `bun run build`
+- [x] `bun run format:check`
+- [x] `bun run lint`
+- [x] `bun run typecheck`
+- [x] `bun run test:ci`
+- [x] `bun run build`
 - [ ] `/home/debian/server/tools/ai-quality/bin/ai-check`
 - [ ] `/home/debian/server/tools/ai-quality/bin/ai-security-check`
+
+**Gate evidence (2026-09-01, clean detached worktree):**
+
+- `test:ci` completed 3,159 Bun tests across 277 files with zero failures; both isolated Node
+  service suites also reported zero failures. The focused personal-provider matrix passed 80/80,
+  the deployment/config rollback matrix passed 172/172, and the protected-config helper passed
+  17/17.
+- Gitleaks scanned the full 314-commit history with no leak. Two historical synthetic credential
+  canaries now have exact fingerprint ignores with explanatory comments; no rule or path-wide
+  exception was added.
+- `ai-check` reaches only pre-existing repository debt after lint, typecheck, tests and build pass:
+  five unchanged shell files fail `shfmt`, the unchanged release workflow fails `actionlint`, and
+  unchanged Dockerfiles have existing Hadolint findings.
+- `ai-security-check` reports zero Critical and 13 High dependency advisories among 32 known
+  advisories. Every affected version was already present before this feature or belongs to unchanged
+  example lockfiles. Direct Trivy/Semgrep continuation found High findings only in unchanged
+  Dockerfiles and unchanged HeartPulse/parser Python services. No feature-introduced Critical/High
+  remains.
+
+The two project-wide commands stay unchecked. Remediating those baselines changes unrelated build,
+container and dependency surfaces and requires a separate reviewed scope; Task 31 and Checkpoint K
+must not be marked complete until that decision is made.
 
 **Dependencies:** Tasks 1–30.
 
