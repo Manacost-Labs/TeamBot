@@ -29,14 +29,14 @@ Codex child receives its own temporary home rather than the host profile.
 
 **Acceptance criteria:**
 
-- [ ] A run creates a mode-`0700` temporary `CODEX_HOME` and removes it after success, failure and cancellation.
-- [ ] The child environment is built from an allowlist and does not inherit the host `CODEX_HOME` or auth path.
-- [ ] Existing research, YouTube and control-agent workspace selection remains unchanged.
+- [x] A run creates a mode-`0700` temporary `CODEX_HOME` and removes it after success, failure and cancellation.
+- [x] The child environment is built from an allowlist and does not inherit the host `CODEX_HOME` or auth path.
+- [x] Existing research, YouTube and control-agent workspace selection remains unchanged.
 
 **Verification:**
 
-- [ ] `bun test agent-codex/tests/runtime-profile.test.ts agent-codex/tests/codex-run.test.ts`
-- [ ] A spawned fixture process sees only its task-owned home and the directory is gone after exit.
+- [x] `bun test agent-codex/tests/runtime-profile.test.ts agent-codex/tests/codex-run.test.ts`
+- [x] A spawned fixture process sees only its task-owned home and the directory is gone after exit.
 
 **Dependencies:** None.
 
@@ -56,14 +56,14 @@ that the provider key cannot enter a shell/tool environment.
 
 **Acceptance criteria:**
 
-- [ ] Generated configuration fixes `base_url`, `wire_api` and the environment-key name server-side.
-- [ ] Client input cannot replace the OpenRouter origin or inject extra Codex configuration.
-- [ ] A fixture shell launched by Codex receives no OpenRouter key while the provider adapter can read it.
+- [x] Generated configuration fixes `base_url`, `wire_api` and the environment-key name server-side.
+- [x] Client input cannot replace the OpenRouter origin or inject extra Codex configuration.
+- [x] A fixture shell launched by Codex receives no OpenRouter key while the provider adapter can read it.
 
 **Verification:**
 
-- [ ] `bun test agent-codex/tests/runtime-profile.test.ts agent-codex/tests/codex-run.test.ts`
-- [ ] A bounded installed-CLI probe reaches `initialize` with the generated profile and synthetic transport.
+- [x] `bun test agent-codex/tests/runtime-profile.test.ts agent-codex/tests/codex-run.test.ts`
+- [x] A bounded installed-CLI probe reaches `initialize` with the generated profile and synthetic transport.
 
 **Dependencies:** Task 1.
 
@@ -82,14 +82,14 @@ repository's normal session and prove logout/revocation still use the same cooki
 
 **Acceptance criteria:**
 
-- [ ] The endpoint creates a Better Auth session without introducing a second cookie format.
-- [ ] Existing `createRequireUser`, sign-out and session deletion recognize the new session.
-- [ ] Better Auth is pinned to the tested 1.7.1 contract during this feature.
+- [x] The endpoint creates a Better Auth session without introducing a second cookie format.
+- [x] Existing `createRequireUser`, sign-out and session deletion recognize the new session.
+- [x] Better Auth is pinned to the tested 1.7.1 contract during this feature.
 
 **Verification:**
 
-- [ ] `bun test server/tests/telegram-plugin.test.ts server/tests/health.test.ts`
-- [ ] Contract test confirms the session is rejected after its database row is removed.
+- [x] `bun test server/tests/telegram-plugin.test.ts server/tests/health.test.ts`
+- [x] Contract test confirms the session is rejected after its database row is removed.
 
 **Dependencies:** None.
 
@@ -105,9 +105,9 @@ repository's normal session and prove logout/revocation still use the same cooki
 
 ## Checkpoint A — Runtime feasibility
 
-- [ ] Tasks 1–3 tests pass together.
-- [ ] No proof requires the global host `auth.json`, a browser secret or a parallel session system.
-- [ ] Any unsupported Codex/Better Auth behavior is reflected in the specification before continuing.
+- [x] Tasks 1–3 tests pass together.
+- [x] No proof requires the global host `auth.json`, a browser secret or a parallel session system.
+- [x] Any unsupported Codex/Better Auth behavior is reflected in the specification before continuing.
 
 ## Phase 1 — Telegram login vertical slice
 
