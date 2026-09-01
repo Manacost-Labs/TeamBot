@@ -256,14 +256,14 @@ and prevents the next sign-in.
 
 **Acceptance criteria:**
 
-- [ ] Removed subjects lose active sessions and cannot sign in again.
-- [ ] Explicit database revocation continues to win over configuration.
-- [ ] An empty/missing owner result fails before traffic is served.
+- [x] Removed subjects lose active sessions and cannot sign in again.
+- [x] Explicit database revocation continues to win over configuration.
+- [x] An empty/missing owner result fails before traffic is served.
 
 **Verification:**
 
-- [ ] `bun test server/tests/telegram-access-reconciliation.test.ts server/tests/people-routes.test.ts`
-- [ ] Two-replica-style idempotency fixture produces one safe reconciliation result.
+- [x] `bun test server/tests/telegram-access-reconciliation.test.ts server/tests/people-routes.test.ts`
+- [x] Two-replica-style idempotency fixture produces one safe reconciliation result.
 
 **Dependencies:** Tasks 6 and 8.
 

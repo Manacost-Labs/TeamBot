@@ -46,6 +46,7 @@ import { DEV_ACTOR, initializeDevActorUser } from "./auth/dev-actor";
 import { createRoleRepository } from "./auth/guards";
 import { createIdentityProviderStore } from "./auth/identity-provider-store";
 import type { OpenBotRole } from "./auth/roles";
+import { reconcileTelegramAccess } from "./auth/telegram-access";
 import {
   createChannelEventHub,
   startChannelActivityListener,
@@ -284,6 +285,18 @@ const peopleStore = createPeopleStore(
    */
   (userId, by) => pluginStore.retireConnectionsFor(userId, by),
 );
+if (config.auth?.telegram) {
+  // Run before Better Auth and before `serve`: removed IDs lose sessions on every replica before
+  // any request can be accepted, and an unbound/revoked owner stops boot instead of locking the
+  // team out behind a healthy-looking login screen.
+  const result = await reconcileTelegramAccess(database, {
+    allowedUserIds: config.auth.telegram.allowedUserIds,
+    ownerUserIds: config.auth.telegram.ownerUserIds,
+  });
+  console.info(
+    JSON.stringify({ type: "telegram-access-reconciled", ...result }),
+  );
+}
 const identityProviderStore = createIdentityProviderStore(database);
 /*
  * Built before `auth` for the same reason the people store is: sign-in writes to the trail, and the
