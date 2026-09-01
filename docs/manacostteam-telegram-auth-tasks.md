@@ -448,9 +448,9 @@ the credentials.
 
 ## Checkpoint E — OpenRouter connection UI
 
-- [ ] Tasks 13–15 pass end-to-end with controlled HTTP and PostgreSQL fixtures.
-- [ ] Browser and API responses contain no plaintext key.
-- [ ] No runtime has access yet; persistence/UI can be reviewed independently.
+- [x] Tasks 13–15 pass end-to-end with controlled HTTP and PostgreSQL fixtures.
+- [x] Browser and API responses contain no plaintext key.
+- [x] No runtime has access yet; persistence/UI can be reviewed independently.
 
 ## Phase 3 — One-time runtime delivery and OpenRouter execution
 
