@@ -291,14 +291,14 @@ paths without changing or deleting existing rows.
 
 **Acceptance criteria:**
 
-- [ ] One user has at most one active connection and one provider per connection.
-- [ ] Connection/flow/lease rows reference users and encrypted credentials with safe delete behavior.
-- [ ] Lease run IDs are unique and redemption/expiry fields support atomic one-time use.
+- [x] One user has at most one active connection and one provider per connection.
+- [x] Connection/flow/lease rows reference users and encrypted credentials with safe delete behavior.
+- [x] Lease run IDs are unique and redemption/expiry fields support atomic one-time use.
 
 **Verification:**
 
-- [ ] `bun x drizzle-kit check --config=server/drizzle.config.ts`
-- [ ] Migration applies twice safely in the repository's migration harness and old schema data remains readable.
+- [x] `bun x drizzle-kit check --config=server/drizzle.config.ts`
+- [x] Migration applies twice safely in the repository's migration harness and old schema data remains readable.
 
 **Dependencies:** Checkpoint A.
 
