@@ -7,6 +7,7 @@ import {
   CopilotRuntime,
 } from "@copilotkit/runtime/v2";
 import { createCopilotHonoHandler } from "@copilotkit/runtime/v2/hono";
+import { Hono } from "hono";
 import type { Observable } from "rxjs";
 import { defer, from, switchMap } from "rxjs";
 import { z } from "zod";
@@ -25,6 +26,11 @@ import type {
 import { projectRunInputForModel } from "./attachments/model-images";
 import type { AgentFetch, StallGuard } from "./channels/stall-guard";
 import type { DeploymentConfig } from "./config";
+import {
+  InvalidHistoryCursor,
+  paginateThreadMessages,
+  validateHistoryCursor,
+} from "./copilot-history-pagination";
 import {
   createRuntimeRequestTiming,
   type RuntimeTimingOptions,
@@ -1339,70 +1345,100 @@ export function mountCopilotRuntime(
     ) as never,
   });
 
-  return {
-    handler: createCopilotHonoHandler({
-      runtime,
-      basePath,
-      hooks: {
-        onRequest: async ({ request, path }) => {
-          if (!/\/agent\/(?:[^/]+)\/(?:run|connect)$/.test(path)) return;
-          runtimeRequestTraces.set(
-            request,
-            await createRuntimeRequestTiming(
-              request,
-              path,
-              runtimeTimingOptions,
-            ),
-          );
-        },
-        onBeforeHandler: async ({ request, route }) => {
-          if (route.method !== "agent/run" && route.method !== "agent/connect")
-            return;
-          const trace = runtimeRequestTraces.get(request);
-          trace?.record("route_resolved");
-          // CopilotKit's route hook runs before its own body parser. Validate the cloned body with
-          // the same public AG-UI schema so "accepted" means structurally accepted, while leaving
-          // the original stream untouched for the actual handler.
-          const body = await request
-            .clone()
-            .json()
-            .catch(() => undefined);
-          if (RunAgentInputSchema.safeParse(body).success) {
-            trace?.record("request_accepted");
-          }
-        },
-        onResponse: ({ response, route, request }) => {
-          if (route.method === "info")
-            return disableInspectorMetadata(response);
-          if (
-            route.method !== "agent/run" &&
-            route.method !== "agent/connect"
-          ) {
-            return undefined;
-          }
-          runtimeRequestTraces
-            .get(request)
-            ?.record(
-              route.method === "agent/run" ? "submit_ack" : "connect_ack",
-              {
-                status: response.status,
-              },
-            );
-          return undefined;
-        },
-        onError: ({ error, route, request }) => {
-          if (
-            !route ||
-            (route.method !== "agent/run" && route.method !== "agent/connect")
-          ) {
-            return;
-          }
-          runtimeRequestTraces.get(request)?.record("request_error", {
-            errorType: error instanceof Error ? error.name : "unknown",
-          });
-        },
+  const runtimeHandler = createCopilotHonoHandler({
+    runtime,
+    basePath,
+    hooks: {
+      onRequest: async ({ request, path }) => {
+        if (!/\/agent\/(?:[^/]+)\/(?:run|connect)$/.test(path)) return;
+        runtimeRequestTraces.set(
+          request,
+          await createRuntimeRequestTiming(request, path, runtimeTimingOptions),
+        );
       },
-    }),
+      onBeforeHandler: async ({ request, route }) => {
+        if (route.method !== "agent/run" && route.method !== "agent/connect")
+          return;
+        const trace = runtimeRequestTraces.get(request);
+        trace?.record("route_resolved");
+        // CopilotKit's route hook runs before its own body parser. Validate the cloned body with
+        // the same public AG-UI schema so "accepted" means structurally accepted, while leaving
+        // the original stream untouched for the actual handler.
+        const body = await request
+          .clone()
+          .json()
+          .catch(() => undefined);
+        if (RunAgentInputSchema.safeParse(body).success) {
+          trace?.record("request_accepted");
+        }
+      },
+      onResponse: ({ response, route, request }) => {
+        if (route.method === "info") return disableInspectorMetadata(response);
+        if (route.method !== "agent/run" && route.method !== "agent/connect") {
+          return undefined;
+        }
+        runtimeRequestTraces
+          .get(request)
+          ?.record(
+            route.method === "agent/run" ? "submit_ack" : "connect_ack",
+            {
+              status: response.status,
+            },
+          );
+        return undefined;
+      },
+      onError: ({ error, route, request }) => {
+        if (
+          !route ||
+          (route.method !== "agent/run" && route.method !== "agent/connect")
+        ) {
+          return;
+        }
+        runtimeRequestTraces.get(request)?.record("request_error", {
+          errorType: error instanceof Error ? error.name : "unknown",
+        });
+      },
+    },
+  });
+  const handler = new Hono();
+  handler.get(`${basePath}/threads/:threadId/messages`, async (context) => {
+    const threadId = context.req.param("threadId");
+    const beforeCursor = context.req.query("before");
+    try {
+      const user = await identifyUser(context.req.raw);
+      if (beforeCursor) validateHistoryCursor(beforeCursor);
+      type ThreadMessages = Awaited<
+        ReturnType<CopilotKitIntelligence["getThreadMessages"]>
+      >;
+      const read = await historyOrEmpty<ThreadMessages>(
+        () =>
+          intelligenceClient.getThreadMessages({
+            threadId,
+            userId: user.id,
+          }),
+        { messages: [] } as ThreadMessages,
+      );
+      return context.json(paginateThreadMessages(read.messages, beforeCursor));
+    } catch (error) {
+      if (error instanceof InvalidHistoryCursor) {
+        return context.json({ error: error.message }, 409);
+      }
+      console.error(
+        JSON.stringify({
+          type: "thread-history-page-failed",
+          note: "Could not read a bounded conversation history page.",
+        }),
+      );
+      return context.json(
+        { error: "Не удалось обновить историю диалога." },
+        502,
+      );
+    }
+  });
+  handler.route("/", runtimeHandler);
+
+  return {
+    handler,
     /**
      * How to reach the platform's runner, exactly as the runtime reaches it.
      *
