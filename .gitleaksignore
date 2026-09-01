@@ -1,2 +1,8 @@
 # Public example key asserted by the configuration warning test; not a deployable credential.
 bbdb7f2fc83916ff54e13b6bc268e5f4ccd34a5e:server/tests/config.test.ts:generic-api-key:41
+
+# Synthetic provider canary used to prove a personal key never enters the managed request body.
+78450792ec649c89b42e0ad0cddc92ac470563cd:agent-codex/tests/request-handler.test.ts:generic-api-key:268
+
+# Synthetic malformed admission keys used to prove the request is rejected before execution.
+69375144cfb3ffa3ab1584c0a2943c2e6f3caa1a:agent-codex/tests/request-handler.test.ts:generic-api-key:455
