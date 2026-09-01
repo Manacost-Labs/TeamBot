@@ -17,6 +17,7 @@ import {
 } from "../db/schema";
 import { encryptSsoConfig } from "./encrypt-sso-config";
 import { applyConfiguredAdmin, seedRole } from "./roles";
+import { telegramSessionPlugin } from "./telegram-plugin";
 
 /**
  * Write a row about a sign-in, and never let the writing of it stop one.
@@ -126,6 +127,9 @@ export function createAuth(
    * sign-in screen has one code path and does not need to know which kind each provider is.
    */
   const plugins = [
+    // Registered fail-closed until the verified Telegram resolver is wired in Tasks 4-6. This keeps
+    // session minting inside Better Auth without exposing a temporary browser-controlled bypass.
+    telegramSessionPlugin(),
     ...(authConfig.okta
       ? [
           genericOAuth({
