@@ -75,11 +75,25 @@ export type AuthProviderId = "google" | "microsoft" | "okta";
 /** An OAuth client, as every provider here needs one. */
 export type OAuthClient = { clientId: string; clientSecret: string };
 
+/** Server-only settings for the official Telegram Login Widget. */
+export type TelegramAuthConfig = {
+  /** Public widget name. This is the only Telegram setting a browser may receive. */
+  botUsername: string;
+  /** BotFather token used to verify callbacks. Never project this configuration wholesale. */
+  botToken: string;
+  /** Canonical decimal Telegram subjects admitted by this deployment. */
+  allowedUserIds: ReadonlySet<string>;
+  /** The non-empty subset provisioned with the existing administrator role. */
+  ownerUserIds: ReadonlySet<string>;
+};
+
 export type AuthConfig = {
   baseUrl: string;
   secret: string;
   trustedOrigins: string[];
   initialAdminEmails: string[];
+  /** Present only when this deployment selected Telegram instead of OAuth. */
+  telegram?: TelegramAuthConfig;
   google?: OAuthClient;
   /**
    * `tenantId` decides who may sign in at all, so it is not a detail. `common` admits any Microsoft
@@ -468,6 +482,100 @@ function commaSeparated(environment: Environment, name: string): string[] {
     .filter(Boolean);
 }
 
+const TELEGRAM_CONFIGURATION_NAMES = [
+  "TELEGRAM_LOGIN_BOT_USERNAME",
+  "TELEGRAM_LOGIN_BOT_TOKEN",
+  "TELEGRAM_ALLOWED_USER_IDS",
+  "TELEGRAM_OWNER_USER_IDS",
+] as const;
+
+function telegramIdSet(environment: Environment, name: string): Set<string> {
+  const raw = required(environment, name);
+  const values = raw.split(",").map((value) => value.trim());
+  const result = new Set<string>();
+
+  for (const value of values) {
+    const numeric = Number(value);
+    if (
+      !/^[1-9]\d*$/.test(value) ||
+      !Number.isSafeInteger(numeric) ||
+      numeric < 1
+    ) {
+      throw new Error(
+        `${name} must contain canonical positive numeric Telegram user IDs`,
+      );
+    }
+    if (result.has(value)) {
+      throw new Error(`${name} must not contain duplicate Telegram user IDs`);
+    }
+    result.add(value);
+  }
+
+  return result;
+}
+
+function telegramAuth(
+  environment: Environment,
+): { baseUrl: string; settings: TelegramAuthConfig } | undefined {
+  const selected = TELEGRAM_CONFIGURATION_NAMES.some(
+    (name) => environment[name] !== undefined,
+  );
+  if (!selected) return undefined;
+
+  for (const name of ["OPENBOT_SINGLE_USER", "OPENBOT_DEV_NO_AUTH"] as const) {
+    if (optional(environment, name) === "true") {
+      throw new Error(`${name}=true conflicts with Telegram mode`);
+    }
+  }
+
+  const publicUrl = required(environment, "OPENBOT_PUBLIC_URL");
+  let parsedPublicUrl: URL;
+  try {
+    parsedPublicUrl = new URL(publicUrl);
+  } catch {
+    throw new Error("OPENBOT_PUBLIC_URL must be an HTTPS URL in Telegram mode");
+  }
+  if (
+    parsedPublicUrl.protocol !== "https:" ||
+    parsedPublicUrl.username ||
+    parsedPublicUrl.password ||
+    parsedPublicUrl.search ||
+    parsedPublicUrl.hash
+  ) {
+    throw new Error("OPENBOT_PUBLIC_URL must be an HTTPS URL in Telegram mode");
+  }
+
+  const botUsername = required(environment, "TELEGRAM_LOGIN_BOT_USERNAME");
+  if (!/^[A-Za-z][A-Za-z0-9_]{1,28}[Bb][Oo][Tt]$/.test(botUsername)) {
+    throw new Error(
+      "TELEGRAM_LOGIN_BOT_USERNAME must be a canonical bot username without @",
+    );
+  }
+  const botToken = required(environment, "TELEGRAM_LOGIN_BOT_TOKEN");
+  const allowedUserIds = telegramIdSet(
+    environment,
+    "TELEGRAM_ALLOWED_USER_IDS",
+  );
+  const ownerUserIds = telegramIdSet(environment, "TELEGRAM_OWNER_USER_IDS");
+  for (const ownerId of ownerUserIds) {
+    if (!allowedUserIds.has(ownerId)) {
+      throw new Error(
+        "TELEGRAM_OWNER_USER_IDS must be a subset of TELEGRAM_ALLOWED_USER_IDS",
+      );
+    }
+  }
+
+  return {
+    baseUrl: publicUrl.replace(/\/+$/, ""),
+    settings: {
+      botUsername,
+      botToken,
+      allowedUserIds,
+      ownerUserIds,
+    },
+  };
+}
+
 /**
  * Sign-in, if this deployment has an identity provider to sign people in with.
  *
@@ -485,12 +593,18 @@ function authConfig(
 ): AuthConfig | undefined {
   const microsoft = microsoftAuth(environment);
   const okta = oktaAuth(environment);
+  const telegram = telegramAuth(environment);
+
+  if (telegram && (google || microsoft || okta)) {
+    throw new Error("Telegram mode cannot be combined with OAuth providers");
+  }
 
   const secret = optional(environment, "BETTER_AUTH_SECRET");
-  const baseUrl = url(environment, "BETTER_AUTH_URL");
+  const oauthBaseUrl = url(environment, "BETTER_AUTH_URL");
+  const baseUrl = telegram?.baseUrl ?? oauthBaseUrl;
 
-  if (!google && !microsoft && !okta) {
-    if (secret || baseUrl) {
+  if (!google && !microsoft && !okta && !telegram) {
+    if (secret || oauthBaseUrl) {
       throw new Error(
         "BETTER_AUTH_SECRET or BETTER_AUTH_URL is set but no identity provider is. Configure GOOGLE_OAUTH_*, MICROSOFT_OAUTH_* or OKTA_OAUTH_*, or unset both",
       );
@@ -505,6 +619,17 @@ function authConfig(
   }
   if (!baseUrl) {
     throw new Error("Sign-in requires BETTER_AUTH_URL");
+  }
+
+  if (telegram) {
+    const trustedOrigins = commaSeparated(environment, "TRUSTED_ORIGINS");
+    return {
+      baseUrl,
+      secret,
+      trustedOrigins: trustedOrigins.length ? trustedOrigins : [baseUrl],
+      initialAdminEmails: [],
+      telegram: telegram.settings,
+    };
   }
 
   /*
@@ -958,7 +1083,7 @@ export function loadConfig(
     auth,
     singleUser: singleUserEnabled(
       environment,
-      configuredAuthProviders(auth).length > 0,
+      configuredAuthProviders(auth).length > 0 || Boolean(auth?.telegram),
     ),
     accessibility: accessibilityEnabled(environment),
     ...(optional(environment, "APP_DIST_DIR")

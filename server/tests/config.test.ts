@@ -409,6 +409,139 @@ describe("deployment configuration", () => {
     ).toThrow("Sign-in requires BETTER_AUTH_SECRET");
   });
 
+  const telegramEnvironment = {
+    ...withoutSignIn,
+    OPENBOT_PUBLIC_URL: "https://work.kolodahearthstone.com",
+    BETTER_AUTH_SECRET: "a-long-enough-telegram-session-secret",
+    TELEGRAM_LOGIN_BOT_USERNAME: "ManacostTeamBot",
+    TELEGRAM_LOGIN_BOT_TOKEN: "123456:telegram-test-token",
+    TELEGRAM_ALLOWED_USER_IDS: "123456789,987654321",
+    TELEGRAM_OWNER_USER_IDS: "123456789",
+  };
+
+  test("configures Telegram as a fail-closed authenticated mode", () => {
+    const config = loadConfig(telegramEnvironment);
+
+    expect(config.auth).toEqual({
+      baseUrl: "https://work.kolodahearthstone.com",
+      secret: "a-long-enough-telegram-session-secret",
+      trustedOrigins: ["https://work.kolodahearthstone.com"],
+      initialAdminEmails: [],
+      telegram: {
+        botUsername: "ManacostTeamBot",
+        botToken: "123456:telegram-test-token",
+        allowedUserIds: new Set(["123456789", "987654321"]),
+        ownerUserIds: new Set(["123456789"]),
+      },
+    });
+    expect(config.singleUser).toBe(false);
+  });
+
+  test.each([
+    ["OPENBOT_PUBLIC_URL", "OPENBOT_PUBLIC_URL"],
+    ["BETTER_AUTH_SECRET", "BETTER_AUTH_SECRET"],
+    ["TELEGRAM_LOGIN_BOT_USERNAME", "TELEGRAM_LOGIN_BOT_USERNAME"],
+    ["TELEGRAM_LOGIN_BOT_TOKEN", "TELEGRAM_LOGIN_BOT_TOKEN"],
+    ["TELEGRAM_ALLOWED_USER_IDS", "TELEGRAM_ALLOWED_USER_IDS"],
+    ["TELEGRAM_OWNER_USER_IDS", "TELEGRAM_OWNER_USER_IDS"],
+  ] as const)(
+    "refuses Telegram mode when %s is missing",
+    (missing, expectedMessage) => {
+      const environment: Record<string, string | undefined> = {
+        ...telegramEnvironment,
+      };
+      delete environment[missing];
+
+      expect(() => loadConfig(environment)).toThrow(expectedMessage);
+    },
+  );
+
+  test.each([
+    "http://work.kolodahearthstone.com",
+    "not-a-url",
+    "ftp://work.kolodahearthstone.com",
+    "https://user:password@work.kolodahearthstone.com",
+    "https://work.kolodahearthstone.com?next=/admin",
+    "https://work.kolodahearthstone.com#callback",
+  ])("refuses unsafe Telegram public URL %p", (publicUrl) => {
+    expect(() =>
+      loadConfig({ ...telegramEnvironment, OPENBOT_PUBLIC_URL: publicUrl }),
+    ).toThrow("OPENBOT_PUBLIC_URL must be an HTTPS URL");
+  });
+
+  test.each(["@ManacostTeamBot", "not-a-bot", "bot", "A__Bot!"])(
+    "refuses malformed Telegram bot username %p",
+    (botUsername) => {
+      expect(() =>
+        loadConfig({
+          ...telegramEnvironment,
+          TELEGRAM_LOGIN_BOT_USERNAME: botUsername,
+        }),
+      ).toThrow("TELEGRAM_LOGIN_BOT_USERNAME");
+    },
+  );
+
+  test.each([
+    ["TELEGRAM_ALLOWED_USER_IDS", "0"],
+    ["TELEGRAM_ALLOWED_USER_IDS", "-1"],
+    ["TELEGRAM_ALLOWED_USER_IDS", "01"],
+    ["TELEGRAM_ALLOWED_USER_IDS", "1.5"],
+    ["TELEGRAM_ALLOWED_USER_IDS", "not-an-id"],
+    ["TELEGRAM_ALLOWED_USER_IDS", "9007199254740992"],
+    ["TELEGRAM_ALLOWED_USER_IDS", "123456789,,987654321"],
+    ["TELEGRAM_ALLOWED_USER_IDS", "123456789,123456789"],
+    ["TELEGRAM_OWNER_USER_IDS", "0"],
+    ["TELEGRAM_OWNER_USER_IDS", "123456789,123456789"],
+  ] as const)("refuses malformed or duplicate %s=%p", (name, value) => {
+    expect(() => loadConfig({ ...telegramEnvironment, [name]: value })).toThrow(
+      name,
+    );
+  });
+
+  test("refuses Telegram owners outside the allowlist", () => {
+    expect(() =>
+      loadConfig({
+        ...telegramEnvironment,
+        TELEGRAM_OWNER_USER_IDS: "111111111",
+      }),
+    ).toThrow("TELEGRAM_OWNER_USER_IDS must be a subset");
+  });
+
+  test.each(["OPENBOT_SINGLE_USER", "OPENBOT_DEV_NO_AUTH"])(
+    "refuses %s as a fallback in Telegram mode",
+    (name) => {
+      expect(() =>
+        loadConfig({ ...telegramEnvironment, [name]: "true" }),
+      ).toThrow(`${name}=true conflicts with Telegram mode`);
+    },
+  );
+
+  test("refuses mixing Telegram and OAuth identity modes", () => {
+    expect(() =>
+      loadConfig({
+        ...telegramEnvironment,
+        GOOGLE_OAUTH_CLIENT_ID: "google-client-id",
+        GOOGLE_OAUTH_CLIENT_SECRET: "google-client-secret",
+      }),
+    ).toThrow("Telegram mode cannot be combined with OAuth providers");
+  });
+
+  test("documents Telegram configuration without shipping live values", () => {
+    const example = readFileSync(
+      new URL("../../.env.example", import.meta.url),
+      "utf8",
+    );
+    for (const name of [
+      "TELEGRAM_LOGIN_BOT_USERNAME",
+      "TELEGRAM_LOGIN_BOT_TOKEN",
+      "TELEGRAM_ALLOWED_USER_IDS",
+      "TELEGRAM_OWNER_USER_IDS",
+    ]) {
+      expect(example).toContain(`# ${name}=`);
+      expect(example).not.toMatch(new RegExp(`^\\s*${name}=`, "m"));
+    }
+  });
+
   // A turn that is ended is a turn somebody loses, so an unset variable leaves every stream alone
   // rather than acquiring a timeout the deployment never asked for. `.env.example` ships a value.
   test("leaves the stall watchdog off when nothing is configured", () => {
