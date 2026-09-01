@@ -229,14 +229,14 @@ subject to the existing `dev-local-user` row without rewriting its identity.
 
 **Acceptance criteria:**
 
-- [ ] The command is dry-run by default and accepts the numeric ID without putting it in shell history.
-- [ ] Apply mode refuses an already-bound subject, a missing legacy owner or a conflicting target.
-- [ ] Re-running after success is harmless and history-owning IDs remain unchanged.
+- [x] The command is dry-run by default and accepts the numeric ID without putting it in shell history.
+- [x] Apply mode refuses an already-bound subject, a missing legacy owner or a conflicting target.
+- [x] Re-running after success is harmless and history-owning IDs remain unchanged.
 
 **Verification:**
 
-- [ ] `bun test server/tests/telegram-owner-binding.test.ts`
-- [ ] Integration fixture verifies channels/memberships still point to `dev-local-user` after binding.
+- [x] `bun test server/tests/telegram-owner-binding.test.ts`
+- [x] Integration fixture verifies channels/memberships still point to `dev-local-user` after binding.
 
 **Dependencies:** Task 6.
 
