@@ -365,9 +365,9 @@ bounded, injectable client.
 
 ## Checkpoint D — Persistence foundation
 
-- [ ] Tasks 10–12 pass against PostgreSQL and controlled OpenRouter responses.
-- [ ] Secret scans of returned objects, errors and audit fixtures are empty.
-- [ ] Migration is additive and the old release can ignore the new tables.
+- [x] Tasks 10–12 pass against PostgreSQL and controlled OpenRouter responses.
+- [x] Secret scans of returned objects, errors and audit fixtures are empty.
+- [x] Migration is additive and the old release can ignore the new tables.
 
 ### Task 13: Actor-scoped personal connection API
 
