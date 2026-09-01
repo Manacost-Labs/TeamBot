@@ -14,6 +14,11 @@ import {
   runAssertion,
   transcriptFor,
 } from "./history";
+import {
+  buildCodexChildEnvironment,
+  type CodexRuntimeProfile,
+  createCodexRuntimeProfile,
+} from "./runtime-profile";
 import { youtubeTranscriptContext } from "./youtube-transcript-context";
 
 type JsonObject = Record<string, unknown>;
@@ -227,7 +232,7 @@ export async function runCodex(
   callbacks: CodexCallbacks,
   options: {
     timing?: AgentExecutionTiming;
-    spawn?: () => ChildProcessWithoutNullStreams;
+    spawn?: (profile: CodexRuntimeProfile) => ChildProcessWithoutNullStreams;
     processExitGraceMs?: number;
     researchCollectionMaxMs?: number;
     researchFinalisationMaxMs?: number;
@@ -239,22 +244,34 @@ export async function runCodex(
   const youtubeContext = isYoutubeAnalystRun(input)
     ? await (options.youtubeContext ?? youtubeTranscriptContext)(input)
     : "";
-  const client = new CodexProcess(
-    input,
-    callbacks,
-    options.timing,
-    options.spawn,
-    options.processExitGraceMs,
-    options.researchCollectionMaxMs ?? RESEARCH_COLLECTION_MAX_MS,
-    options.researchFinalisationMaxMs ?? RESEARCH_FINALISATION_MAX_MS,
-    options.researchInterruptGraceMs ?? RESEARCH_INTERRUPT_GRACE_MS,
-    youtubeContext,
-    options.deploymentToolCaller,
-  );
+  const profile = await createCodexRuntimeProfile({
+    environment: process.env,
+    additionalEnvironmentKeys: additionalEnvironmentKeysFor(input),
+  });
+  let client: CodexProcess | undefined;
   try {
+    client = new CodexProcess(
+      input,
+      callbacks,
+      options.timing,
+      () =>
+        options.spawn
+          ? options.spawn(profile)
+          : spawnCodexProcess(input, profile),
+      options.processExitGraceMs,
+      options.researchCollectionMaxMs ?? RESEARCH_COLLECTION_MAX_MS,
+      options.researchFinalisationMaxMs ?? RESEARCH_FINALISATION_MAX_MS,
+      options.researchInterruptGraceMs ?? RESEARCH_INTERRUPT_GRACE_MS,
+      youtubeContext,
+      options.deploymentToolCaller,
+    );
     await client.run();
   } finally {
-    await client.close();
+    try {
+      await client?.close();
+    } finally {
+      await profile.dispose();
+    }
   }
 }
 
@@ -291,8 +308,7 @@ class CodexProcess {
     private readonly input: RunAgentInput,
     private readonly callbacks: CodexCallbacks,
     private readonly timing?: AgentExecutionTiming,
-    spawnProcess: () => ChildProcessWithoutNullStreams = () =>
-      spawnCodexProcess(input),
+    spawnProcess: () => ChildProcessWithoutNullStreams,
     private readonly processExitGraceMs = PROCESS_EXIT_GRACE_MS,
     private readonly researchCollectionMaxMs = RESEARCH_COLLECTION_MAX_MS,
     private readonly researchFinalisationMaxMs = RESEARCH_FINALISATION_MAX_MS,
@@ -726,10 +742,11 @@ class CodexProcess {
 
 function spawnCodexProcess(
   input: RunAgentInput,
+  profile: CodexRuntimeProfile,
 ): ChildProcessWithoutNullStreams {
   return spawn("codex", ["app-server"], {
     cwd: workspaceFor(input),
-    env: codexEnvironmentFor(input),
+    env: profile.environment,
     stdio: ["pipe", "pipe", "pipe"],
   });
 }
@@ -745,12 +762,15 @@ export function codexEnvironmentFor(
   input: RunAgentInput,
   environment: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  if (!isYoutubeAnalystRun(input)) return environment;
-  const restricted = { ...environment };
-  delete restricted.AGENT_TOOL_TOKEN;
-  delete restricted.MANAGED_AGENT_TOKEN;
-  delete restricted.RESEARCH_SOURCE_GATEWAY_TOKEN;
-  return restricted;
+  return buildCodexChildEnvironment(environment, {
+    additionalEnvironmentKeys: additionalEnvironmentKeysFor(input),
+  });
+}
+
+function additionalEnvironmentKeysFor(input: RunAgentInput): readonly string[] {
+  return isResearchRun(input)
+    ? ["RESEARCH_SOURCES_URL", "RESEARCH_SOURCE_GATEWAY_TOKEN"]
+    : [];
 }
 
 async function callDeploymentTool(

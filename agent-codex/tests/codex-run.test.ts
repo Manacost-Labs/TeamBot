@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { access } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import type { RunAgentInput } from "@ag-ui/core";
 import {
@@ -188,6 +189,51 @@ describe("Codex dynamic tool names", () => {
 });
 
 describe("Codex process timing", () => {
+  it("removes the isolated runtime profile after success", async () => {
+    let codexHome = "";
+
+    await runCodex(processInput(), emptyCallbacks, {
+      spawn: (profile) => {
+        codexHome = profile.codexHome;
+        expect(profile.environment.CODEX_HOME).toBe(codexHome);
+        return fakeCodexProcess();
+      },
+    });
+
+    expect(codexHome).not.toBe("");
+    await expect(access(codexHome)).rejects.toThrow();
+  });
+
+  it("removes the isolated runtime profile after failure", async () => {
+    let codexHome = "";
+
+    await expect(
+      runCodex(processInput(), emptyCallbacks, {
+        spawn: (profile) => {
+          codexHome = profile.codexHome;
+          return failingCodexProcess("error");
+        },
+      }),
+    ).rejects.toThrow("early spawn failure");
+
+    expect(codexHome).not.toBe("");
+    await expect(access(codexHome)).rejects.toThrow();
+  });
+
+  it("removes the isolated runtime profile after a cancelled turn", async () => {
+    let codexHome = "";
+
+    await runCodex(processInput(), emptyCallbacks, {
+      spawn: (profile) => {
+        codexHome = profile.codexHome;
+        return fakeCodexProcess({ turnStatus: "cancelled" });
+      },
+    });
+
+    expect(codexHome).not.toBe("");
+    await expect(access(codexHome)).rejects.toThrow();
+  });
+
   it("records spawn, initialization, thread and turn acknowledgements in order", async () => {
     const input = {
       agentId: "spoofed-agent",
@@ -356,7 +402,11 @@ async function successfulArtifactCall() {
 }
 
 function fakeCodexProcess(
-  options: { signals?: NodeJS.Signals[]; exitOnSignal?: NodeJS.Signals } = {},
+  options: {
+    signals?: NodeJS.Signals[];
+    exitOnSignal?: NodeJS.Signals;
+    turnStatus?: string;
+  } = {},
 ) {
   const child = new EventEmitter() as EventEmitter & {
     stdin: PassThrough;
@@ -394,7 +444,7 @@ function fakeCodexProcess(
         child.stdout.write(
           `${JSON.stringify({
             method: "turn/completed",
-            params: { turn: { status: "completed" } },
+            params: { turn: { status: options.turnStatus ?? "completed" } },
           })}\n`,
         );
       }
