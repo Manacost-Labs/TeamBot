@@ -7,7 +7,9 @@ import {
   type DeviceAuthStartResult,
 } from "./device-auth";
 import {
+  createPersonalProviderConnectionRefresher,
   createPersonalProviderConnectionResolver,
+  type PersonalProviderConnectionRefresher,
   type PersonalProviderConnectionResolver,
 } from "./provider-connection";
 import { createAgentRequestHandler } from "./request-handler";
@@ -41,6 +43,7 @@ type AgentCodexServiceOptions = {
   deviceAuth?: DeviceAuthCoordinator;
   model?: string;
   resolveProviderConnection?: PersonalProviderConnectionResolver;
+  refreshProviderConnection?: PersonalProviderConnectionRefresher;
   handleAgentRequest?: (request: Request) => Promise<Response>;
 };
 
@@ -234,6 +237,7 @@ export function createAgentCodexService(options: AgentCodexServiceOptions) {
       agentId: "agent-codex",
       admission,
       resolveProviderConnection: options.resolveProviderConnection,
+      refreshProviderConnection: options.refreshProviderConnection,
     });
   let shutdown: Promise<void> | undefined;
 
@@ -327,6 +331,10 @@ export function createAgentCodexServiceFromEnvironment(
     admission: defaultAdmission(environment),
     model: environment.CODEX_MODEL,
     resolveProviderConnection: createPersonalProviderConnectionResolver({
+      serverUrl: internalServerUrl,
+      managedAgentToken,
+    }),
+    refreshProviderConnection: createPersonalProviderConnectionRefresher({
       serverUrl: internalServerUrl,
       managedAgentToken,
     }),

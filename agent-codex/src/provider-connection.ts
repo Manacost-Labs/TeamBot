@@ -1,11 +1,16 @@
+import { parseChatGptAuthDocument } from "./chatgpt-profile";
+
 const REDEMPTION_PATH = "/internal/ai-credentials/redeem";
+const REFRESH_PATH = "/internal/ai-credentials/refresh";
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 60_000;
 const MAX_MANAGED_TOKEN_CHARACTERS = 4_096;
 const MAX_RUN_ASSERTION_CHARACTERS = 8_192;
 const MAX_OPENROUTER_KEY_CHARACTERS = 4_096;
 const MAX_CHATGPT_AUTH_DOCUMENT_CHARACTERS = 256 * 1_024;
-const MAX_RESPONSE_BYTES = MAX_CHATGPT_AUTH_DOCUMENT_CHARACTERS + 1_024;
+// A valid auth.json is nested as a JSON string and can nearly double on the wire when its quotes
+// and backslashes are escaped. Keep the response bounded without rejecting that valid shape.
+const MAX_RESPONSE_BYTES = 544 * 1_024;
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -23,6 +28,12 @@ export type PersonalProviderConnectionResolver = (
   signal?: AbortSignal,
 ) => Promise<PersonalProviderConnection>;
 
+export type PersonalProviderConnectionRefresher = (
+  reference: PersonalProviderConnectionReference,
+  authDocument: string,
+  signal?: AbortSignal,
+) => Promise<void>;
+
 type Fetch = (
   input: string | URL | Request,
   init?: RequestInit,
@@ -36,11 +47,20 @@ export class PersonalProviderConnectionUnavailableError extends Error {
   }
 }
 
+export class PersonalProviderRefreshUnavailableError extends Error {
+  constructor() {
+    super(
+      "Personal ChatGPT connection could not be refreshed. Reconnect ChatGPT in Settings.",
+    );
+    this.name = "PersonalProviderRefreshUnavailableError";
+  }
+}
+
 function invalidConfiguration(): never {
   throw new Error("Personal provider connection configuration is invalid.");
 }
 
-function redemptionUrl(serverUrl: string): string {
+function internalUrl(serverUrl: string, path: string): string {
   let parsed: URL;
   try {
     parsed = new URL(serverUrl);
@@ -57,7 +77,7 @@ function redemptionUrl(serverUrl: string): string {
   ) {
     return invalidConfiguration();
   }
-  return new URL(REDEMPTION_PATH, parsed.origin).toString();
+  return new URL(path, parsed.origin).toString();
 }
 
 function exactKeys(value: Record<string, unknown>, expected: string[]) {
@@ -165,7 +185,7 @@ export function createPersonalProviderConnectionResolver(options: {
   fetch?: Fetch;
   timeoutMs?: number;
 }): PersonalProviderConnectionResolver {
-  const endpoint = redemptionUrl(options.serverUrl);
+  const endpoint = internalUrl(options.serverUrl, REDEMPTION_PATH);
   const managedAgentToken = options.managedAgentToken;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   if (
@@ -200,6 +220,7 @@ export function createPersonalProviderConnectionResolver(options: {
         },
         body: JSON.stringify({ lease: reference.lease, run: reference.run }),
         cache: "no-store",
+        redirect: "error",
         signal: controller.signal,
       });
       if (
@@ -222,6 +243,75 @@ export function createPersonalProviderConnectionResolver(options: {
       return connection;
     } catch {
       throw new PersonalProviderConnectionUnavailableError();
+    } finally {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
+    }
+  };
+}
+
+/**
+ * Build the fixed, managed-only callback used after a ChatGPT child has fully exited.
+ *
+ * Its request has no destination, actor, Bot, credential or provider selector. The server derives
+ * ownership from the signed run and atomically compares it with the redeemed lease and live vault
+ * generation. Every refusal has one Settings-safe result that never reads or copies a response.
+ */
+export function createPersonalProviderConnectionRefresher(options: {
+  serverUrl: string;
+  managedAgentToken: string;
+  fetch?: Fetch;
+  timeoutMs?: number;
+}): PersonalProviderConnectionRefresher {
+  const endpoint = internalUrl(options.serverUrl, REFRESH_PATH);
+  const managedAgentToken = options.managedAgentToken;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  if (
+    managedAgentToken.length === 0 ||
+    managedAgentToken.length > MAX_MANAGED_TOKEN_CHARACTERS ||
+    managedAgentToken.trim() !== managedAgentToken ||
+    /[\r\n]/.test(managedAgentToken) ||
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    timeoutMs > MAX_TIMEOUT_MS
+  ) {
+    return invalidConfiguration();
+  }
+  const fetch = options.fetch ?? globalThis.fetch;
+
+  return async (reference, authDocument, signal) => {
+    if (!validReference(reference) || !parseChatGptAuthDocument(authDocument)) {
+      throw new PersonalProviderRefreshUnavailableError();
+    }
+
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    const timeout = setTimeout(abort, timeoutMs);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-openbot-agent-token": managedAgentToken,
+        },
+        body: JSON.stringify({
+          lease: reference.lease,
+          run: reference.run,
+          authDocument,
+        }),
+        cache: "no-store",
+        redirect: "error",
+        signal: controller.signal,
+      });
+      if (response.status !== 204) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new PersonalProviderRefreshUnavailableError();
+      }
+      await response.body?.cancel().catch(() => undefined);
+    } catch {
+      throw new PersonalProviderRefreshUnavailableError();
     } finally {
       clearTimeout(timeout);
       signal?.removeEventListener("abort", abort);

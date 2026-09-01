@@ -259,9 +259,16 @@ describe("agent-codex request boundary", () => {
         return { provider: "openrouter", apiKey: privateKey };
       },
       respond: (...args) => {
-        const [input, _timing, settled] = args;
+        const [input, _timing, settled, provider] = args;
         order.push("responded");
-        expect(args).toHaveLength(3);
+        expect(args).toHaveLength(4);
+        expect(provider).toMatchObject({
+          connection: { provider: "openrouter", apiKey: privateKey },
+          reference: {
+            lease: "946c7ed5-ed42-4f26-843f-3e3607722caf",
+            run: "signed-run",
+          },
+        });
         expect(JSON.stringify(input)).not.toContain(privateKey);
         settled();
         return new Response(null, { status: 202 });

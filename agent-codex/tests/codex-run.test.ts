@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import type { RunAgentInput } from "@ag-ui/core";
@@ -23,6 +23,25 @@ import {
   type ExecutionTimingRecord,
 } from "../src/execution-timing";
 import { OPENROUTER_API_KEY_ENVIRONMENT_KEY } from "../src/runtime-profile";
+
+const CHATGPT_LEASE = "8f1dd4f8-5311-48c2-ac71-7ae00ee69a63";
+const CHATGPT_RUN = "signed-chatgpt-run-assertion";
+const CHATGPT_AUTH = JSON.stringify({
+  auth_mode: "chatgpt",
+  tokens: {
+    access_token: "initial-chatgpt-access-canary",
+    refresh_token: "initial-chatgpt-refresh-canary",
+    id_token: "initial-chatgpt-id-canary",
+  },
+});
+const REFRESHED_CHATGPT_AUTH = JSON.stringify({
+  auth_mode: "chatgpt",
+  tokens: {
+    access_token: "refreshed-chatgpt-access-canary",
+    refresh_token: "refreshed-chatgpt-refresh-canary",
+    id_token: "refreshed-chatgpt-id-canary",
+  },
+});
 
 describe("Codex dynamic tool names", () => {
   it("moves governed MCP tools out of Codex's reserved namespace", () => {
@@ -452,7 +471,7 @@ describe("Codex process timing", () => {
     expect(String(thrown)).not.toContain(privateKey.slice(-512));
   });
 
-  it("does not start an unauthenticated fallback for a ChatGPT context", async () => {
+  it("does not start a host fallback for a malformed ChatGPT context", async () => {
     let spawned = false;
     await expect(
       runCodex(processInput(), emptyCallbacks, {
@@ -462,8 +481,306 @@ describe("Codex process timing", () => {
           return fakeCodexProcess();
         },
       }),
-    ).rejects.toThrow("Personal AI connection is unavailable.");
+    ).rejects.toThrow("Reconnect ChatGPT in Settings");
     expect(spawned).toBe(false);
+  });
+
+  it("runs ChatGPT in its private profile and uploads a changed valid document only after forced child exit", async () => {
+    const signals: NodeJS.Signals[] = [];
+    let codexHome = "";
+    let refreshed: string | undefined;
+    let refreshReference: unknown;
+    const input = chatGptProcessInput();
+
+    await runCodex(input, emptyCallbacks, {
+      providerConnection: { provider: "chatgpt", authDocument: CHATGPT_AUTH },
+      providerConnectionReference: {
+        lease: CHATGPT_LEASE,
+        run: CHATGPT_RUN,
+      },
+      refreshProviderConnection: async (reference, authDocument) => {
+        expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+        expect(existsSync(codexHome)).toBe(true);
+        refreshReference = reference;
+        refreshed = authDocument;
+      },
+      environment: {
+        PATH: process.env.PATH,
+        CODEX_HOME: "/host/.codex",
+        CODEX_AUTH_PATH: "/host/.codex/auth.json",
+        OPENAI_API_KEY: "host-fallback-secret",
+      },
+      spawn: (profile) => {
+        codexHome = profile.codexHome;
+        expect(profile.environment.CODEX_HOME).toBe(codexHome);
+        expect(profile.environment.CODEX_AUTH_PATH).toBeUndefined();
+        expect(profile.environment.OPENAI_API_KEY).toBeUndefined();
+        expect(readFileSync(`${codexHome}/auth.json`, "utf8")).toBe(
+          CHATGPT_AUTH,
+        );
+        writeFileSync(`${codexHome}/auth.json`, REFRESHED_CHATGPT_AUTH, {
+          mode: 0o600,
+        });
+        return fakeCodexProcess({ signals, exitOnSignal: "SIGKILL" });
+      },
+      processExitGraceMs: 5,
+    });
+
+    expect(refreshReference).toEqual({
+      lease: CHATGPT_LEASE,
+      run: CHATGPT_RUN,
+    });
+    expect(refreshed).toBe(REFRESHED_CHATGPT_AUTH);
+    expect(codexHome).not.toBe("");
+    await expect(access(codexHome)).rejects.toThrow();
+  });
+
+  it("does not upload an unchanged ChatGPT document", async () => {
+    let refreshCalls = 0;
+    await runCodex(chatGptProcessInput(), emptyCallbacks, {
+      providerConnection: { provider: "chatgpt", authDocument: CHATGPT_AUTH },
+      providerConnectionReference: {
+        lease: CHATGPT_LEASE,
+        run: CHATGPT_RUN,
+      },
+      refreshProviderConnection: async () => {
+        refreshCalls += 1;
+      },
+      spawn: fakeCodexProcess,
+    });
+    expect(refreshCalls).toBe(0);
+  });
+
+  it("redacts ChatGPT auth values from streamed events and refuses them in tool arguments", async () => {
+    const observed: unknown[] = [];
+    let deploymentCalls = 0;
+    await runCodex(
+      {
+        ...toolProcessInput(),
+        forwardedProps: {
+          ...(toolProcessInput().forwardedProps as Record<string, unknown>),
+          openbotCredentialLease: CHATGPT_LEASE,
+          openbotRun: CHATGPT_RUN,
+        },
+      },
+      {
+        onText(delta, itemId) {
+          observed.push({ delta, itemId });
+        },
+        onReasoning(delta, itemId, summaryIndex) {
+          observed.push({ delta, itemId, summaryIndex });
+        },
+        onToolStart(callId, name, args) {
+          observed.push({ callId, name, args });
+        },
+        onToolResult(callId, result) {
+          observed.push({ callId, result });
+        },
+      },
+      {
+        providerConnection: {
+          provider: "chatgpt",
+          authDocument: CHATGPT_AUTH,
+        },
+        providerConnectionReference: {
+          lease: CHATGPT_LEASE,
+          run: CHATGPT_RUN,
+        },
+        refreshProviderConnection: async () => undefined,
+        spawn: () =>
+          secretToolCodexProcess("initial-chatgpt-access-canary", true),
+        deploymentToolCaller: async () => {
+          deploymentCalls += 1;
+          return { text: "unexpected", isError: false };
+        },
+      },
+    );
+
+    const publicEvents = JSON.stringify(observed);
+    expect(publicEvents).not.toContain("initial-chatgpt-access-canary");
+    expect(publicEvents).not.toContain("initial-chatgpt-refresh-canary");
+    expect(publicEvents).toContain("[redacted]");
+    expect(publicEvents).toContain("Provider credentials cannot be passed");
+    expect(deploymentCalls).toBe(0);
+  });
+
+  it("redacts a near-limit ChatGPT document split across stream chunks in linear time", async () => {
+    const accessToken = "near-limit-chatgpt-access-canary";
+    const refreshToken = "near-limit-chatgpt-refresh-canary";
+    const authDocument = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      },
+      private_metadata: `near-limit-private-${"x".repeat(240 * 1_024)}`,
+    });
+    const observed: unknown[] = [];
+
+    await runCodex(
+      toolProcessInput(),
+      {
+        onText(delta, itemId) {
+          observed.push({ delta, itemId });
+        },
+        onReasoning(delta, itemId, summaryIndex) {
+          observed.push({ delta, itemId, summaryIndex });
+        },
+        onToolStart(callId, name, args) {
+          observed.push({ callId, name, args });
+        },
+        onToolResult(callId, result) {
+          observed.push({ callId, result });
+        },
+      },
+      {
+        providerConnection: { provider: "chatgpt", authDocument },
+        providerConnectionReference: {
+          lease: CHATGPT_LEASE,
+          run: CHATGPT_RUN,
+        },
+        refreshProviderConnection: async () => undefined,
+        spawn: () => secretToolCodexProcess(authDocument, false),
+        deploymentToolCaller: async () => ({
+          text: '{"ok":true}',
+          isError: false,
+        }),
+      },
+    );
+
+    const publicEvents = JSON.stringify(observed);
+    expect(publicEvents).toContain("[redacted]");
+    expect(publicEvents).not.toContain(accessToken);
+    expect(publicEvents).not.toContain(refreshToken);
+    expect(publicEvents).not.toContain("near-limit-private-");
+    expect(publicEvents.length).toBeLessThan(2_000);
+  }, 5_000);
+
+  it("keeps ChatGPT redaction linear across thousands of one-character deltas", async () => {
+    const authDocument = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: "many-delta-access-token",
+        refresh_token: "many-delta-refresh-token",
+      },
+      private_metadata: `many-delta-private-${"y".repeat(24 * 1_024)}`,
+    });
+    const observed: string[] = [];
+
+    await runCodex(
+      toolProcessInput(),
+      {
+        onText(delta) {
+          observed.push(delta);
+        },
+        onReasoning(delta) {
+          observed.push(delta);
+        },
+        onToolStart() {},
+        onToolResult() {},
+      },
+      {
+        providerConnection: { provider: "chatgpt", authDocument },
+        providerConnectionReference: {
+          lease: CHATGPT_LEASE,
+          run: CHATGPT_RUN,
+        },
+        refreshProviderConnection: async () => undefined,
+        spawn: () => secretToolCodexProcess(authDocument, false, 1),
+        deploymentToolCaller: async () => ({
+          text: '{"ok":true}',
+          isError: false,
+        }),
+      },
+    );
+
+    const publicText = observed.join("");
+    expect(publicText).toContain("[redacted]");
+    expect(publicText).not.toContain("many-delta-access-token");
+    expect(publicText).not.toContain("many-delta-refresh-token");
+    expect(publicText).not.toContain("many-delta-private-");
+    expect(publicText.length).toBeLessThan(500);
+  }, 5_000);
+
+  it("never emits overlapping ChatGPT secrets across callback boundaries", async () => {
+    const authDocument = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { access_token: "aa", refresh_token: "ab" },
+    });
+    const observed: string[] = [];
+
+    await runCodex(
+      toolProcessInput(),
+      {
+        onText(delta) {
+          observed.push(delta);
+        },
+        onReasoning(delta) {
+          observed.push(delta);
+        },
+        onToolStart() {},
+        onToolResult() {},
+      },
+      {
+        providerConnection: { provider: "chatgpt", authDocument },
+        providerConnectionReference: {
+          lease: CHATGPT_LEASE,
+          run: CHATGPT_RUN,
+        },
+        refreshProviderConnection: async () => undefined,
+        // The first match ends at the boundary while the second secret still holds a shared
+        // prefix. This is the exact ordering that previously emitted "aa" in separate callbacks.
+        spawn: () => secretToolCodexProcess("aaa", false, 2),
+        deploymentToolCaller: async () => ({
+          text: '{"ok":true}',
+          isError: false,
+        }),
+      },
+    );
+
+    const publicText = observed.join("");
+    expect(publicText).toContain("[redacted]");
+    expect(publicText).not.toContain("aa");
+    expect(publicText).not.toContain("ab");
+  });
+
+  it("cleans the stopped child profile and emits only Settings guidance when refresh is refused", async () => {
+    let codexHome = "";
+    let thrown: unknown;
+    try {
+      await runCodex(chatGptProcessInput(), emptyCallbacks, {
+        providerConnection: {
+          provider: "chatgpt",
+          authDocument: CHATGPT_AUTH,
+        },
+        providerConnectionReference: {
+          lease: CHATGPT_LEASE,
+          run: CHATGPT_RUN,
+        },
+        refreshProviderConnection: async () => {
+          throw new Error(
+            `server echoed ${REFRESHED_CHATGPT_AUTH} initial-chatgpt-access-canary`,
+          );
+        },
+        spawn: (profile) => {
+          codexHome = profile.codexHome;
+          writeFileSync(
+            `${profile.codexHome}/auth.json`,
+            REFRESHED_CHATGPT_AUTH,
+            { mode: 0o600 },
+          );
+          return fakeCodexProcess();
+        },
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(String(thrown)).toContain("Settings");
+    expect(String(thrown)).not.toContain("chatgpt-access-canary");
+    expect(String(thrown)).not.toContain("chatgpt-refresh-canary");
+    await expect(access(codexHome)).rejects.toThrow();
   });
 
   it("removes the isolated runtime profile after success", async () => {
@@ -694,6 +1011,17 @@ function processInput(): RunAgentInput {
   } as unknown as RunAgentInput;
 }
 
+function chatGptProcessInput(): RunAgentInput {
+  return {
+    ...processInput(),
+    forwardedProps: {
+      openbotBotId: "codex",
+      openbotCredentialLease: CHATGPT_LEASE,
+      openbotRun: CHATGPT_RUN,
+    },
+  } as RunAgentInput;
+}
+
 function researchProcessInput(): RunAgentInput {
   const agentId = process.env.RESEARCH_AGENT_ID?.trim() || "research-analyst";
   return {
@@ -794,7 +1122,11 @@ function fakeCodexProcess(
   return child as unknown as ChildProcessWithoutNullStreams;
 }
 
-function secretToolCodexProcess(privateKey: string, sensitiveArgs: boolean) {
+function secretToolCodexProcess(
+  privateKey: string,
+  sensitiveArgs: boolean,
+  textChunkSize?: number,
+) {
   const child = fakeChildShell();
   child.stdin.on("data", (chunk) => {
     const request = JSON.parse(String(chunk)) as {
@@ -817,11 +1149,10 @@ function secretToolCodexProcess(privateKey: string, sensitiveArgs: boolean) {
     queueMicrotask(() => {
       child.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
       if (request.method !== "turn/start") return;
-      const split = Math.floor(privateKey.length / 2);
-      for (const delta of [
-        privateKey.slice(0, split),
-        privateKey.slice(split),
-      ]) {
+      const split =
+        textChunkSize ?? Math.max(1, Math.floor(privateKey.length / 2));
+      for (let offset = 0; offset < privateKey.length; offset += split) {
+        const delta = privateKey.slice(offset, offset + split);
         child.stdout.write(
           `${JSON.stringify({ method: "item/agentMessage/delta", params: { itemId: "answer", delta } })}\n`,
         );

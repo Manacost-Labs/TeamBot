@@ -1,11 +1,12 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
-import { decryptSecret } from "../credentials";
+import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { decryptSecret, encryptSecret } from "../credentials";
 import type { Database } from "../db/client";
 import {
   credentials,
   personalAiCredentialLeases,
   userAiConnections,
 } from "../db/schema";
+import { isValidChatGptAuthDocument } from "./device-flows";
 
 const DEFAULT_LEASE_TTL_MS = 2 * 60 * 1_000;
 const MAX_LEASE_TTL_MS = 10 * 60 * 1_000;
@@ -33,6 +34,13 @@ export type PersonalAiCredentialLeaseService = Readonly<{
     botId: string;
     runId: string;
   }) => Promise<PersonalAiRuntimeCredential>;
+  refresh: (input: {
+    lease: string;
+    actorUserId: string;
+    botId: string;
+    runId: string;
+    authDocument: string;
+  }) => Promise<void>;
 }>;
 
 /** Safe signal for Task 17 to turn into the Settings guidance before dialling an agent. */
@@ -54,6 +62,13 @@ export class PersonalAiCredentialLeaseRefusedError extends Error {
   constructor() {
     super("Credential lease is unavailable.");
     this.name = "PersonalAiCredentialLeaseRefusedError";
+  }
+}
+
+export class PersonalAiCredentialRefreshRefusedError extends Error {
+  constructor() {
+    super("Credential refresh is unavailable.");
+    this.name = "PersonalAiCredentialRefreshRefusedError";
   }
 }
 
@@ -257,6 +272,90 @@ export function createPersonalAiCredentialLeaseService(input: {
           connection.encryptedValue,
         );
         return runtimeCredential(connection.provider, plaintext);
+      });
+    },
+
+    async refresh(refreshInput) {
+      if (
+        !UUID.test(refreshInput.lease) ||
+        !validRun(refreshInput) ||
+        !isValidChatGptAuthDocument(refreshInput.authDocument)
+      ) {
+        throw new PersonalAiCredentialRefreshRefusedError();
+      }
+
+      // Encrypt before opening the transaction. The plaintext never enters SQL, and WebCrypto
+      // cannot hold the actor lock or a pooled database connection while it does CPU work.
+      const encryptedValue = await encryptSecret(
+        input.encryptionKey,
+        refreshInput.authDocument,
+      );
+
+      await input.database.transaction(async (transaction) => {
+        // Disconnect and replacement take this same lock. Whichever decision wins commits fully;
+        // the loser then observes the new connection generation and cannot revive the old row.
+        await lockActor(transaction, refreshInput.actorUserId);
+        const [lease] = await transaction
+          .select({
+            id: personalAiCredentialLeases.id,
+            credentialId: personalAiCredentialLeases.credentialId,
+          })
+          .from(personalAiCredentialLeases)
+          .where(
+            and(
+              eq(personalAiCredentialLeases.id, refreshInput.lease),
+              eq(personalAiCredentialLeases.userId, refreshInput.actorUserId),
+              eq(personalAiCredentialLeases.botId, refreshInput.botId),
+              eq(personalAiCredentialLeases.runId, refreshInput.runId),
+              isNotNull(personalAiCredentialLeases.redeemedAt),
+            ),
+          )
+          .for("update");
+        if (!lease) throw new PersonalAiCredentialRefreshRefusedError();
+
+        const [connection] = await transaction
+          .select({ credentialId: credentials.id })
+          .from(userAiConnections)
+          .innerJoin(
+            credentials,
+            and(
+              eq(credentials.id, userAiConnections.credentialId),
+              eq(credentials.id, lease.credentialId),
+              eq(credentials.kind, "model"),
+              eq(credentials.provider, "chatgpt"),
+              isNull(credentials.revokedAt),
+            ),
+          )
+          .where(
+            and(
+              eq(userAiConnections.userId, refreshInput.actorUserId),
+              eq(userAiConnections.provider, "chatgpt"),
+              eq(userAiConnections.state, "active"),
+              isNull(userAiConnections.disconnectedAt),
+            ),
+          )
+          .for("update");
+        if (!connection) throw new PersonalAiCredentialRefreshRefusedError();
+
+        const [updated] = await transaction
+          .update(credentials)
+          .set({ encryptedValue, updatedAt: sql`now()` })
+          .where(
+            and(
+              eq(credentials.id, connection.credentialId),
+              isNull(credentials.revokedAt),
+            ),
+          )
+          .returning({ id: credentials.id });
+        if (!updated) throw new PersonalAiCredentialRefreshRefusedError();
+
+        // Deleting the spent provenance row is the replay gate. It commits atomically with the
+        // in-place refresh, so a retry can neither overwrite the winner nor observe half a write.
+        const [consumed] = await transaction
+          .delete(personalAiCredentialLeases)
+          .where(eq(personalAiCredentialLeases.id, lease.id))
+          .returning({ id: personalAiCredentialLeases.id });
+        if (!consumed) throw new PersonalAiCredentialRefreshRefusedError();
       });
     },
   });

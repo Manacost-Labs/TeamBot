@@ -1,6 +1,12 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import readline from "node:readline";
 import type { RunAgentInput } from "@ag-ui/core";
+import {
+  ChatGptProfileUnavailableError,
+  type ChatGptRuntimeProfile,
+  createChatGptRuntimeProfile,
+  parseChatGptAuthDocument,
+} from "./chatgpt-profile";
 import { DataControlWorkflow } from "./data-control-workflow";
 import type { AgentExecutionTiming } from "./execution-timing";
 import {
@@ -18,7 +24,11 @@ import {
   createOpenRouterCredentialBroker,
   type OpenRouterCredentialBroker,
 } from "./openrouter-credential-broker";
-import type { PersonalProviderConnection } from "./provider-connection";
+import type {
+  PersonalProviderConnection,
+  PersonalProviderConnectionReference,
+  PersonalProviderConnectionRefresher,
+} from "./provider-connection";
 import {
   buildCodexChildEnvironment,
   type CodexRuntimeProfile,
@@ -253,70 +263,185 @@ function redactProviderError(
   providerConnection: PersonalProviderConnection | undefined,
   additionalSensitiveValues: readonly string[] = [],
 ): Error {
-  if (
-    providerConnection?.provider !== "openrouter" &&
-    additionalSensitiveValues.length === 0
-  ) {
-    return error instanceof Error ? error : new Error("Codex run failed.");
-  }
   const source = error instanceof Error ? error.message : String(error);
   const sensitiveValues = [
-    ...(providerConnection?.provider === "openrouter"
-      ? [providerConnection.apiKey]
-      : []),
+    ...providerSensitiveValues(providerConnection),
     ...additionalSensitiveValues,
   ].filter(Boolean);
-  const redacted = sensitiveValues.reduce(
-    (value, sensitive) => value.split(sensitive).join("[redacted]"),
-    source,
-  );
+  if (sensitiveValues.length === 0) {
+    return error instanceof Error ? error : new Error("Codex run failed.");
+  }
+  const redacted = redactSecrets(source, sensitiveValues);
   const safe = new Error(redacted || "Codex run failed.");
   safe.name = error instanceof Error ? error.name : "Error";
   return safe;
 }
 
-function providerSecret(
+function providerSensitiveValues(
   providerConnection: PersonalProviderConnection | undefined,
-): string | undefined {
-  return providerConnection?.provider === "openrouter"
-    ? providerConnection.apiKey
-    : undefined;
+): string[] {
+  if (!providerConnection) return [];
+  if (providerConnection.provider === "openrouter") {
+    return [providerConnection.apiKey];
+  }
+  return [
+    ...(parseChatGptAuthDocument(providerConnection.authDocument)
+      ?.sensitiveValues ?? [providerConnection.authDocument]),
+  ];
 }
 
-function containsSecret(value: unknown, secret: string | undefined): boolean {
-  if (!secret) return false;
-  if (typeof value === "string") return value.includes(secret);
+function containsSecrets(value: unknown, secrets: readonly string[]): boolean {
+  if (secrets.length === 0) return false;
+  if (typeof value === "string") {
+    return secrets.some((secret) => value.includes(secret));
+  }
   if (Array.isArray(value))
-    return value.some((entry) => containsSecret(entry, secret));
+    return value.some((entry) => containsSecrets(entry, secrets));
   if (!value || typeof value !== "object") return false;
   return Object.entries(value).some(
-    ([key, entry]) => key.includes(secret) || containsSecret(entry, secret),
+    ([key, entry]) =>
+      secrets.some((secret) => key.includes(secret)) ||
+      containsSecrets(entry, secrets),
   );
 }
 
-function redactSecret(value: string, secret: string | undefined): string {
-  return secret ? value.split(secret).join("[redacted]") : value;
+function redactSecrets(value: string, secrets: readonly string[]): string {
+  return secrets.reduce(
+    (redacted, secret) => redacted.split(secret).join("[redacted]"),
+    value,
+  );
 }
 
-function redactStreamingSecret(
-  buffered: string,
-  chunk: string,
-  secret: string | undefined,
-): { emitted: string; buffered: string } {
-  if (!secret) return { emitted: chunk, buffered: "" };
-  const redacted = redactSecret(`${buffered}${chunk}`, secret);
-  let bufferedCharacters = 0;
-  const maximum = Math.min(secret.length - 1, redacted.length);
-  for (let length = maximum; length > 0; length -= 1) {
-    if (redacted.endsWith(secret.slice(0, length))) {
-      bufferedCharacters = length;
-      break;
+type StreamingSecretMatcher = Readonly<{
+  secret: string;
+  prefixLengths: Uint32Array;
+}>;
+
+type StreamingRedactionState = {
+  pending: Array<{ character: string; redacted: boolean }>;
+  pendingStart: number;
+  redactionOpen: boolean;
+  matchedPrefixLengths: Uint32Array;
+};
+
+function createStreamingSecretMatchers(
+  secrets: readonly string[],
+): StreamingSecretMatcher[] {
+  return secrets.map((secret) => {
+    const prefixLengths = new Uint32Array(secret.length);
+    let matched = 0;
+    for (let index = 1; index < secret.length; index += 1) {
+      while (matched > 0 && secret[index] !== secret[matched]) {
+        matched = prefixLengths[matched - 1] ?? 0;
+      }
+      if (secret[index] === secret[matched]) matched += 1;
+      prefixLengths[index] = matched;
+    }
+    return { secret, prefixLengths };
+  });
+}
+
+function createStreamingRedactionState(
+  matcherCount: number,
+): StreamingRedactionState {
+  return {
+    pending: [],
+    pendingStart: 0,
+    redactionOpen: false,
+    matchedPrefixLengths: new Uint32Array(matcherCount),
+  };
+}
+
+function hasPendingStreamingText(state: StreamingRedactionState): boolean {
+  return state.pendingStart < state.pending.length;
+}
+
+function emitStreamingText(
+  state: StreamingRedactionState,
+  characterCount: number,
+): string {
+  if (characterCount <= 0) return "";
+  const parts: string[] = [];
+  const end = Math.min(
+    state.pending.length,
+    state.pendingStart + characterCount,
+  );
+  for (let index = state.pendingStart; index < end; index += 1) {
+    const cell = state.pending[index];
+    if (!cell) continue;
+    if (cell.redacted) {
+      if (!state.redactionOpen) parts.push("[redacted]");
+      state.redactionOpen = true;
+    } else {
+      state.redactionOpen = false;
+      parts.push(cell.character);
     }
   }
-  return {
-    emitted: redacted.slice(0, redacted.length - bufferedCharacters),
-    buffered: redacted.slice(redacted.length - bufferedCharacters),
-  };
+  state.pendingStart = end;
+  if (
+    state.pendingStart >= 4_096 &&
+    state.pendingStart * 2 >= state.pending.length
+  ) {
+    state.pending = state.pending.slice(state.pendingStart);
+    state.pendingStart = 0;
+  }
+  return parts.join("");
+}
+
+function flushStreamingSecrets(state: StreamingRedactionState): string {
+  return emitStreamingText(state, state.pending.length - state.pendingStart);
+}
+
+function redactStreamingSecrets(
+  state: StreamingRedactionState,
+  chunk: string,
+  secrets: readonly string[],
+  matchers: readonly StreamingSecretMatcher[],
+): string {
+  if (secrets.length === 0) return chunk;
+
+  for (let index = 0; index < chunk.length; index += 1) {
+    const character = chunk[index];
+    if (character === undefined) continue;
+    state.pending.push({ character, redacted: false });
+    for (
+      let matcherIndex = 0;
+      matcherIndex < matchers.length;
+      matcherIndex += 1
+    ) {
+      const matcher = matchers[matcherIndex];
+      if (!matcher) continue;
+      let matched = state.matchedPrefixLengths[matcherIndex] ?? 0;
+      while (matched > 0 && character !== matcher.secret[matched]) {
+        matched = matcher.prefixLengths[matched - 1] ?? 0;
+      }
+      if (character === matcher.secret[matched]) matched += 1;
+      if (matched === matcher.secret.length) {
+        const matchStart = state.pending.length - matcher.secret.length;
+        // A match cannot reach already-emitted cells: before its final character arrived, the
+        // matcher kept the preceding prefix buffered. Marking the raw cells first also handles
+        // overlapping secrets and shared prefixes without ever exposing a partial credential.
+        for (
+          let pendingIndex = matchStart;
+          pendingIndex < state.pending.length;
+          pendingIndex += 1
+        ) {
+          const cell = state.pending[pendingIndex];
+          if (cell) cell.redacted = true;
+        }
+        matched = matcher.prefixLengths[matched - 1] ?? 0;
+      }
+      state.matchedPrefixLengths[matcherIndex] = matched;
+    }
+  }
+
+  let bufferedCharacters = 0;
+  for (const matched of state.matchedPrefixLengths) {
+    bufferedCharacters = Math.max(bufferedCharacters, matched);
+  }
+  const emitLength =
+    state.pending.length - state.pendingStart - bufferedCharacters;
+  return emitStreamingText(state, emitLength);
 }
 
 export async function runCodex(
@@ -333,6 +458,10 @@ export async function runCodex(
     deploymentToolCaller?: typeof callDeploymentTool;
     /** Redeemed once after admission and consumed only by the isolated runtime profile. */
     providerConnection?: PersonalProviderConnection;
+    /** Opaque provenance already checked during redemption; never supplied by the browser here. */
+    providerConnectionReference?: PersonalProviderConnectionReference;
+    /** Fixed managed callback captured at service startup. */
+    refreshProviderConnection?: PersonalProviderConnectionRefresher;
     environment?: NodeJS.ProcessEnv;
     /** Trusted test seam; production requests cannot provide a broker or upstream transport. */
     credentialBrokerFactory?: (
@@ -344,11 +473,6 @@ export async function runCodex(
     ? await (options.youtubeContext ?? youtubeTranscriptContext)(input)
     : "";
   const environment = options.environment ?? process.env;
-  if (options.providerConnection?.provider === "chatgpt") {
-    // Task 25 materialises actor-owned ChatGPT auth. Until then, never fall through to a host or
-    // unauthenticated profile when a ChatGPT credential was selected.
-    throw new Error("Personal AI connection is unavailable.");
-  }
   const selectedModel =
     options.providerConnection?.provider === "openrouter"
       ? openRouterModel(environment)
@@ -356,7 +480,9 @@ export async function runCodex(
   const selectedReasoningEffort = reasoningEffortFor(input, selectedModel);
   const additionalEnvironmentKeys = additionalEnvironmentKeysFor(input);
   let credentialBroker: OpenRouterCredentialBroker | undefined;
+  let chatGptProfile: ChatGptRuntimeProfile | undefined;
   let profile: CodexRuntimeProfile;
+  const sensitiveValues = providerSensitiveValues(options.providerConnection);
   try {
     if (options.providerConnection?.provider === "openrouter") {
       credentialBroker = await (
@@ -368,6 +494,19 @@ export async function runCodex(
         environment,
         additionalEnvironmentKeys,
       });
+    } else if (options.providerConnection?.provider === "chatgpt") {
+      if (
+        !options.providerConnectionReference ||
+        !options.refreshProviderConnection
+      ) {
+        throw new ChatGptProfileUnavailableError();
+      }
+      chatGptProfile = await createChatGptRuntimeProfile({
+        authDocument: options.providerConnection.authDocument,
+        environment,
+        additionalEnvironmentKeys,
+      });
+      profile = chatGptProfile;
     } else {
       profile = await createCodexRuntimeProfile({
         environment,
@@ -387,7 +526,7 @@ export async function runCodex(
       callbacks,
       selectedModel,
       selectedReasoningEffort,
-      providerSecret(options.providerConnection),
+      sensitiveValues,
       options.timing,
       () =>
         options.spawn
@@ -413,6 +552,23 @@ export async function runCodex(
       failure = error;
     }
   }
+  if (chatGptProfile) {
+    try {
+      const refreshed = await chatGptProfile.readChangedAuthDocument();
+      if (refreshed) {
+        const refreshedDocument = parseChatGptAuthDocument(refreshed);
+        if (!refreshedDocument) throw new ChatGptProfileUnavailableError();
+        sensitiveValues.push(...refreshedDocument.sensitiveValues);
+        await options.refreshProviderConnection?.(
+          options.providerConnectionReference as PersonalProviderConnectionReference,
+          refreshed,
+        );
+      }
+    } catch {
+      failed = true;
+      failure = new ChatGptProfileUnavailableError();
+    }
+  }
   try {
     await profile.dispose();
   } catch (error) {
@@ -433,11 +589,10 @@ export async function runCodex(
     const brokerSecrets = credentialBroker
       ? [credentialBroker.baseUrl, new URL(credentialBroker.baseUrl).pathname]
       : [];
-    throw redactProviderError(
-      failure,
-      options.providerConnection,
-      brokerSecrets,
-    );
+    throw redactProviderError(failure, options.providerConnection, [
+      ...brokerSecrets,
+      ...sensitiveValues,
+    ]);
   }
 }
 
@@ -457,14 +612,17 @@ class CodexProcess {
   private turnCompleted = false;
   private terminalFailure: Error | undefined;
   private stderr = "";
-  private stderrSecretBuffer = "";
+  private readonly stderrSecretState: StreamingRedactionState;
   private readonly protocolTrace: string[] = [];
   private readonly toolNames = new Map<string, string>();
   private readonly dataControlWorkflow: DataControlWorkflow | undefined;
-  private readonly textSecretBuffers = new Map<string, string>();
+  private readonly textSecretBuffers = new Map<
+    string,
+    StreamingRedactionState
+  >();
   private readonly reasoningSecretBuffers = new Map<
     string,
-    { buffered: string; summaryIndex: number }
+    { redaction: StreamingRedactionState; summaryIndex: number }
   >();
   private threadId: string | undefined;
   private correctionTurns = 0;
@@ -475,13 +633,14 @@ class CodexProcess {
   private youtubeArtifactCorrectionTurns = 0;
   private researchDeadline: ReturnType<typeof setTimeout> | undefined;
   private researchInterruptDeadline: ReturnType<typeof setTimeout> | undefined;
+  private readonly streamingSecretMatchers: readonly StreamingSecretMatcher[];
 
   constructor(
     private readonly input: RunAgentInput,
     private readonly callbacks: CodexCallbacks,
     private readonly selectedModel: string | undefined,
     private readonly selectedReasoningEffort: string,
-    private readonly secret: string | undefined,
+    private readonly secrets: readonly string[],
     private readonly timing: AgentExecutionTiming | undefined,
     spawnProcess: () => ChildProcessWithoutNullStreams,
     private readonly processExitGraceMs = PROCESS_EXIT_GRACE_MS,
@@ -491,6 +650,10 @@ class CodexProcess {
     private readonly youtubeContext = "",
     private readonly deploymentToolCaller = callDeploymentTool,
   ) {
+    this.streamingSecretMatchers = createStreamingSecretMatchers(secrets);
+    this.stderrSecretState = createStreamingRedactionState(
+      this.streamingSecretMatchers.length,
+    );
     this.dataControlWorkflow = isDataControlRun(input)
       ? new DataControlWorkflow()
       : undefined;
@@ -516,13 +679,13 @@ class CodexProcess {
       .createInterface({ input: this.process.stdout })
       .on("line", (line) => this.onLine(line));
     this.process.stderr.on("data", (chunk) => {
-      const streamed = redactStreamingSecret(
-        this.stderrSecretBuffer,
+      const safeChunk = redactStreamingSecrets(
+        this.stderrSecretState,
         String(chunk),
-        this.secret,
+        this.secrets,
+        this.streamingSecretMatchers,
       );
-      this.stderrSecretBuffer = streamed.buffered;
-      this.stderr = `${this.stderr}${streamed.emitted}`.slice(-4000);
+      this.stderr = `${this.stderr}${safeChunk}`.slice(-4000);
     });
     this.process.once("error", (error) => {
       if (this.process.pid === undefined) this.markStopped();
@@ -547,10 +710,9 @@ class CodexProcess {
   }
 
   private flushStderrSecretBuffer(): void {
-    if (!this.stderrSecretBuffer) return;
-    const safe = this.secret ? "[redacted]" : this.stderrSecretBuffer;
+    if (!hasPendingStreamingText(this.stderrSecretState)) return;
+    const safe = flushStreamingSecrets(this.stderrSecretState);
     this.stderr = `${this.stderr}${safe}`.slice(-4000);
-    this.stderrSecretBuffer = "";
   }
 
   async run(): Promise<void> {
@@ -685,7 +847,7 @@ class CodexProcess {
       this.pending.delete(message.id);
       if (message.error)
         pending.reject(
-          new Error(redactSecret(JSON.stringify(message.error), this.secret)),
+          new Error(redactSecrets(JSON.stringify(message.error), this.secrets)),
         );
       else pending.resolve(message.result);
       return;
@@ -699,20 +861,24 @@ class CodexProcess {
       const delta = message.params?.delta;
       const itemId = message.params?.itemId;
       if (typeof delta === "string" && typeof itemId === "string") {
-        const streamed = redactStreamingSecret(
-          this.textSecretBuffers.get(itemId) ?? "",
+        const redaction =
+          this.textSecretBuffers.get(itemId) ??
+          createStreamingRedactionState(this.streamingSecretMatchers.length);
+        const safeDelta = redactStreamingSecrets(
+          redaction,
           delta,
-          this.secret,
+          this.secrets,
+          this.streamingSecretMatchers,
         );
-        if (streamed.buffered)
-          this.textSecretBuffers.set(itemId, streamed.buffered);
+        if (hasPendingStreamingText(redaction))
+          this.textSecretBuffers.set(itemId, redaction);
         else this.textSecretBuffers.delete(itemId);
-        const safeDelta = streamed.emitted;
         if (isResearchRun(this.input)) {
           this.researchText = `${this.researchText}${safeDelta}`.slice(-24_000);
         }
-        if (safeDelta)
-          this.callbacks.onText(safeDelta, redactSecret(itemId, this.secret));
+        if (safeDelta) {
+          this.callbacks.onText(safeDelta, redactSecrets(itemId, this.secrets));
+        }
       }
       return;
     }
@@ -725,21 +891,25 @@ class CodexProcess {
         typeof itemId === "string" &&
         typeof summaryIndex === "number"
       ) {
-        const streamed = redactStreamingSecret(
-          this.reasoningSecretBuffers.get(itemId)?.buffered ?? "",
+        const redaction =
+          this.reasoningSecretBuffers.get(itemId)?.redaction ??
+          createStreamingRedactionState(this.streamingSecretMatchers.length);
+        const safeDelta = redactStreamingSecrets(
+          redaction,
           delta,
-          this.secret,
+          this.secrets,
+          this.streamingSecretMatchers,
         );
-        if (streamed.buffered)
+        if (hasPendingStreamingText(redaction))
           this.reasoningSecretBuffers.set(itemId, {
-            buffered: streamed.buffered,
+            redaction,
             summaryIndex,
           });
         else this.reasoningSecretBuffers.delete(itemId);
-        if (streamed.emitted)
+        if (safeDelta)
           this.callbacks.onReasoning(
-            streamed.emitted,
-            redactSecret(itemId, this.secret),
+            safeDelta,
+            redactSecrets(itemId, this.secrets),
             summaryIndex,
           );
       }
@@ -754,9 +924,9 @@ class CodexProcess {
       if (turn?.status === "failed")
         this.failRun(
           new Error(
-            redactSecret(
+            redactSecrets(
               JSON.stringify(turn.error ?? "Codex turn failed."),
-              this.secret,
+              this.secrets,
             ),
           ),
         );
@@ -839,9 +1009,9 @@ class CodexProcess {
       if (message.params?.willRetry === true) return;
       this.failRun(
         new Error(
-          redactSecret(
+          redactSecrets(
             JSON.stringify(message.params ?? "Codex error."),
-            this.secret,
+            this.secrets,
           ),
         ),
       );
@@ -915,20 +1085,20 @@ class CodexProcess {
   }
 
   private flushSecretBuffers(): void {
-    for (const [itemId, buffered] of this.textSecretBuffers) {
-      const safeBuffered = this.secret ? "[redacted]" : buffered;
+    for (const [itemId, redaction] of this.textSecretBuffers) {
+      const safeBuffered = flushStreamingSecrets(redaction);
       if (isResearchRun(this.input)) {
         this.researchText = `${this.researchText}${safeBuffered}`.slice(
           -24_000,
         );
       }
-      this.callbacks.onText(safeBuffered, redactSecret(itemId, this.secret));
+      this.callbacks.onText(safeBuffered, redactSecrets(itemId, this.secrets));
     }
     this.textSecretBuffers.clear();
     for (const [itemId, value] of this.reasoningSecretBuffers) {
       this.callbacks.onReasoning(
-        this.secret ? "[redacted]" : value.buffered,
-        redactSecret(itemId, this.secret),
+        flushStreamingSecrets(value.redaction),
+        redactSecrets(itemId, this.secrets),
         value.summaryIndex,
       );
     }
@@ -936,7 +1106,7 @@ class CodexProcess {
   }
 
   private async handleToolCall(id: number, params: JsonObject): Promise<void> {
-    const sensitiveCall = containsSecret(params, this.secret);
+    const sensitiveCall = containsSecrets(params, this.secrets);
     const callId =
       typeof params.callId === "string" ? params.callId : `call_${id}`;
     const wireName = typeof params.tool === "string" ? params.tool : "unknown";
@@ -953,8 +1123,8 @@ class CodexProcess {
      * the original governed name, which is kept separately above.
      */
     this.callbacks.onToolStart(
-      redactSecret(callId, this.secret),
-      redactSecret(eventName, this.secret),
+      redactSecrets(callId, this.secrets),
+      redactSecrets(eventName, this.secrets),
       safeArgs,
     );
     const duplicateDeliverableArtifact =
@@ -974,7 +1144,7 @@ class CodexProcess {
         : await this.deploymentToolCaller(this.input, deploymentName, args);
     const safeResult = {
       ...result,
-      text: redactSecret(result.text, this.secret),
+      text: redactSecrets(result.text, this.secrets),
     };
     if (
       isResearchRun(this.input) &&
@@ -996,7 +1166,7 @@ class CodexProcess {
       safeResult.text,
     );
     this.callbacks.onToolResult(
-      redactSecret(callId, this.secret),
+      redactSecrets(callId, this.secrets),
       safeResult.text,
     );
     this.write({
@@ -1009,7 +1179,7 @@ class CodexProcess {
   }
 
   private safeDiagnostic(value: unknown): string {
-    return redactSecret(safeDiagnostic(value), this.secret);
+    return redactSecrets(safeDiagnostic(value), this.secrets);
   }
 }
 

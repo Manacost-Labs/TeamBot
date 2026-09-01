@@ -9,6 +9,7 @@ import {
 import type {
   PersonalProviderConnection,
   PersonalProviderConnectionReference,
+  PersonalProviderConnectionRefresher,
   PersonalProviderConnectionResolver,
 } from "./provider-connection";
 import {
@@ -27,10 +28,16 @@ type AgentRequestHandlerOptions = {
   sink?: (record: ExecutionTimingRecord) => void;
   admission?: RunAdmission;
   resolveProviderConnection?: PersonalProviderConnectionResolver;
+  refreshProviderConnection?: PersonalProviderConnectionRefresher;
   respond?: (
     input: RunAgentInput,
     timing: AgentExecutionTiming,
     onSettled: () => void,
+    provider: Readonly<{
+      connection?: PersonalProviderConnection;
+      reference?: PersonalProviderConnectionReference;
+      refresh?: PersonalProviderConnectionRefresher;
+    }>,
   ) => Response;
 };
 
@@ -201,6 +208,7 @@ export function createAgentRequestHandler(options: AgentRequestHandlerOptions) {
     }
 
     let providerConnection: PersonalProviderConnection | undefined;
+    let providerReference: PersonalProviderConnectionReference | undefined;
     if (options.resolveProviderConnection) {
       const reference = providerConnectionReference(parsed.data);
       try {
@@ -209,6 +217,7 @@ export function createAgentRequestHandler(options: AgentRequestHandlerOptions) {
           reference,
           request.signal,
         );
+        providerReference = reference;
       } catch {
         release();
         timing.record("run_error", {
@@ -223,11 +232,17 @@ export function createAgentRequestHandler(options: AgentRequestHandlerOptions) {
 
     try {
       return options.respond
-        ? options.respond(parsed.data, timing, release)
+        ? options.respond(parsed.data, timing, release, {
+            connection: providerConnection,
+            reference: providerReference,
+            refresh: options.refreshProviderConnection,
+          })
         : createAgentResponse(parsed.data, {
             timing,
             onSettled: release,
             providerConnection,
+            providerConnectionReference: providerReference,
+            refreshProviderConnection: options.refreshProviderConnection,
           });
     } catch (error) {
       release();

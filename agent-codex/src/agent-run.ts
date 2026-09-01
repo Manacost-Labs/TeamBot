@@ -2,7 +2,11 @@ import type { BaseEvent, RunAgentInput } from "@ag-ui/core";
 import { EventEncoder } from "@ag-ui/encoder";
 import { type CodexCallbacks, runCodex } from "./codex-run";
 import type { AgentExecutionTiming } from "./execution-timing";
-import type { PersonalProviderConnection } from "./provider-connection";
+import type {
+  PersonalProviderConnection,
+  PersonalProviderConnectionReference,
+  PersonalProviderConnectionRefresher,
+} from "./provider-connection";
 import { shouldExposeReasoning } from "./reasoning-visibility";
 import { SafeStreamWriter } from "./safe-stream";
 
@@ -17,6 +21,8 @@ export type AgentResponseOptions = {
   run?: AgentRun;
   /** Kept inside the adapter and passed only to the isolated runtime-profile boundary. */
   providerConnection?: PersonalProviderConnection;
+  providerConnectionReference?: PersonalProviderConnectionReference;
+  refreshProviderConnection?: PersonalProviderConnectionRefresher;
   /** Called only when the real run settles, not when an HTTP consumer disconnects. */
   onSettled?: () => void;
 };
@@ -34,6 +40,8 @@ export function createAgentResponse(
       runCodex(runInput, callbacks, {
         timing: runTiming,
         providerConnection: options.providerConnection,
+        providerConnectionReference: options.providerConnectionReference,
+        refreshProviderConnection: options.refreshProviderConnection,
       }));
   let writer: SafeStreamWriter | undefined;
   const stream = new ReadableStream<Uint8Array>({

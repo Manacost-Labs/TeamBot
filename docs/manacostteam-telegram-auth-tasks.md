@@ -714,13 +714,13 @@ refreshed document after the child exits.
 
 **Acceptance criteria:**
 
-- [ ] The auth document is written only inside the matching mode-`0700` temporary home.
-- [ ] Refresh upload is actor/run/credential bound and cannot revive a disconnected or rotated credential.
-- [ ] Missing, malformed or revoked documents fail with Settings guidance and never use the host profile.
+- [x] The auth document is written only inside the matching mode-`0700` temporary home.
+- [x] Refresh upload is actor/run/credential bound and cannot revive a disconnected or rotated credential.
+- [x] Missing, malformed or revoked documents fail with Settings guidance and never use the host profile.
 
 **Verification:**
 
-- [ ] `bun test agent-codex/tests/chatgpt-profile.test.ts agent-codex/tests/codex-run.test.ts server/tests/ai-credential-lease.test.ts`
+- [x] `bun test agent-codex/tests/chatgpt-profile.test.ts agent-codex/tests/codex-run.test.ts server/tests/ai-credential-lease.test.ts`
 
 **Dependencies:** Tasks 18, 19 and 23.
 

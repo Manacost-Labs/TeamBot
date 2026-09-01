@@ -6,6 +6,7 @@ import { mintRunAssertion } from "../src/agents/callback-token";
 import {
   createPersonalAiCredentialInternalRoutes,
   PERSONAL_AI_CREDENTIAL_REDEMPTION_PATH,
+  PERSONAL_AI_CREDENTIAL_REFRESH_PATH,
 } from "../src/ai-connections/internal-routes";
 import {
   createPersonalAiCredentialLeaseService,
@@ -15,6 +16,7 @@ import {
   createPersonalAiConnectionStore,
   derivePersonalAiCredentialKeyId,
 } from "../src/ai-connections/store";
+import { decryptSecret } from "../src/credentials";
 import { createDatabase } from "../src/db/client";
 import {
   agents,
@@ -38,7 +40,10 @@ const botIds: string[] = [];
 async function fixture(provider: "openrouter" | "chatgpt" = "openrouter") {
   const actorUserId = `lease-actor-${randomUUID()}`;
   const botId = `lease-bot-${randomUUID()}`;
-  const secret = `${provider}-lease-secret-${randomUUID()}`;
+  const secret =
+    provider === "chatgpt"
+      ? authDocument(`initial-${randomUUID()}`)
+      : `${provider}-lease-secret-${randomUUID()}`;
   actorIds.push(actorUserId);
   botIds.push(botId);
   await database.insert(users).values({
@@ -63,6 +68,17 @@ async function fixture(provider: "openrouter" | "chatgpt" = "openrouter") {
     safeMetadata: {},
   });
   return { actorUserId, botId, connections, provider, secret };
+}
+
+function authDocument(generation: string) {
+  return JSON.stringify({
+    auth_mode: "chatgpt",
+    tokens: {
+      access_token: `${generation}-access-token`,
+      refresh_token: `${generation}-refresh-token`,
+      id_token: `${generation}-id-token`,
+    },
+  });
 }
 
 function runFor(input: { actorUserId: string; botId: string; runId: string }) {
@@ -112,6 +128,40 @@ async function redeem(
   );
   return {
     body: (await response.json()) as Record<string, unknown>,
+    cacheControl: response.headers.get("cache-control"),
+    status: response.status,
+  };
+}
+
+async function refresh(
+  app: Hono,
+  input: {
+    lease: string;
+    run: string;
+    authDocument: string;
+    token?: string;
+  },
+) {
+  const response = await app.request(
+    `https://work.example.test${PERSONAL_AI_CREDENTIAL_REFRESH_PATH}`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-openbot-agent-token": input.token ?? managedAgentToken,
+      },
+      body: JSON.stringify({
+        lease: input.lease,
+        run: input.run,
+        authDocument: input.authDocument,
+      }),
+    },
+  );
+  return {
+    body:
+      response.status === 204
+        ? null
+        : ((await response.json()) as Record<string, unknown>),
     cacheControl: response.headers.get("cache-control"),
     status: response.status,
   };
@@ -468,5 +518,216 @@ describe("one-time personal AI credential leases", () => {
       provider: "openrouter",
       apiKey: connected.secret,
     });
+  });
+
+  test("atomically persists one actor/run/lease/credential-bound ChatGPT refresh", async () => {
+    const connected = await fixture("chatgpt");
+    const service = createPersonalAiCredentialLeaseService({
+      database,
+      encryptionKey,
+    });
+    const app = internalApp(service);
+    const runId = `run-${randomUUID()}`;
+    const lease = await service.mint({
+      actorUserId: connected.actorUserId,
+      botId: connected.botId,
+      runId,
+    });
+    const signedRun = runFor({ ...connected, runId });
+    const [before] = await database
+      .select({ credentialId: userAiConnections.credentialId })
+      .from(userAiConnections)
+      .where(eq(userAiConnections.userId, connected.actorUserId));
+    expect((await redeem(app, { lease, run: signedRun })).status).toBe(200);
+
+    const refreshed = authDocument(`refreshed-${randomUUID()}`);
+    expect(
+      await refresh(app, { lease, run: signedRun, authDocument: refreshed }),
+    ).toEqual({
+      status: 204,
+      cacheControl: "private, no-store",
+      body: null,
+    });
+
+    const [after] = await database
+      .select({
+        credentialId: userAiConnections.credentialId,
+        encryptedValue: credentials.encryptedValue,
+      })
+      .from(userAiConnections)
+      .innerJoin(
+        credentials,
+        eq(credentials.id, userAiConnections.credentialId),
+      )
+      .where(eq(userAiConnections.userId, connected.actorUserId));
+    expect(after?.credentialId).toBe(before?.credentialId);
+    expect(
+      await decryptSecret(encryptionKey, after?.encryptedValue ?? ""),
+    ).toBe(refreshed);
+
+    const replay = await refresh(app, {
+      lease,
+      run: signedRun,
+      authDocument: authDocument(`replay-${randomUUID()}`),
+    });
+    expect(replay).toEqual({
+      status: 403,
+      cacheControl: "private, no-store",
+      body: { error: "Credential refresh is unavailable." },
+    });
+  });
+
+  test("accepts a valid near-limit ChatGPT document after outer JSON escaping", async () => {
+    const connected = await fixture("chatgpt");
+    const service = createPersonalAiCredentialLeaseService({
+      database,
+      encryptionKey,
+    });
+    const app = internalApp(service);
+    const runId = `run-${randomUUID()}`;
+    const lease = await service.mint({
+      actorUserId: connected.actorUserId,
+      botId: connected.botId,
+      runId,
+    });
+    const signedRun = runFor({ ...connected, runId });
+    expect((await redeem(app, { lease, run: signedRun })).status).toBe(200);
+
+    const refreshed = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: "near-limit-access-token",
+        refresh_token: "near-limit-refresh-token",
+      },
+      private_metadata: '"'.repeat(120 * 1_024),
+    });
+    expect(Buffer.byteLength(refreshed)).toBeLessThanOrEqual(256 * 1_024);
+    expect(
+      Buffer.byteLength(
+        JSON.stringify({ lease, run: signedRun, authDocument: refreshed }),
+      ),
+    ).toBeGreaterThan(258 * 1_024);
+
+    expect(
+      await refresh(app, { lease, run: signedRun, authDocument: refreshed }),
+    ).toEqual({
+      status: 204,
+      cacheControl: "private, no-store",
+      body: null,
+    });
+  });
+
+  test("refuses malformed, disconnected, replaced and identity-swapped late refreshes without changing the live generation", async () => {
+    const service = createPersonalAiCredentialLeaseService({
+      database,
+      encryptionKey,
+    });
+    const refreshed = authDocument(`late-${randomUUID()}`);
+
+    const malformed = await fixture("chatgpt");
+    const malformedRunId = `run-${randomUUID()}`;
+    const malformedLease = await service.mint({
+      actorUserId: malformed.actorUserId,
+      botId: malformed.botId,
+      runId: malformedRunId,
+    });
+    const malformedRun = runFor({ ...malformed, runId: malformedRunId });
+    const malformedApp = internalApp(service);
+    expect(
+      (await redeem(malformedApp, { lease: malformedLease, run: malformedRun }))
+        .status,
+    ).toBe(200);
+    expect(
+      (
+        await refresh(malformedApp, {
+          lease: malformedLease,
+          run: malformedRun,
+          authDocument: "{}",
+        })
+      ).status,
+    ).toBe(403);
+
+    const disconnected = await fixture("chatgpt");
+    const disconnectedRunId = `run-${randomUUID()}`;
+    const disconnectedLease = await service.mint({
+      actorUserId: disconnected.actorUserId,
+      botId: disconnected.botId,
+      runId: disconnectedRunId,
+    });
+    const disconnectedRun = runFor({
+      ...disconnected,
+      runId: disconnectedRunId,
+    });
+    expect(
+      (
+        await redeem(malformedApp, {
+          lease: disconnectedLease,
+          run: disconnectedRun,
+        })
+      ).status,
+    ).toBe(200);
+    await disconnected.connections.disconnect(disconnected.actorUserId);
+    expect(
+      (
+        await refresh(malformedApp, {
+          lease: disconnectedLease,
+          run: disconnectedRun,
+          authDocument: refreshed,
+        })
+      ).status,
+    ).toBe(403);
+
+    const replaced = await fixture("chatgpt");
+    const replacedRunId = `run-${randomUUID()}`;
+    const replacedLease = await service.mint({
+      actorUserId: replaced.actorUserId,
+      botId: replaced.botId,
+      runId: replacedRunId,
+    });
+    const replacedRun = runFor({ ...replaced, runId: replacedRunId });
+    expect(
+      (await redeem(malformedApp, { lease: replacedLease, run: replacedRun }))
+        .status,
+    ).toBe(200);
+    const replacement = authDocument(`replacement-${randomUUID()}`);
+    await replaced.connections.connect({
+      actorUserId: replaced.actorUserId,
+      provider: "chatgpt",
+      plaintext: replacement,
+      safeMetadata: {},
+    });
+    expect(
+      (
+        await refresh(malformedApp, {
+          lease: replacedLease,
+          run: replacedRun,
+          authDocument: refreshed,
+        })
+      ).status,
+    ).toBe(403);
+
+    const [current] = await database
+      .select({ encryptedValue: credentials.encryptedValue })
+      .from(userAiConnections)
+      .innerJoin(
+        credentials,
+        eq(credentials.id, userAiConnections.credentialId),
+      )
+      .where(eq(userAiConnections.userId, replaced.actorUserId));
+    expect(
+      await decryptSecret(encryptionKey, current?.encryptedValue ?? ""),
+    ).toBe(replacement);
+
+    const other = await fixture("chatgpt");
+    const swapped = await refresh(malformedApp, {
+      lease: malformedLease,
+      run: runFor({
+        actorUserId: other.actorUserId,
+        botId: malformed.botId,
+        runId: malformedRunId,
+      }),
+      authDocument: refreshed,
+    });
+    expect(swapped.status).toBe(403);
   });
 });
