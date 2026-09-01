@@ -278,9 +278,9 @@ and prevents the next sign-in.
 
 ## Checkpoint C — Complete Telegram slice
 
-- [ ] Tasks 7–9 pass with owner and editor browser/session fixtures.
-- [ ] Owner history remains under the original internal actor ID.
-- [ ] Logout, allowlist removal and explicit revocation all invalidate access.
+- [x] Tasks 7–9 pass with owner and editor browser/session fixtures.
+- [x] Owner history remains under the original internal actor ID.
+- [x] Logout, allowlist removal and explicit revocation all invalidate access.
 
 ## Phase 2 — Personal AI connection persistence and OpenRouter UI
 
