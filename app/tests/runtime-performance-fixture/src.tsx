@@ -10,6 +10,8 @@ type Scenario =
   | "history_50"
   | "history_200"
   | "history_500"
+  | "history_2000"
+  | "history_10000"
   | "warm_switch";
 
 type BrowserMeasurement = {
@@ -50,7 +52,7 @@ type PreparedScenario = {
   scenario: Scenario;
 };
 
-const HISTORY_SIZES = [50, 200, 500] as const;
+const HISTORY_SIZES = [50, 200, 500, 2_000, 10_000] as const;
 
 function artifactId(index: number): string {
   return `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;

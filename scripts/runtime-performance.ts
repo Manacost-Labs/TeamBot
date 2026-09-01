@@ -25,6 +25,8 @@ type ScenarioId =
   | "history_50"
   | "history_200"
   | "history_500"
+  | "history_2000"
+  | "history_10000"
   | "warm_switch";
 
 type BrowserMeasurement = {
@@ -70,7 +72,32 @@ const scenarios: readonly ScenarioDefinition[] = [
     label: "500-message rich history → useful transcript paint",
     targetP95Ms: 300,
   },
+  {
+    id: "history_2000",
+    label: "2,000-message rich history → useful transcript paint",
+    targetP95Ms: 450,
+  },
+  {
+    id: "history_10000",
+    label: "10,000-message rich history → useful transcript paint",
+    targetP95Ms: 700,
+  },
 ];
+
+const profiles = [
+  {
+    id: "desktop",
+    label: "desktop 1440×900",
+    viewport: { height: 900, width: 1440 },
+    cpuSlowdownRate: 1,
+  },
+  {
+    id: "mobile",
+    label: "mobile 390×844, 4× CPU slowdown",
+    viewport: { height: 844, width: 390 },
+    cpuSlowdownRate: 4,
+  },
+] as const;
 
 function percentile(sorted: readonly number[], fraction: number): number {
   if (sorted.length === 0) return 0;
@@ -272,65 +299,82 @@ async function main() {
     }
 
     staticServer = await startStaticServer(buildOutput);
-    const context = await browser.newContext({
-      deviceScaleFactor: 1,
-      locale: "ru-RU",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
     let externalRequests = 0;
     const pageErrors: string[] = [];
-    page.on("pageerror", (error) => {
-      pageErrors.push(error.message);
-      process.stderr.write(`benchmark page error: ${error.message}\n`);
-    });
-    page.on("console", (message) => {
-      if (message.type() === "error") {
-        process.stderr.write(`benchmark console error: ${message.text()}\n`);
-      }
-    });
-    await page.route("**/*", async (route) => {
-      const url = new URL(route.request().url());
-      if (url.hostname === "127.0.0.1") {
-        await route.continue();
-      } else {
-        externalRequests += 1;
-        await route.abort("blockedbyclient");
-      }
-    });
-    await page.goto(staticServer.url, { waitUntil: "networkidle" });
-    await page.waitForFunction(
-      () =>
-        (
-          window as typeof window & {
-            runtimePerformanceBenchmark?: unknown;
-          }
-        ).runtimePerformanceBenchmark !== undefined,
-    );
-
     const results = [];
-    for (const scenario of scenarios) {
-      const measurements = await runBrowserScenario(page, scenario);
-      const sorted = measurements
-        .map((measurement) => measurement.elapsedMs)
-        .sort((left, right) => left - right);
-      const p95 = milliseconds(percentile(sorted, 0.95));
-      const mountedRows = measurements.map(
-        (measurement) => measurement.mountedRows,
-      );
-      results.push({
-        id: scenario.id,
-        label: scenario.label,
-        samples: measurements.length,
-        targetP95Ms: scenario.targetP95Ms,
-        p50Ms: milliseconds(percentile(sorted, 0.5)),
-        p95Ms: p95,
-        p99Ms: milliseconds(percentile(sorted, 0.99)),
-        maxMs: milliseconds(sorted.at(-1) ?? 0),
-        mountedRowsMin: Math.min(...mountedRows),
-        mountedRowsMax: Math.max(...mountedRows),
-        passed: p95 < scenario.targetP95Ms,
+    for (const profile of profiles) {
+      const context = await browser.newContext({
+        deviceScaleFactor: 1,
+        locale: "ru-RU",
+        viewport: profile.viewport,
       });
+      const page = await context.newPage();
+      try {
+        const devtools = await context.newCDPSession(page);
+        await devtools.send("Emulation.setCPUThrottlingRate", {
+          rate: profile.cpuSlowdownRate,
+        });
+        page.on("pageerror", (error) => {
+          pageErrors.push(error.message);
+          process.stderr.write(`benchmark page error: ${error.message}\n`);
+        });
+        page.on("console", (message) => {
+          if (message.type() === "error") {
+            process.stderr.write(
+              `benchmark console error: ${message.text()}\n`,
+            );
+          }
+        });
+        await page.route("**/*", async (route) => {
+          const url = new URL(route.request().url());
+          if (url.hostname === "127.0.0.1") {
+            await route.continue();
+          } else {
+            externalRequests += 1;
+            await route.abort("blockedbyclient");
+          }
+        });
+        await page.goto(staticServer.url, { waitUntil: "networkidle" });
+        await page.waitForFunction(
+          () =>
+            (
+              window as typeof window & {
+                runtimePerformanceBenchmark?: unknown;
+              }
+            ).runtimePerformanceBenchmark !== undefined,
+        );
+
+        for (const scenario of scenarios) {
+          const measurements = await runBrowserScenario(page, scenario);
+          const sorted = measurements
+            .map((measurement) => measurement.elapsedMs)
+            .sort((left, right) => left - right);
+          const p95 = milliseconds(percentile(sorted, 0.95));
+          const mountedRows = measurements.map(
+            (measurement) => measurement.mountedRows,
+          );
+          const targetP95Ms =
+            scenario.targetP95Ms *
+            (profile.cpuSlowdownRate > 1 ? profile.cpuSlowdownRate : 1);
+          results.push({
+            profile: profile.id,
+            profileLabel: profile.label,
+            id: scenario.id,
+            label: scenario.label,
+            samples: measurements.length,
+            targetP95Ms,
+            p50Ms: milliseconds(percentile(sorted, 0.5)),
+            p95Ms: p95,
+            p99Ms: milliseconds(percentile(sorted, 0.99)),
+            maxMs: milliseconds(sorted.at(-1) ?? 0),
+            mountedRowsMin: Math.min(...mountedRows),
+            mountedRowsMax: Math.max(...mountedRows),
+            passed: p95 < targetP95Ms,
+          });
+        }
+      } finally {
+        await context.close();
+      }
     }
 
     if (pageErrors.length > 0) {
@@ -358,7 +402,12 @@ async function main() {
           "React commit followed by two requestAnimationFrame callbacks",
         scope:
           "Local production UI bundle and real Chromium; excludes authentication, provider and network latency",
-        viewport: "1440x900 @ 1x",
+        profiles: profiles.map((profile) => ({
+          id: profile.id,
+          label: profile.label,
+          viewport: `${profile.viewport.width}x${profile.viewport.height} @ 1x`,
+          cpuSlowdownRate: profile.cpuSlowdownRate,
+        })),
       },
       machine: {
         cpu: cpus()[0]?.model ?? "unknown",
@@ -377,7 +426,6 @@ async function main() {
       await Bun.write(resolve(repoRoot, requestedOutput), json);
     }
     if (!report.passed) process.exitCode = 1;
-    await context.close();
   } finally {
     await browser.close();
     await staticServer?.close();
