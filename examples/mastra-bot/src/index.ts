@@ -28,6 +28,7 @@ const NEEDS_RESPONSES_API =
   /^gpt-5\.[6-9]|^gpt-[6-9]/.test(MODEL);
 
 const bot = new Agent({
+  id: "openbot-mastra-coworker",
   name: "OpenBot Mastra coworker",
   instructions:
     "You are a Bot running on Mastra inside OpenBot. You have a real web browser available through " +
@@ -179,17 +180,18 @@ async function runAgent(input: RunAgentInput): Promise<Response> {
         if (started) send({ type: "TEXT_MESSAGE_END", messageId } as BaseEvent);
 
         for (const call of (await result.toolCalls) ?? []) {
-          const toolCallId = call.toolCallId ?? `call_${crypto.randomUUID()}`;
+          const toolCallId =
+            call.payload.toolCallId ?? `call_${crypto.randomUUID()}`;
           send({
             type: "TOOL_CALL_START",
             toolCallId,
-            toolCallName: call.toolName,
+            toolCallName: call.payload.toolName,
             parentMessageId: messageId,
           } as BaseEvent);
           send({
             type: "TOOL_CALL_ARGS",
             toolCallId,
-            delta: JSON.stringify(call.args ?? {}),
+            delta: JSON.stringify(call.payload.args ?? {}),
           } as BaseEvent);
           send({ type: "TOOL_CALL_END", toolCallId } as BaseEvent);
         }

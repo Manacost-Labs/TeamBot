@@ -1,0 +1,12 @@
+# Temporary exception for Mastra's unused AI SDK v5 compatibility adapter.
+#
+# @mastra/core 1.63.2 intentionally ships provider-utils-v5 as an npm alias to
+# @ai-sdk/provider-utils 3.0.30 so it can accept legacy AI SDK v5 providers.
+# This example uses @ai-sdk/openai 4.x (the AI SDK v7 provider contract), so
+# Mastra selects its provider-utils-v7 adapter and the vulnerable v5 adapter is
+# unreachable. No newer Mastra release currently removes the compatibility
+# dependency. Re-check upstream after the expiry date.
+[[IgnoredVulns]]
+id = "GHSA-866g-f22w-33x8"
+ignoreUntil = 2026-12-01
+reason = "Unused Mastra AI SDK v5 compatibility adapter; this example uses the v7 provider contract. Review by 2026-12-01."

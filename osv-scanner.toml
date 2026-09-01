@@ -1,0 +1,87 @@
+# Temporary exception for an upstream-only, unused provider integration.
+#
+# @ai-sdk/provider-utils 3.0.32 is brought in by @ai-sdk/google-vertex 3.x, which
+# @copilotkit/runtime currently requires. ManacostTeam does not configure or
+# expose the Google Vertex provider; personal connections are limited to
+# ChatGPT and OpenRouter. Forcing provider-utils 4.x would cross the AI SDK
+# provider ABI while CopilotKit still declares the 3.x line, so it is not a
+# safe remediation. Re-check CopilotKit's dependency after the expiry date.
+[[IgnoredVulns]]
+id = "GHSA-866g-f22w-33x8"
+ignoreUntil = 2026-12-01
+reason = "Unreachable Google Vertex integration; no compatible upstream fix in CopilotKit's supported dependency graph. Review by 2026-12-01."
+
+# @esbuild-kit/core-utils is used only by Drizzle's local migration CLI. The
+# vulnerable esbuild development server is never started by this application,
+# and forcing esbuild 0.25+ across core-utils' ~0.18 ABI caused the package
+# manager to violate its declared range. Keep the compatible CLI dependency and
+# re-check Drizzle's upstream tree after the expiry date.
+[[IgnoredVulns]]
+id = "GHSA-67mh-4wv8-2f99"
+ignoreUntil = 2026-12-01
+reason = "Unreachable esbuild development-server path in the local Drizzle CLI; cross-range override removed. Review by 2026-12-01."
+
+# The following advisories all belong to undici 5.29.0 under the same unused
+# Google Vertex 3.x integration described above. Active CopilotKit providers use
+# provider-utils 4.x with undici 6.28.0, while the app tooling uses patched
+# undici 7.29.0. Bun has no path-scoped override, so replacing 5.x globally
+# would also force active 6.x consumers across a major-version boundary.
+[[IgnoredVulns]]
+id = "GHSA-2mjp-6q6p-2qxm"
+ignoreUntil = 2026-12-01
+reason = "Unreachable undici 5.x in unused Google Vertex integration; active providers use patched undici 6.x. Review by 2026-12-01."
+
+[[IgnoredVulns]]
+id = "GHSA-35p6-xmwp-9g52"
+ignoreUntil = 2026-12-01
+reason = "Unreachable undici 5.x in unused Google Vertex integration; active providers use patched undici 6.x. Review by 2026-12-01."
+
+[[IgnoredVulns]]
+id = "GHSA-4992-7rv2-5pvq"
+ignoreUntil = 2026-12-01
+reason = "Unreachable undici 5.x in unused Google Vertex integration; active providers use patched undici 6.x. Review by 2026-12-01."
+
+[[IgnoredVulns]]
+id = "GHSA-8xcm-r25x-g524"
+ignoreUntil = 2026-12-01
+reason = "Unreachable undici 5.x in unused Google Vertex integration; active providers use patched undici 6.x. Review by 2026-12-01."
+
+[[IgnoredVulns]]
+id = "GHSA-g8m3-5g58-fq7m"
+ignoreUntil = 2026-12-01
+reason = "Unreachable undici 5.x in unused Google Vertex integration; active providers use patched undici 6.x. Review by 2026-12-01."
+
+[[IgnoredVulns]]
+id = "GHSA-g9mf-h72j-4rw9"
+ignoreUntil = 2026-12-01
+reason = "Unreachable undici 5.x in unused Google Vertex integration; active providers use patched undici 6.x. Review by 2026-12-01."
+
+[[IgnoredVulns]]
+id = "GHSA-m8rv-5g2x-5cg5"
+ignoreUntil = 2026-12-01
+reason = "Unreachable undici 5.x in unused Google Vertex integration; active providers use patched undici 6.x. Review by 2026-12-01."
+
+[[IgnoredVulns]]
+id = "GHSA-p88m-4jfj-68fv"
+ignoreUntil = 2026-12-01
+reason = "Unreachable undici 5.x in unused Google Vertex integration; active providers use patched undici 6.x. Review by 2026-12-01."
+
+[[IgnoredVulns]]
+id = "GHSA-v3r7-h72x-cjcm"
+ignoreUntil = 2026-12-01
+reason = "Unreachable undici 5.x in unused Google Vertex integration; active providers use patched undici 6.x. Review by 2026-12-01."
+
+[[IgnoredVulns]]
+id = "GHSA-v9p9-hfj2-hcw8"
+ignoreUntil = 2026-12-01
+reason = "Unreachable undici 5.x in unused Google Vertex integration; active providers use patched undici 6.x. Review by 2026-12-01."
+
+[[IgnoredVulns]]
+id = "GHSA-vrm6-8vpv-qv8q"
+ignoreUntil = 2026-12-01
+reason = "Unreachable undici 5.x in unused Google Vertex integration; active providers use patched undici 6.x. Review by 2026-12-01."
+
+[[IgnoredVulns]]
+id = "GHSA-vxpw-j846-p89q"
+ignoreUntil = 2026-12-01
+reason = "Unreachable undici 5.x in unused Google Vertex integration; active providers use patched undici 6.x. Review by 2026-12-01."
