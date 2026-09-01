@@ -461,14 +461,14 @@ credential without putting the secret in AG-UI input.
 
 **Acceptance criteria:**
 
-- [ ] Minting requires an active connection and records only identifiers/expiry.
-- [ ] Redemption verifies the managed caller and signed run, rechecks live ownership, then succeeds once.
-- [ ] Expired, replayed, disconnected, actor-swapped and bot-swapped leases return the same safe refusal class.
+- [x] Minting requires an active connection and records only identifiers/expiry.
+- [x] Redemption verifies the managed caller and signed run, rechecks live ownership, then succeeds once.
+- [x] Expired, replayed, disconnected, actor-swapped and bot-swapped leases return the same safe refusal class.
 
 **Verification:**
 
-- [ ] `bun test server/tests/ai-credential-lease.test.ts server/tests/agent-callback-token.test.ts`
-- [ ] Concurrency fixture permits exactly one of two simultaneous redemptions.
+- [x] `bun test server/tests/ai-credential-lease.test.ts server/tests/agent-callback-token.test.ts`
+- [x] Concurrency fixture permits exactly one of two simultaneous redemptions.
 
 **Dependencies:** Tasks 10–15.
 
