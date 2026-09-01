@@ -14,11 +14,16 @@ import {
   runAssertion,
   transcriptFor,
 } from "./history";
+import {
+  createOpenRouterCredentialBroker,
+  type OpenRouterCredentialBroker,
+} from "./openrouter-credential-broker";
 import type { PersonalProviderConnection } from "./provider-connection";
 import {
   buildCodexChildEnvironment,
   type CodexRuntimeProfile,
   createCodexRuntimeProfile,
+  createOpenRouterRuntimeProfile,
 } from "./runtime-profile";
 import { youtubeTranscriptContext } from "./youtube-transcript-context";
 
@@ -59,6 +64,10 @@ const REASONING_EFFORTS = new Set([
   "xhigh",
   "max",
 ]);
+const MODEL_ID = /^[A-Za-z0-9._:-]{1,120}$/;
+const OPENROUTER_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$/;
+const ISOLATED_CODEX_BINARY =
+  "/opt/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex";
 const RESEARCH_MODEL = process.env.RESEARCH_MODEL?.trim() || "gpt-5.6-luna";
 const RESEARCH_REASONING_EFFORT =
   process.env.RESEARCH_REASONING_EFFORT?.trim() || "xhigh";
@@ -184,7 +193,7 @@ export function workspaceFor(input: RunAgentInput): string {
 }
 
 export function modelFor(input: RunAgentInput): string | undefined {
-  if (isResearchRun(input) && /^[A-Za-z0-9._:-]{1,120}$/.test(RESEARCH_MODEL)) {
+  if (isResearchRun(input) && MODEL_ID.test(RESEARCH_MODEL)) {
     return RESEARCH_MODEL;
   }
   const forwarded = input.forwardedProps as
@@ -194,10 +203,13 @@ export function modelFor(input: RunAgentInput): string | undefined {
     typeof forwarded?.openbotAgentModel === "string"
       ? forwarded.openbotAgentModel.trim()
       : "";
-  return /^[A-Za-z0-9._:-]{1,120}$/.test(override) ? override : MODEL;
+  return MODEL_ID.test(override) ? override : MODEL;
 }
 
-export function reasoningEffortFor(input: RunAgentInput): string {
+export function reasoningEffortFor(
+  input: RunAgentInput,
+  selectedModel = modelFor(input),
+): string {
   if (
     isResearchRun(input) &&
     REASONING_EFFORTS.has(RESEARCH_REASONING_EFFORT)
@@ -220,12 +232,91 @@ export function reasoningEffortFor(input: RunAgentInput): string {
     (isDataControlRun(input) ||
       isHeartPulseControlRun(input) ||
       isYoutubeAnalystRun(input)) &&
-    modelFor(input) === "gpt-5.6-luna"
+    selectedModel === "gpt-5.6-luna"
   ) {
     return "xhigh";
   }
 
   return REASONING_EFFORT;
+}
+
+function openRouterModel(environment: NodeJS.ProcessEnv): string {
+  const model = environment.OPENROUTER_MODEL?.trim() ?? "";
+  if (!OPENROUTER_MODEL_ID.test(model)) {
+    throw new Error("OpenRouter model configuration is invalid.");
+  }
+  return model;
+}
+
+function redactProviderError(
+  error: unknown,
+  providerConnection: PersonalProviderConnection | undefined,
+  additionalSensitiveValues: readonly string[] = [],
+): Error {
+  if (
+    providerConnection?.provider !== "openrouter" &&
+    additionalSensitiveValues.length === 0
+  ) {
+    return error instanceof Error ? error : new Error("Codex run failed.");
+  }
+  const source = error instanceof Error ? error.message : String(error);
+  const sensitiveValues = [
+    ...(providerConnection?.provider === "openrouter"
+      ? [providerConnection.apiKey]
+      : []),
+    ...additionalSensitiveValues,
+  ].filter(Boolean);
+  const redacted = sensitiveValues.reduce(
+    (value, sensitive) => value.split(sensitive).join("[redacted]"),
+    source,
+  );
+  const safe = new Error(redacted || "Codex run failed.");
+  safe.name = error instanceof Error ? error.name : "Error";
+  return safe;
+}
+
+function providerSecret(
+  providerConnection: PersonalProviderConnection | undefined,
+): string | undefined {
+  return providerConnection?.provider === "openrouter"
+    ? providerConnection.apiKey
+    : undefined;
+}
+
+function containsSecret(value: unknown, secret: string | undefined): boolean {
+  if (!secret) return false;
+  if (typeof value === "string") return value.includes(secret);
+  if (Array.isArray(value))
+    return value.some((entry) => containsSecret(entry, secret));
+  if (!value || typeof value !== "object") return false;
+  return Object.entries(value).some(
+    ([key, entry]) => key.includes(secret) || containsSecret(entry, secret),
+  );
+}
+
+function redactSecret(value: string, secret: string | undefined): string {
+  return secret ? value.split(secret).join("[redacted]") : value;
+}
+
+function redactStreamingSecret(
+  buffered: string,
+  chunk: string,
+  secret: string | undefined,
+): { emitted: string; buffered: string } {
+  if (!secret) return { emitted: chunk, buffered: "" };
+  const redacted = redactSecret(`${buffered}${chunk}`, secret);
+  let bufferedCharacters = 0;
+  const maximum = Math.min(secret.length - 1, redacted.length);
+  for (let length = maximum; length > 0; length -= 1) {
+    if (redacted.endsWith(secret.slice(0, length))) {
+      bufferedCharacters = length;
+      break;
+    }
+  }
+  return {
+    emitted: redacted.slice(0, redacted.length - bufferedCharacters),
+    buffered: redacted.slice(redacted.length - bufferedCharacters),
+  };
 }
 
 export async function runCodex(
@@ -240,22 +331,63 @@ export async function runCodex(
     researchInterruptGraceMs?: number;
     youtubeContext?: (input: RunAgentInput) => Promise<string>;
     deploymentToolCaller?: typeof callDeploymentTool;
-    /** Redeemed once after admission; Task 20 selects the matching isolated child profile. */
+    /** Redeemed once after admission and consumed only by the isolated runtime profile. */
     providerConnection?: PersonalProviderConnection;
+    environment?: NodeJS.ProcessEnv;
+    /** Trusted test seam; production requests cannot provide a broker or upstream transport. */
+    credentialBrokerFactory?: (
+      apiKey: string,
+    ) => Promise<OpenRouterCredentialBroker>;
   } = {},
 ): Promise<void> {
   const youtubeContext = isYoutubeAnalystRun(input)
     ? await (options.youtubeContext ?? youtubeTranscriptContext)(input)
     : "";
-  const profile = await createCodexRuntimeProfile({
-    environment: process.env,
-    additionalEnvironmentKeys: additionalEnvironmentKeysFor(input),
-  });
+  const environment = options.environment ?? process.env;
+  if (options.providerConnection?.provider === "chatgpt") {
+    // Task 25 materialises actor-owned ChatGPT auth. Until then, never fall through to a host or
+    // unauthenticated profile when a ChatGPT credential was selected.
+    throw new Error("Personal AI connection is unavailable.");
+  }
+  const selectedModel =
+    options.providerConnection?.provider === "openrouter"
+      ? openRouterModel(environment)
+      : modelFor(input);
+  const selectedReasoningEffort = reasoningEffortFor(input, selectedModel);
+  const additionalEnvironmentKeys = additionalEnvironmentKeysFor(input);
+  let credentialBroker: OpenRouterCredentialBroker | undefined;
+  let profile: CodexRuntimeProfile;
+  try {
+    if (options.providerConnection?.provider === "openrouter") {
+      credentialBroker = await (
+        options.credentialBrokerFactory ??
+        ((apiKey: string) => createOpenRouterCredentialBroker({ apiKey }))
+      )(options.providerConnection.apiKey);
+      profile = await createOpenRouterRuntimeProfile({
+        broker: credentialBroker,
+        environment,
+        additionalEnvironmentKeys,
+      });
+    } else {
+      profile = await createCodexRuntimeProfile({
+        environment,
+        additionalEnvironmentKeys,
+      });
+    }
+  } catch (error) {
+    await credentialBroker?.close().catch(() => undefined);
+    throw redactProviderError(error, options.providerConnection);
+  }
   let client: CodexProcess | undefined;
+  let failure: unknown;
+  let failed = false;
   try {
     client = new CodexProcess(
       input,
       callbacks,
+      selectedModel,
+      selectedReasoningEffort,
+      providerSecret(options.providerConnection),
       options.timing,
       () =>
         options.spawn
@@ -269,12 +401,43 @@ export async function runCodex(
       options.deploymentToolCaller,
     );
     await client.run();
-  } finally {
-    try {
-      await client?.close();
-    } finally {
-      await profile.dispose();
+  } catch (error) {
+    failed = true;
+    failure = error;
+  }
+  try {
+    await client?.close();
+  } catch (error) {
+    if (!failed) {
+      failed = true;
+      failure = error;
     }
+  }
+  try {
+    await profile.dispose();
+  } catch (error) {
+    if (!failed) {
+      failed = true;
+      failure = error;
+    }
+  }
+  try {
+    await credentialBroker?.close();
+  } catch (error) {
+    if (!failed) {
+      failed = true;
+      failure = error;
+    }
+  }
+  if (failed) {
+    const brokerSecrets = credentialBroker
+      ? [credentialBroker.baseUrl, new URL(credentialBroker.baseUrl).pathname]
+      : [];
+    throw redactProviderError(
+      failure,
+      options.providerConnection,
+      brokerSecrets,
+    );
   }
 }
 
@@ -294,9 +457,15 @@ class CodexProcess {
   private turnCompleted = false;
   private terminalFailure: Error | undefined;
   private stderr = "";
+  private stderrSecretBuffer = "";
   private readonly protocolTrace: string[] = [];
   private readonly toolNames = new Map<string, string>();
   private readonly dataControlWorkflow: DataControlWorkflow | undefined;
+  private readonly textSecretBuffers = new Map<string, string>();
+  private readonly reasoningSecretBuffers = new Map<
+    string,
+    { buffered: string; summaryIndex: number }
+  >();
   private threadId: string | undefined;
   private correctionTurns = 0;
   private researchCorrectionTurns = 0;
@@ -310,7 +479,10 @@ class CodexProcess {
   constructor(
     private readonly input: RunAgentInput,
     private readonly callbacks: CodexCallbacks,
-    private readonly timing?: AgentExecutionTiming,
+    private readonly selectedModel: string | undefined,
+    private readonly selectedReasoningEffort: string,
+    private readonly secret: string | undefined,
+    private readonly timing: AgentExecutionTiming | undefined,
     spawnProcess: () => ChildProcessWithoutNullStreams,
     private readonly processExitGraceMs = PROCESS_EXIT_GRACE_MS,
     private readonly researchCollectionMaxMs = RESEARCH_COLLECTION_MAX_MS,
@@ -344,13 +516,20 @@ class CodexProcess {
       .createInterface({ input: this.process.stdout })
       .on("line", (line) => this.onLine(line));
     this.process.stderr.on("data", (chunk) => {
-      this.stderr = `${this.stderr}${String(chunk)}`.slice(-4000);
+      const streamed = redactStreamingSecret(
+        this.stderrSecretBuffer,
+        String(chunk),
+        this.secret,
+      );
+      this.stderrSecretBuffer = streamed.buffered;
+      this.stderr = `${this.stderr}${streamed.emitted}`.slice(-4000);
     });
     this.process.once("error", (error) => {
       if (this.process.pid === undefined) this.markStopped();
       this.failRun(error);
     });
     this.process.once("exit", (code) => {
+      this.flushStderrSecretBuffer();
       this.markStopped();
       if (!this.turnCompleted) {
         const trace =
@@ -365,6 +544,13 @@ class CodexProcess {
       }
     });
     this.process.once("close", this.markStopped);
+  }
+
+  private flushStderrSecretBuffer(): void {
+    if (!this.stderrSecretBuffer) return;
+    const safe = this.secret ? "[redacted]" : this.stderrSecretBuffer;
+    this.stderr = `${this.stderr}${safe}`.slice(-4000);
+    this.stderrSecretBuffer = "";
   }
 
   async run(): Promise<void> {
@@ -388,7 +574,7 @@ class CodexProcess {
         };
       });
     const started = (await this.request("thread/start", {
-      ...(modelFor(this.input) ? { model: modelFor(this.input) } : {}),
+      ...(this.selectedModel ? { model: this.selectedModel } : {}),
       cwd: workspaceFor(this.input),
       approvalPolicy: "never",
       permissions: permissionProfileFor(this.input),
@@ -410,7 +596,7 @@ class CodexProcess {
           text: turnInputFor(this.input, this.youtubeContext),
         },
       ],
-      effort: reasoningEffortFor(this.input),
+      effort: this.selectedReasoningEffort,
       summary: REASONING_SUMMARY,
     })) as { turn?: { id?: string } };
     this.armResearchDeadline(turn.turn?.id);
@@ -498,7 +684,9 @@ class CodexProcess {
       if (!pending) return;
       this.pending.delete(message.id);
       if (message.error)
-        pending.reject(new Error(JSON.stringify(message.error)));
+        pending.reject(
+          new Error(redactSecret(JSON.stringify(message.error), this.secret)),
+        );
       else pending.resolve(message.result);
       return;
     }
@@ -511,10 +699,20 @@ class CodexProcess {
       const delta = message.params?.delta;
       const itemId = message.params?.itemId;
       if (typeof delta === "string" && typeof itemId === "string") {
+        const streamed = redactStreamingSecret(
+          this.textSecretBuffers.get(itemId) ?? "",
+          delta,
+          this.secret,
+        );
+        if (streamed.buffered)
+          this.textSecretBuffers.set(itemId, streamed.buffered);
+        else this.textSecretBuffers.delete(itemId);
+        const safeDelta = streamed.emitted;
         if (isResearchRun(this.input)) {
-          this.researchText = `${this.researchText}${delta}`.slice(-24_000);
+          this.researchText = `${this.researchText}${safeDelta}`.slice(-24_000);
         }
-        this.callbacks.onText(delta, itemId);
+        if (safeDelta)
+          this.callbacks.onText(safeDelta, redactSecret(itemId, this.secret));
       }
       return;
     }
@@ -527,18 +725,40 @@ class CodexProcess {
         typeof itemId === "string" &&
         typeof summaryIndex === "number"
       ) {
-        this.callbacks.onReasoning(delta, itemId, summaryIndex);
+        const streamed = redactStreamingSecret(
+          this.reasoningSecretBuffers.get(itemId)?.buffered ?? "",
+          delta,
+          this.secret,
+        );
+        if (streamed.buffered)
+          this.reasoningSecretBuffers.set(itemId, {
+            buffered: streamed.buffered,
+            summaryIndex,
+          });
+        else this.reasoningSecretBuffers.delete(itemId);
+        if (streamed.emitted)
+          this.callbacks.onReasoning(
+            streamed.emitted,
+            redactSecret(itemId, this.secret),
+            summaryIndex,
+          );
       }
       return;
     }
     if (message.method === "turn/completed") {
       this.clearResearchDeadline();
+      this.flushSecretBuffers();
       const turn = message.params?.turn as
         | { status?: string; error?: unknown }
         | undefined;
       if (turn?.status === "failed")
         this.failRun(
-          new Error(JSON.stringify(turn.error ?? "Codex turn failed.")),
+          new Error(
+            redactSecret(
+              JSON.stringify(turn.error ?? "Codex turn failed."),
+              this.secret,
+            ),
+          ),
         );
       else {
         const correction = this.dataControlWorkflow?.correctionMessage();
@@ -547,7 +767,7 @@ class CodexProcess {
           void this.request("turn/start", {
             threadId: this.threadId,
             input: [{ type: "text", text: correction }],
-            effort: reasoningEffortFor(this.input),
+            effort: this.selectedReasoningEffort,
             summary: REASONING_SUMMARY,
           }).catch((error) => this.failRun(error));
         } else if (correction) {
@@ -572,7 +792,7 @@ class CodexProcess {
             void this.request("turn/start", {
               threadId: this.threadId,
               input: [{ type: "text", text: RESEARCH_FINALISATION_PROMPT }],
-              effort: reasoningEffortFor(this.input),
+              effort: this.selectedReasoningEffort,
               summary: REASONING_SUMMARY,
             })
               .then((result) => {
@@ -598,7 +818,7 @@ class CodexProcess {
               input: [
                 { type: "text", text: YOUTUBE_ARTIFACT_FINALISATION_PROMPT },
               ],
-              effort: reasoningEffortFor(this.input),
+              effort: this.selectedReasoningEffort,
               summary: REASONING_SUMMARY,
             }).catch((error) => this.failRun(error));
             return;
@@ -617,7 +837,14 @@ class CodexProcess {
     }
     if (message.method === "error") {
       if (message.params?.willRetry === true) return;
-      this.failRun(new Error(JSON.stringify(message.params ?? "Codex error.")));
+      this.failRun(
+        new Error(
+          redactSecret(
+            JSON.stringify(message.params ?? "Codex error."),
+            this.secret,
+          ),
+        ),
+      );
     }
   }
 
@@ -672,22 +899,44 @@ class CodexProcess {
         ? message.method
         : `response:${message.id ?? "?"}`;
     if (message.error !== undefined)
-      entry = `${entry}:error=${safeDiagnostic(message.error)}`;
+      entry = `${entry}:error=${this.safeDiagnostic(message.error)}`;
     if (message.method === "error")
-      entry = `${entry}:${safeDiagnostic(message.params)}`;
+      entry = `${entry}:${this.safeDiagnostic(message.params)}`;
     if (message.method === "turn/completed") {
       const turn = message.params?.turn as
         | { status?: unknown; error?: unknown }
         | undefined;
       entry = `${entry}:status=${String(turn?.status ?? "unknown")}`;
       if (turn?.error !== undefined)
-        entry = `${entry}:error=${safeDiagnostic(turn.error)}`;
+        entry = `${entry}:error=${this.safeDiagnostic(turn.error)}`;
     }
     this.protocolTrace.push(entry.slice(0, 800));
     if (this.protocolTrace.length > 24) this.protocolTrace.shift();
   }
 
+  private flushSecretBuffers(): void {
+    for (const [itemId, buffered] of this.textSecretBuffers) {
+      const safeBuffered = this.secret ? "[redacted]" : buffered;
+      if (isResearchRun(this.input)) {
+        this.researchText = `${this.researchText}${safeBuffered}`.slice(
+          -24_000,
+        );
+      }
+      this.callbacks.onText(safeBuffered, redactSecret(itemId, this.secret));
+    }
+    this.textSecretBuffers.clear();
+    for (const [itemId, value] of this.reasoningSecretBuffers) {
+      this.callbacks.onReasoning(
+        this.secret ? "[redacted]" : value.buffered,
+        redactSecret(itemId, this.secret),
+        value.summaryIndex,
+      );
+    }
+    this.reasoningSecretBuffers.clear();
+  }
+
   private async handleToolCall(id: number, params: JsonObject): Promise<void> {
+    const sensitiveCall = containsSecret(params, this.secret);
     const callId =
       typeof params.callId === "string" ? params.callId : `call_${id}`;
     const wireName = typeof params.tool === "string" ? params.tool : "unknown";
@@ -696,50 +945,71 @@ class CodexProcess {
       this.toolNames,
     );
     const args = isObject(params.arguments) ? params.arguments : {};
+    const safeArgs = sensitiveCall ? {} : args;
     /*
      * Report the same safe name Codex was offered. Turning it back into `mcp__...` in the AG-UI
      * event made CopilotKit reject the event because that namespace is reserved, so opening a
      * conversation replayed a run error instead of restoring it. The deployment call still needs
      * the original governed name, which is kept separately above.
      */
-    this.callbacks.onToolStart(callId, eventName, args);
+    this.callbacks.onToolStart(
+      redactSecret(callId, this.secret),
+      redactSecret(eventName, this.secret),
+      safeArgs,
+    );
     const duplicateDeliverableArtifact =
       deploymentName === "mcp__artifacts__create_artifact" &&
       ((isYoutubeAnalystRun(this.input) && this.youtubeArtifactCreated) ||
         (isResearchRun(this.input) && this.researchArtifactCreated));
-    const result = duplicateDeliverableArtifact
+    const result = sensitiveCall
       ? {
-          text: "Refused. This run already created its one allowed deliverable artifact.",
+          text: "Refused. Provider credentials cannot be passed to a deployment tool.",
           isError: true,
         }
-      : await this.deploymentToolCaller(this.input, deploymentName, args);
+      : duplicateDeliverableArtifact
+        ? {
+            text: "Refused. This run already created its one allowed deliverable artifact.",
+            isError: true,
+          }
+        : await this.deploymentToolCaller(this.input, deploymentName, args);
+    const safeResult = {
+      ...result,
+      text: redactSecret(result.text, this.secret),
+    };
     if (
       isResearchRun(this.input) &&
       deploymentName === "mcp__artifacts__create_artifact" &&
-      !result.isError
+      !safeResult.isError
     ) {
       this.researchArtifactCreated = true;
     }
     if (
       isYoutubeAnalystRun(this.input) &&
       deploymentName === "mcp__artifacts__create_artifact" &&
-      !result.isError
+      !safeResult.isError
     ) {
       this.youtubeArtifactCreated = true;
     }
     this.dataControlWorkflow?.recordToolResult(
       deploymentName,
-      args,
-      result.text,
+      safeArgs,
+      safeResult.text,
     );
-    this.callbacks.onToolResult(callId, result.text);
+    this.callbacks.onToolResult(
+      redactSecret(callId, this.secret),
+      safeResult.text,
+    );
     this.write({
       id,
       result: {
-        contentItems: [{ type: "inputText", text: result.text }],
-        success: !result.isError,
+        contentItems: [{ type: "inputText", text: safeResult.text }],
+        success: !safeResult.isError,
       },
     });
+  }
+
+  private safeDiagnostic(value: unknown): string {
+    return redactSecret(safeDiagnostic(value), this.secret);
   }
 }
 
@@ -747,11 +1017,20 @@ function spawnCodexProcess(
   input: RunAgentInput,
   profile: CodexRuntimeProfile,
 ): ChildProcessWithoutNullStreams {
-  return spawn("codex", ["app-server"], {
+  return spawn(ISOLATED_CODEX_BINARY, ["app-server"], {
     cwd: workspaceFor(input),
-    env: profile.environment,
+    env: codexProcessEnvironment(profile),
     stdio: ["pipe", "pipe", "pipe"],
   });
+}
+
+export function codexProcessEnvironment(
+  profile: Pick<CodexRuntimeProfile, "environment">,
+): NodeJS.ProcessEnv {
+  const environment = { ...profile.environment };
+  delete environment.LD_PRELOAD;
+  delete environment.LD_LIBRARY_PATH;
+  return environment;
 }
 
 export function turnInputFor(
