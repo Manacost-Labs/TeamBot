@@ -217,4 +217,134 @@ describe("agent-codex request boundary", () => {
       error: "Managed runtime is draining for deployment.",
     });
   });
+
+  test("redeems a personal provider once after admission and before the run starts", async () => {
+    const order: string[] = [];
+    const privateKey = "PRIVATE-OPENROUTER-KEY";
+    const records: ExecutionTimingRecord[] = [];
+    const admission = new RunAdmission({
+      globalLimit: 1,
+      perAgentLimit: 1,
+      queueLimit: 1,
+      maxWaitMs: 1_000,
+      sink: (event) => {
+        if (event.event === "admitted") order.push("admitted");
+      },
+    });
+    const handler = createAgentRequestHandler({
+      managedAgentToken: TOKEN,
+      agentId: "agent-codex",
+      admission,
+      sink: (record) => records.push(record),
+      resolveProviderConnection: async (reference) => {
+        order.push("redeemed");
+        expect(reference).toEqual({
+          lease: "946c7ed5-ed42-4f26-843f-3e3607722caf",
+          run: "signed-run",
+        });
+        return { provider: "openrouter", apiKey: privateKey };
+      },
+      respond: (...args) => {
+        const [input, _timing, settled] = args;
+        order.push("responded");
+        expect(args).toHaveLength(3);
+        expect(JSON.stringify(input)).not.toContain(privateKey);
+        settled();
+        return new Response(null, { status: 202 });
+      },
+    });
+
+    const response = await handler(
+      request(
+        JSON.stringify({
+          threadId: "provider-thread",
+          runId: "provider-run",
+          state: {},
+          messages: [],
+          tools: [],
+          context: [],
+          forwardedProps: {
+            openbotBotId: "editor",
+            openbotCredentialLease: "946c7ed5-ed42-4f26-843f-3e3607722caf",
+            openbotRun: "signed-run",
+            openbotAdmissionKey: "opaque-admission-key",
+            providerEndpoint: "https://attacker.invalid",
+            providerToken: "attacker-token",
+          },
+        }),
+      ),
+    );
+
+    expect(response.status).toBe(202);
+    expect(order).toEqual(["admitted", "redeemed", "responded"]);
+    expect(JSON.stringify(records)).not.toContain(privateKey);
+    expect(admission.snapshot().active).toBe(0);
+  });
+
+  test("rechecks a queued connection and releases admission without starting Codex when it is gone", async () => {
+    const admission = new RunAdmission({
+      globalLimit: 1,
+      perAgentLimit: 1,
+      queueLimit: 1,
+      maxWaitMs: 1_000,
+      sink: () => {},
+    });
+    let settleFirst: (() => void) | undefined;
+    let starts = 0;
+    let resolutions = 0;
+    const handler = createAgentRequestHandler({
+      managedAgentToken: TOKEN,
+      agentId: "agent-codex",
+      admission,
+      resolveProviderConnection: async () => {
+        resolutions += 1;
+        if (resolutions === 2) throw new Error("PRIVATE DISCONNECT DETAIL");
+        return { provider: "openrouter", apiKey: "PRIVATE-FIRST-KEY" };
+      },
+      respond: (_input, _timing, settled) => {
+        starts += 1;
+        settleFirst = settled;
+        return new Response(null, { status: 202 });
+      },
+    });
+    const body = (runId: string, lease: string) =>
+      JSON.stringify({
+        threadId: `thread-${runId}`,
+        runId,
+        state: {},
+        messages: [],
+        tools: [],
+        context: [],
+        forwardedProps: {
+          openbotBotId: "editor",
+          openbotCredentialLease: lease,
+          openbotRun: `signed-${runId}`,
+          openbotAdmissionKey: "opaque-admission-key",
+        },
+      });
+
+    expect(
+      (
+        await handler(
+          request(body("first", "69d650d9-845f-4ca2-8cc4-9958dd8843c9")),
+        )
+      ).status,
+    ).toBe(202);
+    const queued = handler(
+      request(body("second", "ac4b3aac-81a2-4684-ad04-76c265724aef")),
+    );
+    await Bun.sleep(5);
+    expect(resolutions).toBe(1);
+    expect(starts).toBe(1);
+
+    settleFirst?.();
+    const refused = await queued;
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({
+      error: "Personal AI connection is unavailable.",
+    });
+    expect(resolutions).toBe(2);
+    expect(starts).toBe(1);
+    expect(admission.snapshot()).toMatchObject({ active: 0, queued: 0 });
+  });
 });

@@ -513,13 +513,13 @@ feed only a typed provider context to the runtime profile.
 
 **Acceptance criteria:**
 
-- [ ] The resolver contacts only the fixed internal server URL with the managed credential and opaque lease.
-- [ ] Secret values are absent from errors, timing records, protocol traces and callback arguments.
-- [ ] Provider resolution occurs after queue admission and before child spawn, so disconnect blocks queued work.
+- [x] The resolver contacts only the fixed internal server URL with the managed credential and opaque lease.
+- [x] Secret values are absent from errors, timing records, protocol traces and callback arguments.
+- [x] Provider resolution occurs after queue admission and before child spawn, so disconnect blocks queued work.
 
 **Verification:**
 
-- [ ] `bun test agent-codex/tests/provider-connection.test.ts agent-codex/tests/request-handler.test.ts`
+- [x] `bun test agent-codex/tests/provider-connection.test.ts agent-codex/tests/request-handler.test.ts`
 
 **Dependencies:** Task 17.
 
@@ -534,9 +534,9 @@ feed only a typed provider context to the runtime profile.
 
 ## Checkpoint F — Credential-delivery boundary
 
-- [ ] Tasks 16–18 pass with replay, queue and actor-swap tests.
-- [ ] AG-UI captures contain an opaque lease only, never provider secret material.
-- [ ] A disconnected queued run reaches no Codex child.
+- [x] Tasks 16–18 pass with replay, queue and actor-swap tests.
+- [x] AG-UI captures contain an opaque lease only, never provider secret material.
+- [x] A disconnected queued run reaches no Codex child.
 
 ### Task 19: Per-actor admission limit
 

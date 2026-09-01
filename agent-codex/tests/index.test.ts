@@ -6,6 +6,7 @@ import type {
 import { DeviceAuthFlowError } from "../src/device-auth";
 import {
   createAgentCodexService,
+  createAgentCodexServiceFromEnvironment,
   DEVICE_AUTH_PATHS,
   type DeviceAuthCoordinator,
 } from "../src/index";
@@ -93,6 +94,20 @@ function internalRequest(
 }
 
 describe("agent-codex internal device-auth boundary", () => {
+  test("requires the fixed internal server origin before production startup", async () => {
+    expect(() =>
+      createAgentCodexServiceFromEnvironment({
+        MANAGED_AGENT_TOKEN: TOKEN,
+      }),
+    ).toThrow("OPENBOT_INTERNAL_URL is required.");
+
+    const service = createAgentCodexServiceFromEnvironment({
+      MANAGED_AGENT_TOKEN: TOKEN,
+      OPENBOT_INTERNAL_URL: "http://openbot-server:3000",
+    });
+    await service.shutdown();
+  });
+
   test("requires the managed token before every device operation", async () => {
     const deviceAuth = deviceAuthFixture();
     const service = createAgentCodexService({

@@ -6,6 +6,11 @@ import {
   createAgentExecutionTiming,
   type ExecutionTimingRecord,
 } from "./execution-timing";
+import type {
+  PersonalProviderConnection,
+  PersonalProviderConnectionReference,
+  PersonalProviderConnectionResolver,
+} from "./provider-connection";
 import {
   type RunAdmission,
   RunDrainingError,
@@ -20,6 +25,7 @@ type AgentRequestHandlerOptions = {
   now?: () => number;
   sink?: (record: ExecutionTimingRecord) => void;
   admission?: RunAdmission;
+  resolveProviderConnection?: PersonalProviderConnectionResolver;
   respond?: (
     input: RunAgentInput,
     timing: AgentExecutionTiming,
@@ -68,17 +74,27 @@ function admissionAgentId(input: RunAgentInput, fallback: string): string {
     : fallback;
 }
 
+function providerConnectionReference(
+  input: RunAgentInput,
+): PersonalProviderConnectionReference | null {
+  const forwarded = input.forwardedProps as
+    | {
+        openbotCredentialLease?: unknown;
+        openbotRun?: unknown;
+      }
+    | undefined;
+  return typeof forwarded?.openbotCredentialLease === "string" &&
+    typeof forwarded.openbotRun === "string"
+    ? {
+        lease: forwarded.openbotCredentialLease,
+        run: forwarded.openbotRun,
+      }
+    : null;
+}
+
 /** Authenticate, parse and validate one AG-UI request while timing even pre-run failures. */
 export function createAgentRequestHandler(options: AgentRequestHandlerOptions) {
   const now = options.now ?? (() => performance.now());
-  const respond =
-    options.respond ??
-    ((
-      input: RunAgentInput,
-      timing: AgentExecutionTiming,
-      onSettled: () => void,
-    ) => createAgentResponse(input, { timing, onSettled }));
-
   return async (request: Request): Promise<Response> => {
     const receivedAt = now();
     if (!hasManagedAgentToken(request, options.managedAgentToken)) {
@@ -165,8 +181,35 @@ export function createAgentRequestHandler(options: AgentRequestHandlerOptions) {
       }
     }
 
+    let providerConnection: PersonalProviderConnection | undefined;
+    if (options.resolveProviderConnection) {
+      const reference = providerConnectionReference(parsed.data);
+      try {
+        if (!reference) throw new Error("Missing personal provider reference.");
+        providerConnection = await options.resolveProviderConnection(
+          reference,
+          request.signal,
+        );
+      } catch {
+        release();
+        timing.record("run_error", {
+          errorType: "PersonalProviderConnectionUnavailable",
+        });
+        return Response.json(
+          { error: "Personal AI connection is unavailable." },
+          { status: 409 },
+        );
+      }
+    }
+
     try {
-      return respond(parsed.data, timing, release);
+      return options.respond
+        ? options.respond(parsed.data, timing, release)
+        : createAgentResponse(parsed.data, {
+            timing,
+            onSettled: release,
+            providerConnection,
+          });
     } catch (error) {
       release();
       throw error;

@@ -14,6 +14,7 @@ import {
   runAssertion,
   transcriptFor,
 } from "./history";
+import type { PersonalProviderConnection } from "./provider-connection";
 import {
   buildCodexChildEnvironment,
   type CodexRuntimeProfile,
@@ -239,6 +240,8 @@ export async function runCodex(
     researchInterruptGraceMs?: number;
     youtubeContext?: (input: RunAgentInput) => Promise<string>;
     deploymentToolCaller?: typeof callDeploymentTool;
+    /** Redeemed once after admission; Task 20 selects the matching isolated child profile. */
+    providerConnection?: PersonalProviderConnection;
   } = {},
 ): Promise<void> {
   const youtubeContext = isYoutubeAnalystRun(input)

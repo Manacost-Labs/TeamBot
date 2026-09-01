@@ -6,6 +6,10 @@ import {
   type DeviceAuthPublicStatus,
   type DeviceAuthStartResult,
 } from "./device-auth";
+import {
+  createPersonalProviderConnectionResolver,
+  type PersonalProviderConnectionResolver,
+} from "./provider-connection";
 import { createAgentRequestHandler } from "./request-handler";
 import { RunAdmission } from "./run-admission";
 
@@ -36,6 +40,7 @@ type AgentCodexServiceOptions = {
   admission?: RunAdmission;
   deviceAuth?: DeviceAuthCoordinator;
   model?: string;
+  resolveProviderConnection?: PersonalProviderConnectionResolver;
   handleAgentRequest?: (request: Request) => Promise<Response>;
 };
 
@@ -228,6 +233,7 @@ export function createAgentCodexService(options: AgentCodexServiceOptions) {
       managedAgentToken,
       agentId: "agent-codex",
       admission,
+      resolveProviderConnection: options.resolveProviderConnection,
     });
   let shutdown: Promise<void> | undefined;
 
@@ -314,10 +320,16 @@ export function createAgentCodexServiceFromEnvironment(
 ) {
   const managedAgentToken = environment.MANAGED_AGENT_TOKEN?.trim();
   if (!managedAgentToken) throw new Error("MANAGED_AGENT_TOKEN is required.");
+  const internalServerUrl = environment.OPENBOT_INTERNAL_URL?.trim();
+  if (!internalServerUrl) throw new Error("OPENBOT_INTERNAL_URL is required.");
   return createAgentCodexService({
     managedAgentToken,
     admission: defaultAdmission(environment),
     model: environment.CODEX_MODEL,
+    resolveProviderConnection: createPersonalProviderConnectionResolver({
+      serverUrl: internalServerUrl,
+      managedAgentToken,
+    }),
   });
 }
 
