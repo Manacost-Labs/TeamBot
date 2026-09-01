@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   index,
   pgEnum,
   pgTable,
@@ -47,6 +48,19 @@ export const credentialKind = pgEnum("credential_kind", [
    */
   "mcp_user_token",
 ]);
+
+export const personalAiProvider = pgEnum("personal_ai_provider", [
+  "chatgpt",
+  "openrouter",
+]);
+export const personalAiConnectionState = pgEnum(
+  "personal_ai_connection_state",
+  ["active", "disconnected"],
+);
+export const personalAiDeviceFlowState = pgEnum(
+  "personal_ai_device_flow_state",
+  ["pending", "completed", "failed", "cancelled", "expired"],
+);
 
 export const users = pgTable("users", {
   id: text("id").primaryKey(),
@@ -352,6 +366,106 @@ export const credentials = pgTable(
     uniqueIndex("credentials_active_key_idx")
       .on(table.kind, table.provider, table.keyId)
       .where(sql`${table.revokedAt} IS NULL`),
+  ],
+);
+
+/**
+ * The one personal model connection a person may use.
+ *
+ * The vault owns the encrypted value; this row owns only the actor-to-credential binding. Keeping
+ * the user as the primary key makes a second active provider structurally impossible. Disconnects
+ * retain the binding for audit and history while the referenced vault row is revoked separately.
+ */
+export const userAiConnections = pgTable(
+  "user_ai_connections",
+  {
+    userId: text("user_id")
+      .primaryKey()
+      .references(() => users.id, { onDelete: "cascade" }),
+    provider: personalAiProvider("provider").notNull(),
+    credentialId: uuid("credential_id")
+      .notNull()
+      .references(() => credentials.id, { onDelete: "restrict" }),
+    state: personalAiConnectionState("state").notNull().default("active"),
+    validatedAt: timestamp("validated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    disconnectedAt: timestamp("disconnected_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    check(
+      "user_ai_connections_state_check",
+      sql`(${table.state} = 'active' and ${table.disconnectedAt} is null) or (${table.state} = 'disconnected' and ${table.disconnectedAt} is not null)`,
+    ),
+  ],
+);
+
+/**
+ * Ownership record for a ChatGPT device login coordinated by the managed Codex agent.
+ *
+ * No verification code or auth document is persisted here. Completion points at the encrypted
+ * vault row only after the server-side collector has validated and stored it.
+ */
+export const personalAiDeviceFlows = pgTable(
+  "personal_ai_device_flows",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    provider: personalAiProvider("provider").notNull().default("chatgpt"),
+    state: personalAiDeviceFlowState("state").notNull().default("pending"),
+    credentialId: uuid("credential_id").references(() => credentials.id, {
+      onDelete: "restrict",
+    }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    uniqueIndex("personal_ai_device_flows_pending_user_idx")
+      .on(table.userId)
+      .where(sql`${table.state} = 'pending'`),
+    index("personal_ai_device_flows_expiry_idx").on(
+      table.state,
+      table.expiresAt,
+    ),
+    check(
+      "personal_ai_device_flows_provider_check",
+      sql`${table.provider} = 'chatgpt'`,
+    ),
+    check(
+      "personal_ai_device_flows_completion_check",
+      sql`(${table.state} = 'completed' and ${table.credentialId} is not null and ${table.completedAt} is not null) or (${table.state} <> 'completed' and ${table.credentialId} is null and ${table.completedAt} is null)`,
+    ),
+  ],
+);
+
+/** A short-lived, one-use pointer from an admitted agent run to its actor's vault credential. */
+export const personalAiCredentialLeases = pgTable(
+  "personal_ai_credential_leases",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    botId: text("bot_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    runId: text("run_id").notNull(),
+    credentialId: uuid("credential_id")
+      .notNull()
+      .references(() => credentials.id, { onDelete: "restrict" }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    redeemedAt: timestamp("redeemed_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    uniqueIndex("personal_ai_credential_leases_run_id_idx").on(table.runId),
+    index("personal_ai_credential_leases_expiry_idx").on(table.expiresAt),
   ],
 );
 
