@@ -13,7 +13,7 @@ The connector uses Google's generally available REST APIs:
 
 It does not depend on the Google Workspace MCP Developer Preview.
 
-## Production values for this deployment
+## Current values before ManacostTeam public cutover
 
 Create an OAuth client of type **Web application**. In Google Cloud enter:
 
@@ -21,6 +21,11 @@ Create an OAuth client of type **Web application**. In Google Cloud enter:
 | --- | --- |
 | Authorized JavaScript origin | `https://work-origin.kolodahearthstone.com` |
 | Authorized redirect URI | `https://work-origin.kolodahearthstone.com/api/plugins/oauth/callback` |
+
+These are the current legacy-origin values. Do not replace or remove them during source build,
+ordinary deployment or the separate canary. Existing connected accounts can exercise governed
+Google tools in canary without starting a new OAuth consent. If canary needs a new consent, treat
+that as a separate provider-configuration change and approval rather than hiding it inside deploy.
 
 The OAuth exchange is handled by the server, so the JavaScript origin is not part of the token
 exchange. It is still safe to register the production origin for browser-facing Google features.
@@ -90,6 +95,27 @@ At `/admin/plugins/google-drive`:
 
 The plugin page displays the redirect URI generated from `OPENBOT_PUBLIC_URL`. Always use that value
 if it differs from this document.
+
+## ManacostTeam public-origin change
+
+Changing the Google client belongs only to the separately approved Task 34 public traffic cutover,
+after the isolated canary has passed. It is not a build/deploy or Task 33 canary step.
+
+- **Preflight:** keep the two current `work-origin` entries, record the exact OAuth Web client being
+  edited, confirm owner/editor canary isolation, and verify that live `OPENBOT_PUBLIC_URL` will be
+  `https://work.kolodahearthstone.com`. Do not display or rotate the client secret.
+- **Exact target:** the same Google Cloud **Web application** client saved at
+  `/admin/plugins/google-drive`; add Authorized JavaScript origin
+  `https://work.kolodahearthstone.com` and Authorized redirect URI
+  `https://work.kolodahearthstone.com/api/plugins/oauth/callback`.
+- **Verification:** after public proxy/DNS switch, compare the callback shown by the plugin page
+  character for character, reconnect one owner test account if required, and perform one bounded
+  Drive read plus one explicitly approved Docs write. Verify another user cannot see that connection.
+- **Rollback:** restore the previous public proxy/origin and use the retained `work-origin` callback.
+  Do not remove either pair until the observation and rollback window is closed.
+
+The complete traffic-change sequence is in
+[ManacostTeam authentication](../runbooks/manacostteam-authentication.md#8-public-cutover-task-34).
 
 ### 5. Connect each person's account
 

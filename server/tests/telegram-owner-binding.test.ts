@@ -1,5 +1,9 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { and, eq } from "drizzle-orm";
 import {
   assertConfiguredTelegramOwnerId,
@@ -114,6 +118,51 @@ describe("Telegram owner id input", () => {
 });
 
 describe("Telegram owner binding command input", () => {
+  test("loads owner IDs from the protected operator file after the base environment", () => {
+    const packageJson = JSON.parse(
+      readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+    ) as { scripts?: Record<string, string> };
+
+    expect(packageJson.scripts?.["bind:telegram-owner"]).toBe(
+      "env -u TELEGRAM_OWNER_USER_IDS bun --env-file=.env --env-file=.env.manacostteam-auth scripts/bind-telegram-owner.ts",
+    );
+  });
+
+  test("protected owner IDs override an inherited process value", () => {
+    const directory = mkdtempSync(join(tmpdir(), "openbot-owner-env-"));
+    try {
+      writeFileSync(join(directory, ".env"), "TELEGRAM_OWNER_USER_IDS=111\n");
+      writeFileSync(
+        join(directory, ".env.manacostteam-auth"),
+        "TELEGRAM_OWNER_USER_IDS=222\n",
+      );
+
+      const result = spawnSync(
+        "env",
+        [
+          "-u",
+          "TELEGRAM_OWNER_USER_IDS",
+          process.execPath,
+          "--env-file=.env",
+          "--env-file=.env.manacostteam-auth",
+          "-e",
+          "process.stdout.write(process.env.TELEGRAM_OWNER_USER_IDS ?? '')",
+        ],
+        {
+          cwd: directory,
+          encoding: "utf8",
+          env: { ...process.env, TELEGRAM_OWNER_USER_IDS: "333" },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toBe("222");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("is dry-run by default and accepts only the explicit apply flag", () => {
     expect(parseTelegramOwnerBindingArguments([])).toEqual({
       apply: false,

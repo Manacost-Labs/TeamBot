@@ -20,7 +20,7 @@
     "typecheck": "bun run --filter '*' typecheck",
     "test:ci": "bun scripts/test-ci.ts",
     "pretest": "bun run generate:app-config",
-    "bind:telegram-owner": "bun --env-file=.env scripts/bind-telegram-owner.ts",
+    "bind:telegram-owner": "env -u TELEGRAM_OWNER_USER_IDS bun --env-file=.env --env-file=.env.manacostteam-auth scripts/bind-telegram-owner.ts",
     "test:smoke": "OPENBOT_SMOKE=1 bun test tests/smoke",
     "test:live-screen": "OPENBOT_LIVE_SCREEN=1 bun test agent-computer/tests/live-screen.test.ts agent-computer/tests/browser-close-announcement.test.ts",
     "diagram": "bun scripts/architecture-diagram.ts",

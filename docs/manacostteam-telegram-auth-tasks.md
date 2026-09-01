@@ -858,14 +858,14 @@ handling, revocation, canary, public cutover and rollback in current-state langu
 
 **Acceptance criteria:**
 
-- [ ] Runbooks distinguish application Telegram login from personal model connection.
-- [ ] Every destructive/traffic-changing step has preflight, exact target, verification and rollback.
-- [ ] Google OAuth callback/origin changes are placed at public cutover, not initial build/deploy.
+- [x] Runbooks distinguish application Telegram login from personal model connection.
+- [x] Every destructive/traffic-changing step has preflight, exact target, verification and rollback.
+- [x] Google OAuth callback/origin changes are placed at public cutover, not initial build/deploy.
 
 **Verification:**
 
-- [ ] Markdown formatting and relative links pass.
-- [ ] A redaction review finds no real token, client secret, ID or auth document.
+- [x] Markdown formatting and relative links pass.
+- [x] A redaction review finds no real token, client secret, ID or auth document.
 
 **Dependencies:** Tasks 27–29.
 

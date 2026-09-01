@@ -1,8 +1,12 @@
 # Production operations: deployment, rollback и timing-диагностика
 
-Этот runbook относится к runtime из [Production runtime](production-runtime.ru.md). Команды не
-выводят значения секретов. Перед выполнением задайте один явный путь к Compose-файлу и не подменяйте
-системные переменные вроде `HOME`:
+Этот runbook относится к runtime из [Production runtime](production-runtime.ru.md). Telegram setup,
+owner/editor access, personal providers и отдельные canary/public gates описаны в
+[ManacostTeam authentication](runbooks/manacostteam-authentication.md). Tasks 1–31 не разрешают
+production deployment, работу с copied production data или переключение traffic.
+
+Команды не выводят значения секретов. Перед выполнением задайте один явный путь к Compose-файлу и
+не подменяйте системные переменные вроде `HOME`:
 
 ```sh
 COMPOSE_FILE=docker-compose.production.yml
@@ -19,12 +23,18 @@ release-копии или volumes как исходный код.
 3. Проверьте конфигурацию без печати развёрнутого YAML:
 
    ```sh
-   docker compose -f "$COMPOSE_FILE" config --quiet
+   docker compose \
+     --env-file .env \
+     --env-file .env.manacostteam-auth \
+     -f "$COMPOSE_FILE" \
+     config --quiet
    ```
 
    Проверьте, что `openbot` имеет `EMBEDDED_COMPUTER=off`, зависит от healthy `agent-computer` и
    один монтирует `openbot-attachments:/var/lib/openbot/attachments`. У `agent-computer` должны быть
-   только `openbot-workspace` и `openbot-profiles`; volume вложений ему не передаётся.
+   только `openbot-workspace` и `openbot-profiles`; volume вложений ему не передаётся. У
+   `agent-codex` не должно быть host `auth.json`, общего model credential или Telegram token/ID
+   sets; временный root `/run/openbot-codex` должен оставаться tmpfs.
 
 4. Для изменения исходников выполните quality gates:
 
@@ -66,6 +76,33 @@ Attachment bytes, workspace, browser profiles и research reports не вход�
 `docker compose down -v`.
 
 ## Deployment в приватном Compose-контуре
+
+### ManacostTeam authentication configuration
+
+`TELEGRAM_LOGIN_BOT_TOKEN`, полный allowlist/owner set и `OPENROUTER_MODEL` готовятся только через
+скрытые prompts. Helper пишет игнорируемый `.env.manacostteam-auth` с mode `0600`; dry-run сообщает
+только имена полей и результат отношений, а не значения:
+
+```sh
+./scripts/configure-manacostteam-auth.sh
+./scripts/configure-manacostteam-auth.sh --dry-run
+```
+
+`TELEGRAM_LOGIN_BOT_USERNAME`, `OPENBOT_PUBLIC_URL`, `BETTER_AUTH_SECRET` и
+`KEY_ENCRYPTION_KEY` остаются в защищённой deployment configuration. Полная процедура и
+одноразовый `bun run bind:telegram-owner` находятся в
+[authentication runbook](runbooks/manacostteam-authentication.md). Не вводите Telegram ID или
+секрет как command argument.
+
+`deploy-production.sh` сам использует `.env`, затем `.env.manacostteam-auth` для Compose
+interpolation. Protected auth file не становится общим container `env_file`: Telegram fields
+получает server, а `agent-codex` из него — только `OPENROUTER_MODEL`. Отдельные существующие
+research-provider credentials и внутренние service credentials остаются ограниченными runtime
+inputs и не являются personal-provider fallback.
+
+Build и deployment не меняют BotFather domain, Google OAuth JavaScript origin или callback. Эти
+external changes относятся только к отдельно одобренному Task 34 public cutover, не к Task 33
+canary.
 
 ### Ключи источников главного аналитика
 
@@ -118,7 +155,10 @@ docker compose -f "$COMPOSE_FILE" exec -T agent-computer \
 После health checks выполните один реальный test-run без чувствительного текста и найдите его
 timing-последовательность по `runId`. Затем проверьте:
 
-- браузер проходит edge-login и загружает канал;
+- до public cutover legacy browser проходит edge-login; на отдельно одобренном canary owner и
+  editor проходят разные Telegram-сессии;
+- текущий пользователь имеет собственное active ChatGPT/OpenRouter connection, а пользователь без
+  него получает безопасный отказ без fallback;
 - существующий transcript восстанавливается из server/Intelligence;
 - новый ответ приходит progressive deltas;
 - один разрешённый tool проходит gateway и появляется в audit;
@@ -148,6 +188,12 @@ deprecated alias. Не используйте `--reuse-values` без прове
 
 Rollback всегда возвращает согласованный набор server + agent + editor, а не один случайный
 контейнер.
+
+Для ManacostTeam public cutover к набору также относятся прежний edge-auth, proxy/DNS route,
+`OPENBOT_PUBLIC_URL` и зарегистрированные callback origins. Не возвращайте global Codex profile к
+новому multi-user server и не удаляйте additive Telegram/connection rows. Точная preflight/target /
+verification/rollback последовательность находится в
+[authentication runbook](runbooks/manacostteam-authentication.md#8-public-cutover-task-34).
 
 ### Только код/образ, совместимая схема
 
