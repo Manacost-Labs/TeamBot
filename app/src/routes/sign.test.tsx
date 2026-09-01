@@ -70,6 +70,9 @@ describe("Telegram sign-in", () => {
       telegram: { botUsername: "ManacostTeamBot" },
     });
 
+    expect(telegram.getByRole("heading", { level: 1 }).textContent).toBe(
+      "Вход в ManacostTeam",
+    );
     await waitFor(() =>
       expect(
         telegram.container.querySelector(

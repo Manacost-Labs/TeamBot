@@ -27,6 +27,7 @@ import {
 } from "@/lib/ai-connections/mutations";
 import { personalAiConnectionQueryOptions } from "@/lib/ai-connections/queries";
 import { authKeys, currentUserQueryOptions } from "@/lib/auth/queries";
+import { appConfig } from "@/lib/generated/application-config";
 
 export const Route = createFileRoute("/_authed/settings/")({
   component: RouteComponent,
@@ -45,7 +46,7 @@ function RouteComponent() {
    */
   return (
     <PageShell
-      description="Настройки внешнего вида и поведения приложения для вашей учётной записи."
+      description={`Настройки внешнего вида и поведения ${appConfig.brand.productName} для вашей учётной записи.`}
       title="Настройки"
     >
       <PageSection title="Основные">
@@ -160,6 +161,10 @@ export function OpenRouterSettingsCard() {
   }, [confirmingReplacement]);
 
   useEffect(() => {
+    if (replacementApproved) keyInput.current?.focus();
+  }, [replacementApproved]);
+
+  useEffect(() => {
     if (!active || connection.data?.provider !== "chatgpt") {
       setConfirmingReplacement(false);
       setReplacementApproved(false);
@@ -270,7 +275,6 @@ export function OpenRouterSettingsCard() {
                     onClick={() => {
                       setConfirmingReplacement(false);
                       setReplacementApproved(true);
-                      requestAnimationFrame(() => keyInput.current?.focus());
                     }}
                     ref={replacementConfirmButton}
                     type="button"
@@ -280,9 +284,7 @@ export function OpenRouterSettingsCard() {
                   <Button
                     onClick={() => {
                       setConfirmingReplacement(false);
-                      requestAnimationFrame(() =>
-                        replacementButton.current?.focus(),
-                      );
+                      replacementButton.current?.focus();
                     }}
                     type="button"
                     variant="outline"

@@ -772,14 +772,14 @@ identifiers required for compatibility.
 
 **Acceptance criteria:**
 
-- [ ] Sign-in, sidebar, settings, document titles and empty states display ManacostTeam.
-- [ ] No user-facing text suggests the owner is sharing their ChatGPT account.
-- [ ] Internal `openbot__*`, database names and AG-UI contracts remain unchanged unless separately migrated.
+- [x] Sign-in, sidebar, settings, document titles and empty states display ManacostTeam.
+- [x] No user-facing text suggests the owner is sharing their ChatGPT account.
+- [x] Internal `openbot__*`, database names and AG-UI contracts remain unchanged unless separately migrated.
 
 **Verification:**
 
-- [ ] `bun test app/src server/tests/tenant-package.test.ts`
-- [ ] `bun run build`
+- [x] `bun test app/src server/tests/tenant-package.test.ts`
+- [x] `bun run build`
 
 **Dependencies:** Tasks 7, 14 and 24.
 

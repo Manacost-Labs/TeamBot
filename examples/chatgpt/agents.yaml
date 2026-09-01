@@ -2,7 +2,7 @@ agents:
   - id: chatgpt-assistant
     name: ChatGPT Assistant
     title: Codex
-    role_description: Help with everyday work using the model from the owner's ChatGPT session.
+    role_description: Help with everyday work using the signed-in team member's personal AI connection.
     avatar_seed: chatgpt-assistant
     type: remote-ag-ui
     endpoint: ${MANAGED_AGENT_AG_UI_URL:-}

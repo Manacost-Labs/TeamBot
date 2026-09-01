@@ -259,7 +259,7 @@ export type DeploymentConfig = {
    * reaching somewhere other people can get to.
    */
   singleUser: boolean;
-  /** Names OpenBot on the analytics the runtime already sends. Off with OPENBOT_ACCESSIBILITY_DISABLED. */
+  /** Names ManacostTeam on the analytics the runtime already sends. Off with OPENBOT_ACCESSIBILITY_DISABLED. */
   accessibility: boolean;
   /**
    * Where the built app is, when this process serves it.

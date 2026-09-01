@@ -1,6 +1,6 @@
 channels:
   - id: work
     name: Work
-    description: A private workspace powered by the owner's ChatGPT model.
+    description: A private ManacostTeam workspace for the signed-in team member.
     permitted_agents: [chatgpt-assistant, data-control, youtube-analyst, heartpulse-control]
     allowed_groups: [all]

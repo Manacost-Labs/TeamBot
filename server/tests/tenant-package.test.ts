@@ -328,7 +328,7 @@ describe("tenant YAML validation", () => {
     });
   });
 
-  test("ships the YouTube analyst with only the Markdown artifact skill", async () => {
+  test("ships ManacostTeam without owner-shared AI copy", async () => {
     const previousEndpoint = process.env.MANAGED_AGENT_AG_UI_URL;
     process.env.MANAGED_AGENT_AG_UI_URL = "http://agent-codex.test/ag-ui";
     const tenantPackage = await loadTenantPackage(
@@ -349,7 +349,16 @@ describe("tenant YAML validation", () => {
     const work = tenantPackage.channels.find(
       (channel) => channel.id === "work",
     );
+    const assistant = tenantPackage.agents.find(
+      (agent) => agent.id === "chatgpt-assistant",
+    );
 
+    expect(tenantPackage).toMatchObject({
+      productName: "ManacostTeam",
+      tenantId: "openbot-chatgpt",
+    });
+    expect(assistant?.roleDescription.toLowerCase()).not.toContain("owner");
+    expect(work?.description.toLowerCase()).not.toContain("owner");
     expect(youtube?.type).toBe("remote_ag_ui");
     expect(youtube?.skills).toEqual(["youtube-summary"]);
     expect(skill?.tools).toEqual(["artifacts/create_artifact"]);

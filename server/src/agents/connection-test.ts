@@ -56,7 +56,7 @@ function probeBody() {
         id: crypto.randomUUID(),
         role: "user",
         content:
-          "This is an automated connection test from OpenBot. Reply with one short word.",
+          "This is an automated connection test from ManacostTeam. Reply with one short word.",
       },
     ],
     tools: [],

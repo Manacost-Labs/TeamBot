@@ -1407,4 +1407,4 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   });
 }
 
-console.info(`OpenBot server listening on http://localhost:${port}`);
+console.info(`ManacostTeam server listening on http://localhost:${port}`);

@@ -569,7 +569,7 @@ function RouteComponent() {
                 <p className="text-muted-foreground text-sm">
                   Add this to the client's authorised redirect URIs at the
                   vendor, exactly as written. A single wrong character fails
-                  there, with a message that does not mention OpenBot.
+                  there, with a message that does not mention ManacostTeam.
                 </p>
               )}
               {!plugins.data?.redirectUri ? (

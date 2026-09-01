@@ -391,7 +391,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                   <EmptyHeader>
                     <EmptyTitle>У вас пока нет диалогов</EmptyTitle>
                     <EmptyDescription className="text-pretty">
-                      Начните общение с сотрудником — диалог появится здесь.
+                      Начните общение с сотрудником в{" "}
+                      {appConfig.brand.productName} — диалог появится здесь.
                     </EmptyDescription>
                   </EmptyHeader>
                 </Empty>

@@ -350,7 +350,7 @@ export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
   {
     key: "artifacts",
     title: "Conversation Artifacts",
-    vendor: "OpenBot",
+    vendor: "ManacostTeam",
     summary:
       "Create governed Markdown downloads and isolated PDF exports in the current conversation.",
     host: "builtin://artifacts",
@@ -364,7 +364,7 @@ export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
   {
     key: "attachments",
     title: "Conversation Attachments",
-    vendor: "OpenBot",
+    vendor: "ManacostTeam",
     summary:
       "Governed, read-only access to files attached to the current conversation.",
     host: "builtin://attachments",
@@ -378,7 +378,7 @@ export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
   {
     key: "routines",
     title: "Routines",
-    vendor: "OpenBot",
+    vendor: "ManacostTeam",
     summary:
       "Standing instructions a Bot runs on a schedule, as whoever scheduled them.",
     /*

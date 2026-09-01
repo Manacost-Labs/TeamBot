@@ -295,7 +295,7 @@ export function ChatGptConnectionCard({
                 <Button
                   onClick={() => {
                     setConfirmingReplacement(false);
-                    requestAnimationFrame(() => connectButton.current?.focus());
+                    connectButton.current?.focus();
                   }}
                   type="button"
                   variant="outline"
