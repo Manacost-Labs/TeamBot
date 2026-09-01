@@ -13,12 +13,12 @@ set -eu
 # not race the migration against postmaster startup.
 attempt=0
 until /usr/lib/postgresql/16/bin/pg_isready -q -h 127.0.0.1 -p 5432 -U openbot -d openbot; do
-  attempt=$((attempt + 1))
-  if [ "$attempt" -ge 60 ]; then
-    echo "migrate: PostgreSQL did not become ready within 30 seconds." >&2
-    exit 1
-  fi
-  sleep 0.5
+	attempt=$((attempt + 1))
+	if [ "$attempt" -ge 60 ]; then
+		echo "migrate: PostgreSQL did not become ready within 30 seconds." >&2
+		exit 1
+	fi
+	sleep 0.5
 done
 
 cd /app/server

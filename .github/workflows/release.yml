@@ -88,7 +88,7 @@ jobs:
 
           bun -e '
             const fs = require("fs");
-            // `bun -e` passes argv as [bun, ...args], so the argument is the last element. Reading
+            // bun -e passes argv as [bun, ...args], so the argument is the last element. Reading
             // it positionally from the front silently yields undefined and every bump becomes a patch.
             const bump = process.argv.at(-1);
             const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
@@ -98,7 +98,7 @@ jobs:
               bump === "minor" ? [major, minor + 1, 0] :
               [major, minor, patch + 1];
             pkg.version = next.join(".");
-            fs.writeFileSync("package.json", `${JSON.stringify(pkg, null, 2)}\n`);
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
             console.log(pkg.version);
           ' -- "$BUMP" > /tmp/version
           version=$(cat /tmp/version)
@@ -111,7 +111,7 @@ jobs:
             const text = fs.readFileSync("CHANGELOG.md", "utf8");
             fs.writeFileSync(
               "CHANGELOG.md",
-              text.replace(/^## Unreleased$/m, `## Unreleased\n\n## ${version}`),
+              text.replace(/^## Unreleased$/m, "## Unreleased\n\n## " + version),
             );
           ' -- "$version"
 

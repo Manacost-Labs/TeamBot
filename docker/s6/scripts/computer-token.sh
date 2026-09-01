@@ -9,6 +9,6 @@
 # two processes they cannot address separately. Set COMPUTER_TOKEN yourself and this leaves it be.
 set -eu
 if [ -z "${COMPUTER_TOKEN:-}" ]; then
-  head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' \
-    > /run/s6/container_environment/COMPUTER_TOKEN
+	head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' \
+		>/run/s6/container_environment/COMPUTER_TOKEN
 fi

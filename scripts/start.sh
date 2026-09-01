@@ -11,18 +11,18 @@ LOGS="$ROOT/.logs"
 mkdir -p "$LOGS"
 
 if [ ! -f "$ROOT/.env" ]; then
-  printf '\033[31m%s\033[0m\n' ".env is missing. Copy .env.example to .env and fill in the required settings."
-  exit 1
+	printf '\033[31m%s\033[0m\n' ".env is missing. Copy .env.example to .env and fill in the required settings."
+	exit 1
 fi
 
 # The environment first, then .env, then the default. Compose and the API server both read .env, so a
 # port or token configured there is what this script must use as well.
 setting() {
-  local name="$1" fallback="$2" value="${!1:-}"
-  if [ -z "$value" ]; then
-    value="$(grep -E "^$name=" "$ROOT/.env" | tail -1 | cut -d= -f2- | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/")"
-  fi
-  printf '%s' "${value:-$fallback}"
+	local name="$1" fallback="$2" value="${!1:-}"
+	if [ -z "$value" ]; then
+		value="$(grep -E "^$name=" "$ROOT/.env" | tail -1 | cut -d= -f2- | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/")"
+	fi
+	printf '%s' "${value:-$fallback}"
 }
 
 APP_PORT="$(setting APP_PORT 3010)"
@@ -69,18 +69,18 @@ SECRETS_ROTATED=false
 
 MANAGED_AGENT_TOKEN="$(setting MANAGED_AGENT_TOKEN "")"
 if [ -z "$MANAGED_AGENT_TOKEN" ]; then
-  SECRETS_ROTATED=true
-  MANAGED_AGENT_TOKEN="$(openssl rand -base64 32)"
-  if grep -qE '^MANAGED_AGENT_TOKEN=' "$ROOT/.env"; then
-    # A present but empty line, which is what .env.example ships.
-    tmp="$(mktemp)"
-    grep -vE '^MANAGED_AGENT_TOKEN=' "$ROOT/.env" > "$tmp"
-    printf 'MANAGED_AGENT_TOKEN=%s\n' "$MANAGED_AGENT_TOKEN" >> "$tmp"
-    mv "$tmp" "$ROOT/.env"
-  else
-    printf '\nMANAGED_AGENT_TOKEN=%s\n' "$MANAGED_AGENT_TOKEN" >> "$ROOT/.env"
-  fi
-  printf '\033[2m%s\033[0m\n' "Generated MANAGED_AGENT_TOKEN and wrote it to .env."
+	SECRETS_ROTATED=true
+	MANAGED_AGENT_TOKEN="$(openssl rand -base64 32)"
+	if grep -qE '^MANAGED_AGENT_TOKEN=' "$ROOT/.env"; then
+		# A present but empty line, which is what .env.example ships.
+		tmp="$(mktemp)"
+		grep -vE '^MANAGED_AGENT_TOKEN=' "$ROOT/.env" >"$tmp"
+		printf 'MANAGED_AGENT_TOKEN=%s\n' "$MANAGED_AGENT_TOKEN" >>"$tmp"
+		mv "$tmp" "$ROOT/.env"
+	else
+		printf '\nMANAGED_AGENT_TOKEN=%s\n' "$MANAGED_AGENT_TOKEN" >>"$ROOT/.env"
+	fi
+	printf '\033[2m%s\033[0m\n' "Generated MANAGED_AGENT_TOKEN and wrote it to .env."
 fi
 export MANAGED_AGENT_TOKEN
 
@@ -97,27 +97,27 @@ export MANAGED_AGENT_TOKEN
 # be recorded.
 AGENT_TOOL_TOKEN="$(setting AGENT_TOOL_TOKEN "")"
 if [ -z "$AGENT_TOOL_TOKEN" ]; then
-  SECRETS_ROTATED=true
-  AGENT_TOOL_TOKEN="$(openssl rand -base64 32)"
-  if grep -qE '^AGENT_TOOL_TOKEN=' "$ROOT/.env"; then
-    # A present but empty line, which is what .env.example ships.
-    tmp="$(mktemp)"
-    grep -vE '^AGENT_TOOL_TOKEN=' "$ROOT/.env" > "$tmp"
-    printf 'AGENT_TOOL_TOKEN=%s\n' "$AGENT_TOOL_TOKEN" >> "$tmp"
-    mv "$tmp" "$ROOT/.env"
-  else
-    printf '\nAGENT_TOOL_TOKEN=%s\n' "$AGENT_TOOL_TOKEN" >> "$ROOT/.env"
-  fi
-  printf '\033[2m%s\033[0m\n' "Generated AGENT_TOOL_TOKEN and wrote it to .env."
+	SECRETS_ROTATED=true
+	AGENT_TOOL_TOKEN="$(openssl rand -base64 32)"
+	if grep -qE '^AGENT_TOOL_TOKEN=' "$ROOT/.env"; then
+		# A present but empty line, which is what .env.example ships.
+		tmp="$(mktemp)"
+		grep -vE '^AGENT_TOOL_TOKEN=' "$ROOT/.env" >"$tmp"
+		printf 'AGENT_TOOL_TOKEN=%s\n' "$AGENT_TOOL_TOKEN" >>"$tmp"
+		mv "$tmp" "$ROOT/.env"
+	else
+		printf '\nAGENT_TOOL_TOKEN=%s\n' "$AGENT_TOOL_TOKEN" >>"$ROOT/.env"
+	fi
+	printf '\033[2m%s\033[0m\n' "Generated AGENT_TOOL_TOKEN and wrote it to .env."
 fi
 export AGENT_TOOL_TOKEN
 
 green() { printf '\033[32m%s\033[0m\n' "$1"; }
-red()   { printf '\033[31m%s\033[0m\n' "$1"; }
-info()  { printf '\033[2m%s\033[0m\n' "$1"; }
+red() { printf '\033[31m%s\033[0m\n' "$1"; }
+info() { printf '\033[2m%s\033[0m\n' "$1"; }
 
 holder() {
-  lsof -nP -iTCP:"$1" -sTCP:LISTEN -Fcn 2>/dev/null | awk '/^c/{c=substr($0,2)} /^n/{print c" ("substr($0,2)")"; exit}' || true
+	lsof -nP -iTCP:"$1" -sTCP:LISTEN -Fcn 2>/dev/null | awk '/^c/{c=substr($0,2)} /^n/{print c" ("substr($0,2)")"; exit}' || true
 }
 
 # Does whatever holds this port answer as OpenBot, rather than merely answer?
@@ -134,60 +134,66 @@ holder() {
 #
 # So each surface is asked for something only it can produce.
 identifies_as_openbot() {
-  local port="$1" name="$2"
-  case "$name" in
-    # A field of this server's own payload. A stray 200 does not carry it.
-    server)
-      curl -fsS --max-time 3 "http://localhost:$port/api/copilotkit/info" 2>/dev/null \
-        | grep -q '"licenseStatus"'
-      ;;
-    # The app is static HTML with nothing to interrogate, so its title is the identity available.
-    app)
-      curl -fsS --max-time 3 "http://localhost:$port/" 2>/dev/null \
-        | grep -qi '<title>[^<]*OpenBot'
-      ;;
-    # Compose services on dedicated loopback ports, answering a route named for this stack.
-    *)
-      curl -fsS --max-time 3 "http://localhost:$port/health" >/dev/null 2>&1
-      ;;
-  esac
+	local port="$1" name="$2"
+	case "$name" in
+	# A field of this server's own payload. A stray 200 does not carry it.
+	server)
+		curl -fsS --max-time 3 "http://localhost:$port/api/copilotkit/info" 2>/dev/null |
+			grep -q '"licenseStatus"'
+		;;
+	# The app is static HTML with nothing to interrogate, so its title is the identity available.
+	app)
+		curl -fsS --max-time 3 "http://localhost:$port/" 2>/dev/null |
+			grep -qi '<title>[^<]*OpenBot'
+		;;
+	# Compose services on dedicated loopback ports, answering a route named for this stack.
+	*)
+		curl -fsS --max-time 3 "http://localhost:$port/health" >/dev/null 2>&1
+		;;
+	esac
 }
 
 require_free_or_ours() {
-  local port="$1" name="$2" who
-  who="$(holder "$port")"
-  [ -z "$who" ] && return 0
-  if identifies_as_openbot "$port" "$name"; then
-    info "  $name: already up on $port ($who)"
-    return 0
-  fi
-  red "  $name: port $port is held by something that is not OpenBot: $who"
-  red "  Re-run with ${name^^}_PORT=<free port>, or stop that process yourself."
-  exit 1
+	local port="$1" name="$2" who
+	who="$(holder "$port")"
+	[ -z "$who" ] && return 0
+	if identifies_as_openbot "$port" "$name"; then
+		info "  $name: already up on $port ($who)"
+		return 0
+	fi
+	red "  $name: port $port is held by something that is not OpenBot: $who"
+	red "  Re-run with ${name^^}_PORT=<free port>, or stop that process yourself."
+	exit 1
 }
 
 # As wait_for, but satisfied only by OpenBot answering, not by anything answering.
 wait_for_openbot() {
-  local port="$1" name="$2" tries="${3:-40}"
-  for _ in $(seq 1 "$tries"); do
-    identifies_as_openbot "$port" "$name" && { green "  $name ready"; return 0; }
-    sleep 1
-  done
-  red "  $name never answered as OpenBot on port $port"
-  red "  Either it failed to start, or that port belongs to another process."
-  red "  Log: $LOGS/${name}.log"
-  exit 1
+	local port="$1" name="$2" tries="${3:-40}"
+	for _ in $(seq 1 "$tries"); do
+		identifies_as_openbot "$port" "$name" && {
+			green "  $name ready"
+			return 0
+		}
+		sleep 1
+	done
+	red "  $name never answered as OpenBot on port $port"
+	red "  Either it failed to start, or that port belongs to another process."
+	red "  Log: $LOGS/${name}.log"
+	exit 1
 }
 
 wait_for() {
-  local url="$1" name="$2" tries="${3:-40}"
-  for _ in $(seq 1 "$tries"); do
-    curl -fsS --max-time 3 "$url" >/dev/null 2>&1 && { green "  $name ready"; return 0; }
-    sleep 1
-  done
-  red "  $name never became ready at $url"
-  red "  Log: $LOGS/${name}.log"
-  exit 1
+	local url="$1" name="$2" tries="${3:-40}"
+	for _ in $(seq 1 "$tries"); do
+		curl -fsS --max-time 3 "$url" >/dev/null 2>&1 && {
+			green "  $name ready"
+			return 0
+		}
+		sleep 1
+	done
+	red "  $name never became ready at $url"
+	red "  Log: $LOGS/${name}.log"
+	exit 1
 }
 
 echo
@@ -197,7 +203,7 @@ echo "======="
 info "1/4  Docker services"
 SERVICES=(postgres)
 if [ "$ONE_COMPUTER_EACH" = "true" ]; then
-  SERVICES+=(supervisor)
+	SERVICES+=(supervisor)
 fi
 #
 # Every Bot service, every run, whether or not it is already answering.
@@ -216,28 +222,28 @@ fi
 # changed, so naming them all costs a comparison and buys the guarantee that what is running is what
 # this run configured.
 for svc in agent-computer agent-bot agent-langgraph; do
-  SERVICES+=("$svc")
+	SERVICES+=("$svc")
 done
 
 export SUPERVISOR_TOKEN COMPUTER_TOKEN WORKER_SHARED_SECRET
 export COMPUTER_PORT BOT_PORT LANGGRAPH_PORT SUPERVISOR_PORT
 docker compose up -d --build "${SERVICES[@]}" >/dev/null
 if ! docker compose run --rm --build migrate >"$LOGS/migrate.log" 2>&1; then
-  red "  Migrations did not apply. The database is not the schema this server expects."
-  red "  Log: $LOGS/migrate.log"
-  exit 1
+	red "  Migrations did not apply. The database is not the schema this server expects."
+	red "  Log: $LOGS/migrate.log"
+	exit 1
 fi
 wait_for "http://localhost:$COMPUTER_PORT/health" "agent-computer"
 wait_for "http://localhost:$BOT_PORT/health" "agent-bot"
 wait_for "http://localhost:$LANGGRAPH_PORT/health" "agent-langgraph"
 
 for table in agent_profiles agent_preferences; do
-  if ! docker compose exec -T postgres \
-       psql -U openbot -d openbot -tAc "select to_regclass('public.$table')" 2>/dev/null \
-       | grep -q "^$table$"; then
-    red "  $table is missing. Run: bun run --cwd server db:migrate"
-    exit 1
-  fi
+	if ! docker compose exec -T postgres \
+		psql -U openbot -d openbot -tAc "select to_regclass('public.$table')" 2>/dev/null |
+		grep -q "^$table$"; then
+		red "  $table is missing. Run: bun run --cwd server db:migrate"
+		exit 1
+	fi
 done
 green "  coworker tables migrated"
 
@@ -263,9 +269,9 @@ require_free_or_ours "$SERVER_PORT" server
 # `AGENT_TOOL_TOKEN` refuses every callback its own Bots make, which reaches a person as "no results"
 # rather than as an error.
 if [ "$SECRETS_ROTATED" = "true" ]; then
-  info "  a secret was generated this run, so the server is restarted to pick it up"
-  pkill -f "bun --env-file=../.env src/index.ts" >/dev/null 2>&1 || true
-  sleep 1
+	info "  a secret was generated this run, so the server is restarted to pick it up"
+	pkill -f "bun --env-file=../.env src/index.ts" >/dev/null 2>&1 || true
+	sleep 1
 fi
 #
 # A server that answers as OpenBot can still be one no worker can hand a routine to. The worker
@@ -283,36 +289,36 @@ fi
 # the launch below. Anything else — including a probe that could not connect at all — keeps the
 # philosophy of leaving an answering server alone.
 if identifies_as_openbot "$SERVER_PORT" server; then
-  HANDOFF_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 \
-    -X POST "http://localhost:$SERVER_PORT/internal/routines/run" \
-    -H "Authorization: Bearer $WORKER_SHARED_SECRET" \
-    -H "Content-Type: application/json" --data '{}' 2>/dev/null || true)"
-  case "$HANDOFF_STATUS" in
-    401)
-      info "  server: up, but refuses the worker's secret (401), so it is restarted to pick it up"
-      pkill -f "bun --env-file=../.env src/index.ts" >/dev/null 2>&1 || true
-      sleep 1
-      ;;
-    404)
-      info "  server: up, but has no /internal/routines/run (404: an older checkout), so it is restarted"
-      pkill -f "bun --env-file=../.env src/index.ts" >/dev/null 2>&1 || true
-      sleep 1
-      ;;
-  esac
+	HANDOFF_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 \
+		-X POST "http://localhost:$SERVER_PORT/internal/routines/run" \
+		-H "Authorization: Bearer $WORKER_SHARED_SECRET" \
+		-H "Content-Type: application/json" --data '{}' 2>/dev/null || true)"
+	case "$HANDOFF_STATUS" in
+	401)
+		info "  server: up, but refuses the worker's secret (401), so it is restarted to pick it up"
+		pkill -f "bun --env-file=../.env src/index.ts" >/dev/null 2>&1 || true
+		sleep 1
+		;;
+	404)
+		info "  server: up, but has no /internal/routines/run (404: an older checkout), so it is restarted"
+		pkill -f "bun --env-file=../.env src/index.ts" >/dev/null 2>&1 || true
+		sleep 1
+		;;
+	esac
 fi
 if ! identifies_as_openbot "$SERVER_PORT" server; then
-  if [ "$ONE_COMPUTER_EACH" = "true" ]; then
-    (cd server && PORT="$SERVER_PORT" \
-      COMPUTER_SUPERVISOR_URL="http://localhost:$SUPERVISOR_PORT" \
-      SUPERVISOR_TOKEN="$SUPERVISOR_TOKEN" \
-      COMPUTER_TOKEN="$COMPUTER_TOKEN" \
-      WORKER_SHARED_SECRET="$WORKER_SHARED_SECRET" \
-      bun --env-file=../.env src/index.ts >"$LOGS/server.log" 2>&1 &)
-  else
-    (cd server && PORT="$SERVER_PORT" \
-      WORKER_SHARED_SECRET="$WORKER_SHARED_SECRET" \
-      bun --env-file=../.env src/index.ts >"$LOGS/server.log" 2>&1 &)
-  fi
+	if [ "$ONE_COMPUTER_EACH" = "true" ]; then
+		(cd server && PORT="$SERVER_PORT" \
+			COMPUTER_SUPERVISOR_URL="http://localhost:$SUPERVISOR_PORT" \
+			SUPERVISOR_TOKEN="$SUPERVISOR_TOKEN" \
+			COMPUTER_TOKEN="$COMPUTER_TOKEN" \
+			WORKER_SHARED_SECRET="$WORKER_SHARED_SECRET" \
+			bun --env-file=../.env src/index.ts >"$LOGS/server.log" 2>&1 &)
+	else
+		(cd server && PORT="$SERVER_PORT" \
+			WORKER_SHARED_SECRET="$WORKER_SHARED_SECRET" \
+			bun --env-file=../.env src/index.ts >"$LOGS/server.log" 2>&1 &)
+	fi
 fi
 wait_for_openbot "$SERVER_PORT" server
 
@@ -333,19 +339,19 @@ wait_for_openbot "$SERVER_PORT" server
 # started. `bun worker/src/index.ts` matches nothing else in the repo. Running from `$ROOT` is safe:
 # relative imports resolve from the importing file, not from the process's cwd.
 if ! pgrep -f "bun worker/src/index.ts" >/dev/null 2>&1; then
-  WORKER_DATABASE_URL="$(setting DATABASE_URL postgres://openbot:openbot@localhost:5432/openbot)"
-  (cd "$ROOT" && \
-    DATABASE_URL="$WORKER_DATABASE_URL" \
-    SERVER_INTERNAL_URL="http://localhost:$SERVER_PORT" \
-    WORKER_SHARED_SECRET="$WORKER_SHARED_SECRET" \
-    bun worker/src/index.ts >"$LOGS/worker.log" 2>&1 &)
-  info "  worker: started (routine sweep loop)"
-  sleep 1
-  if ! pgrep -f "bun worker/src/index.ts" >/dev/null 2>&1; then
-    red "  worker: did not stay up, check $LOGS/worker.log"
-  fi
+	WORKER_DATABASE_URL="$(setting DATABASE_URL postgres://openbot:openbot@localhost:5432/openbot)"
+	(cd "$ROOT" &&
+		DATABASE_URL="$WORKER_DATABASE_URL" \
+			SERVER_INTERNAL_URL="http://localhost:$SERVER_PORT" \
+			WORKER_SHARED_SECRET="$WORKER_SHARED_SECRET" \
+			bun worker/src/index.ts >"$LOGS/worker.log" 2>&1 &)
+	info "  worker: started (routine sweep loop)"
+	sleep 1
+	if ! pgrep -f "bun worker/src/index.ts" >/dev/null 2>&1; then
+		red "  worker: did not stay up, check $LOGS/worker.log"
+	fi
 else
-  info "  worker: already running"
+	info "  worker: already running"
 fi
 
 info "3/4  Runtime health"
@@ -368,7 +374,7 @@ PY
 info "4/4  App"
 require_free_or_ours "$APP_PORT" app
 if ! identifies_as_openbot "$APP_PORT" app; then
-  (cd app && bun run dev --port "$APP_PORT" --strictPort >"$LOGS/app.log" 2>&1 &)
+	(cd app && bun run dev --port "$APP_PORT" --strictPort >"$LOGS/app.log" 2>&1 &)
 fi
 wait_for_openbot "$APP_PORT" app
 
