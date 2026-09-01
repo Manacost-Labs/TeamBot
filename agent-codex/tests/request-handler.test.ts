@@ -8,6 +8,8 @@ import { createAgentRequestHandler } from "../src/request-handler";
 import { RunAdmission } from "../src/run-admission";
 
 const TOKEN = "managed-test-token";
+const ACTOR_A = `oba_${"A".repeat(43)}`;
+const ACTOR_B = `oba_${"B".repeat(43)}`;
 
 function request(body: string) {
   return new Request("http://agent.test/ag-ui", {
@@ -63,7 +65,10 @@ describe("agent-codex request boundary", () => {
           messages: [],
           tools: [],
           context: [],
-          forwardedProps: { openbotBotId: "editor" },
+          forwardedProps: {
+            openbotBotId: "editor",
+            openbotAdmissionKey: ACTOR_A,
+          },
         }),
       ),
     );
@@ -104,7 +109,10 @@ describe("agent-codex request boundary", () => {
             { id: "editor-message-2", role: "user", content: "Текст" },
           ],
           tools: [],
-          forwardedProps: { openbotAgentModel: "gpt-5.6-luna" },
+          forwardedProps: {
+            openbotAgentModel: "gpt-5.6-luna",
+            openbotAdmissionKey: ACTOR_A,
+          },
         }),
       ),
     );
@@ -164,7 +172,10 @@ describe("agent-codex request boundary", () => {
       messages: [],
       tools: [],
       context: [],
-      forwardedProps: { openbotBotId: "editor" },
+      forwardedProps: {
+        openbotBotId: "editor",
+        openbotAdmissionKey: ACTOR_A,
+      },
     });
 
     expect((await handle(request(body))).status).toBe(202);
@@ -206,7 +217,10 @@ describe("agent-codex request boundary", () => {
           messages: [],
           tools: [],
           context: [],
-          forwardedProps: { openbotBotId: "research-analyst" },
+          forwardedProps: {
+            openbotBotId: "research-analyst",
+            openbotAdmissionKey: ACTOR_A,
+          },
         }),
       ),
     );
@@ -267,7 +281,7 @@ describe("agent-codex request boundary", () => {
             openbotBotId: "editor",
             openbotCredentialLease: "946c7ed5-ed42-4f26-843f-3e3607722caf",
             openbotRun: "signed-run",
-            openbotAdmissionKey: "opaque-admission-key",
+            openbotAdmissionKey: ACTOR_A,
             providerEndpoint: "https://attacker.invalid",
             providerToken: "attacker-token",
           },
@@ -319,7 +333,7 @@ describe("agent-codex request boundary", () => {
           openbotBotId: "editor",
           openbotCredentialLease: lease,
           openbotRun: `signed-${runId}`,
-          openbotAdmissionKey: "opaque-admission-key",
+          openbotAdmissionKey: ACTOR_A,
         },
       });
 
@@ -346,5 +360,118 @@ describe("agent-codex request boundary", () => {
     expect(resolutions).toBe(2);
     expect(starts).toBe(1);
     expect(admission.snapshot()).toMatchObject({ active: 0, queued: 0 });
+  });
+
+  test("queues a second run for one actor while another actor starts", async () => {
+    const admission = new RunAdmission({
+      globalLimit: 2,
+      perAgentLimit: 2,
+      queueLimit: 2,
+      maxWaitMs: 1_000,
+      sink: () => {},
+    });
+    const starts: string[] = [];
+    const settlements = new Map<string, () => void>();
+    const handler = createAgentRequestHandler({
+      managedAgentToken: TOKEN,
+      agentId: "agent-codex",
+      admission,
+      respond: (input, _timing, settled) => {
+        starts.push(input.runId);
+        settlements.set(input.runId, settled);
+        return new Response(null, { status: 202 });
+      },
+    });
+    const body = (runId: string, actorKey: string) =>
+      JSON.stringify({
+        threadId: `thread-${runId}`,
+        runId,
+        state: {},
+        messages: [],
+        tools: [],
+        context: [],
+        forwardedProps: {
+          openbotBotId: "editor",
+          openbotAdmissionKey: actorKey,
+        },
+      });
+
+    expect((await handler(request(body("actor-a-1", ACTOR_A)))).status).toBe(
+      202,
+    );
+    const secondForActor = handler(request(body("actor-a-2", ACTOR_A)));
+    await Bun.sleep(1);
+    expect(starts).toEqual(["actor-a-1"]);
+    expect((await handler(request(body("actor-b-1", ACTOR_B)))).status).toBe(
+      202,
+    );
+    expect(starts).toEqual(["actor-a-1", "actor-b-1"]);
+
+    settlements.get("actor-b-1")?.();
+    await Bun.sleep(1);
+    expect(starts).toEqual(["actor-a-1", "actor-b-1"]);
+    settlements.get("actor-a-1")?.();
+    expect((await secondForActor).status).toBe(202);
+    expect(starts).toEqual(["actor-a-1", "actor-b-1", "actor-a-2"]);
+    settlements.get("actor-a-2")?.();
+    expect(admission.snapshot()).toMatchObject({ active: 0, queued: 0 });
+  });
+
+  test("fails closed on missing or malformed actor admission data", async () => {
+    const records: ExecutionTimingRecord[] = [];
+    let starts = 0;
+    let resolutions = 0;
+    const admission = new RunAdmission({
+      globalLimit: 1,
+      perAgentLimit: 1,
+      queueLimit: 1,
+      maxWaitMs: 1_000,
+      sink: () => {},
+    });
+    const handler = createAgentRequestHandler({
+      managedAgentToken: TOKEN,
+      agentId: "agent-codex",
+      admission,
+      sink: (record) => records.push(record),
+      resolveProviderConnection: async () => {
+        resolutions += 1;
+        return { provider: "openrouter", apiKey: "PRIVATE-KEY" };
+      },
+      respond: () => {
+        starts += 1;
+        return new Response(null, { status: 202 });
+      },
+    });
+    const body = (openbotAdmissionKey?: string) =>
+      JSON.stringify({
+        threadId: "invalid-actor-thread",
+        runId: "invalid-actor-run",
+        state: {},
+        messages: [],
+        tools: [],
+        context: [],
+        forwardedProps: {
+          openbotBotId: "editor",
+          openbotCredentialLease: "0f35792c-b837-4b00-8cd8-d03983dc1299",
+          openbotRun: "signed-run",
+          ...(openbotAdmissionKey === undefined ? {} : { openbotAdmissionKey }),
+        },
+      });
+
+    for (const admissionKey of [
+      undefined,
+      "actor-id",
+      `oba_${"!".repeat(43)}`,
+    ]) {
+      const response = await handler(request(body(admissionKey)));
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "Invalid managed run admission.",
+      });
+    }
+    expect(starts).toBe(0);
+    expect(resolutions).toBe(0);
+    expect(admission.snapshot()).toMatchObject({ active: 0, queued: 0 });
+    expect(JSON.stringify(records)).not.toContain("actor-id");
   });
 });

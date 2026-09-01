@@ -12,6 +12,7 @@ import type {
   PersonalProviderConnectionResolver,
 } from "./provider-connection";
 import {
+  isActorAdmissionKey,
   type RunAdmission,
   RunDrainingError,
   RunQueueAbortedError,
@@ -74,6 +75,15 @@ function admissionAgentId(input: RunAgentInput, fallback: string): string {
     : fallback;
 }
 
+function actorAdmissionKey(input: RunAgentInput): string | null {
+  const forwarded = input.forwardedProps as
+    | { openbotAdmissionKey?: unknown }
+    | undefined;
+  return isActorAdmissionKey(forwarded?.openbotAdmissionKey)
+    ? forwarded.openbotAdmissionKey
+    : null;
+}
+
 function providerConnectionReference(
   input: RunAgentInput,
 ): PersonalProviderConnectionReference | null {
@@ -132,11 +142,20 @@ export function createAgentRequestHandler(options: AgentRequestHandlerOptions) {
 
     timing.correlate(parsed.data, options.agentId);
     timing.record("request_accepted");
+    const actorKey = actorAdmissionKey(parsed.data);
+    if (!actorKey) {
+      timing.record("run_error", { errorType: "InvalidActorAdmission" });
+      return Response.json(
+        { error: "Invalid managed run admission." },
+        { status: 400 },
+      );
+    }
     let release = () => {};
     if (options.admission) {
       try {
         const lease = await options.admission.acquire(
           admissionAgentId(parsed.data, options.agentId),
+          actorKey,
           request.signal,
         );
         release = lease.release;

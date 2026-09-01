@@ -4,6 +4,7 @@ export type RunAdmissionSnapshot = {
   draining: boolean;
   globalLimit: number;
   perAgentLimit: number;
+  perActorLimit: 1;
   queueLimit: number;
   maxWaitMs: number;
 };
@@ -50,6 +51,7 @@ export class RunDrainingError extends Error {
 
 type QueueEntry = {
   agentId: string;
+  actorAdmissionKey: string;
   queuedAt: number;
   signal?: AbortSignal;
   timeout: ReturnType<typeof setTimeout>;
@@ -71,6 +73,7 @@ type RunAdmissionOptions = {
 export class RunAdmission {
   private active = 0;
   private readonly activeByAgent = new Map<string, number>();
+  private readonly activeByActor = new Map<string, number>();
   private readonly queued: QueueEntry[] = [];
   private readonly now: () => number;
   private readonly sink: (event: RunAdmissionEvent) => void;
@@ -101,21 +104,31 @@ export class RunAdmission {
       draining: this.draining,
       globalLimit: this.options.globalLimit,
       perAgentLimit: this.options.perAgentLimit,
+      perActorLimit: 1,
       queueLimit: this.options.queueLimit,
       maxWaitMs: this.options.maxWaitMs,
     };
   }
 
-  acquire(agentId: string, signal?: AbortSignal): Promise<RunAdmissionLease> {
+  acquire(
+    agentId: string,
+    actorAdmissionKey: string,
+    signal?: AbortSignal,
+  ): Promise<RunAdmissionLease> {
     if (!agentId) throw new TypeError("agentId is required");
+    if (!isActorAdmissionKey(actorAdmissionKey)) {
+      throw new TypeError("actor admission key is invalid");
+    }
     if (signal?.aborted) return Promise.reject(new RunQueueAbortedError());
     if (this.draining) {
       this.emit("rejected", agentId);
       return Promise.reject(new RunDrainingError());
     }
 
-    if (this.canAdmit(agentId)) {
-      return Promise.resolve(this.admit(agentId, this.now()));
+    if (this.canAdmit(agentId, actorAdmissionKey)) {
+      return Promise.resolve(
+        this.admit(agentId, actorAdmissionKey, this.now()),
+      );
     }
     if (this.queued.length >= this.options.queueLimit) {
       this.emit("rejected", agentId);
@@ -125,6 +138,7 @@ export class RunAdmission {
     return new Promise<RunAdmissionLease>((resolve, reject) => {
       const entry: QueueEntry = {
         agentId,
+        actorAdmissionKey,
         queuedAt: this.now(),
         signal,
         timeout: setTimeout(() => {
@@ -170,16 +184,25 @@ export class RunAdmission {
     return this.snapshot();
   }
 
-  private canAdmit(agentId: string): boolean {
+  private canAdmit(agentId: string, actorAdmissionKey: string): boolean {
     return (
       this.active < this.options.globalLimit &&
-      (this.activeByAgent.get(agentId) ?? 0) < this.options.perAgentLimit
+      (this.activeByAgent.get(agentId) ?? 0) < this.options.perAgentLimit &&
+      (this.activeByActor.get(actorAdmissionKey) ?? 0) < 1
     );
   }
 
-  private admit(agentId: string, queuedAt: number): RunAdmissionLease {
+  private admit(
+    agentId: string,
+    actorAdmissionKey: string,
+    queuedAt: number,
+  ): RunAdmissionLease {
     this.active += 1;
     this.activeByAgent.set(agentId, (this.activeByAgent.get(agentId) ?? 0) + 1);
+    this.activeByActor.set(
+      actorAdmissionKey,
+      (this.activeByActor.get(actorAdmissionKey) ?? 0) + 1,
+    );
     const waitMs = Math.max(0, this.now() - queuedAt);
     this.emit("admitted", agentId, waitMs);
     let released = false;
@@ -192,6 +215,13 @@ export class RunAdmission {
         const remaining = (this.activeByAgent.get(agentId) ?? 1) - 1;
         if (remaining === 0) this.activeByAgent.delete(agentId);
         else this.activeByAgent.set(agentId, remaining);
+        const actorRemaining =
+          (this.activeByActor.get(actorAdmissionKey) ?? 1) - 1;
+        if (actorRemaining === 0) {
+          this.activeByActor.delete(actorAdmissionKey);
+        } else {
+          this.activeByActor.set(actorAdmissionKey, actorRemaining);
+        }
         this.emit("released", agentId);
         this.drainQueue();
       },
@@ -203,7 +233,7 @@ export class RunAdmission {
     if (this.draining) return;
     while (this.active < this.options.globalLimit) {
       const index = this.queued.findIndex((entry) =>
-        this.canAdmit(entry.agentId),
+        this.canAdmit(entry.agentId, entry.actorAdmissionKey),
       );
       if (index < 0) return;
       const [entry] = this.queued.splice(index, 1);
@@ -213,7 +243,9 @@ export class RunAdmission {
         entry.reject(new RunQueueAbortedError());
         continue;
       }
-      entry.resolve(this.admit(entry.agentId, entry.queuedAt));
+      entry.resolve(
+        this.admit(entry.agentId, entry.actorAdmissionKey, entry.queuedAt),
+      );
     }
   }
 
@@ -244,4 +276,9 @@ export class RunAdmission {
       ...this.snapshot(),
     });
   }
+}
+
+/** Stable, opaque HMAC key stamped by the server; never expose or log its value. */
+export function isActorAdmissionKey(value: unknown): value is string {
+  return typeof value === "string" && /^oba_[A-Za-z0-9_-]{43}$/.test(value);
 }

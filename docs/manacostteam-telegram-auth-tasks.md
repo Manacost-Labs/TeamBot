@@ -545,13 +545,13 @@ the existing per-agent/global limits continue to apply.
 
 **Acceptance criteria:**
 
-- [ ] A second run for the same server-stamped actor queues; another actor may use free capacity.
-- [ ] Cancellation, timeout, drain and process exit release every actor/global/agent slot exactly once.
-- [ ] Invalid/missing actor admission data fails closed before child spawn.
+- [x] A second run for the same server-stamped actor queues; another actor may use free capacity.
+- [x] Cancellation, timeout, drain and process exit release every actor/global/agent slot exactly once.
+- [x] Invalid/missing actor admission data fails closed before child spawn.
 
 **Verification:**
 
-- [ ] `bun test agent-codex/tests/run-admission.test.ts agent-codex/tests/request-handler.test.ts`
+- [x] `bun test agent-codex/tests/run-admission.test.ts agent-codex/tests/request-handler.test.ts`
 
 **Dependencies:** Task 18.
 
