@@ -6,6 +6,10 @@ import type { BotAccessCheck } from "./agents/profile-policy";
 import type { AgentProfileStore } from "./agents/profile-store";
 import { createAgentRoutes } from "./agents/routes";
 import {
+  createPersonalAiCredentialInternalRoutes,
+  type PersonalAiCredentialInternalRoutesOptions,
+} from "./ai-connections/internal-routes";
+import {
   createPersonalAiConnectionRoutes,
   type PersonalAiConnectionRoutesOptions,
 } from "./ai-connections/routes";
@@ -238,6 +242,8 @@ export function createApp(
     PersonalAiConnectionRoutesOptions,
     "requireUser"
   >,
+  /** Private one-use credential redemption; appended to preserve positional call sites. */
+  personalAiCredentialRedemption?: PersonalAiCredentialInternalRoutesOptions,
 ) {
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -832,6 +838,13 @@ export function createApp(
         ...personalAiConnections,
         requireUser,
       }),
+    );
+  }
+
+  if (personalAiCredentialRedemption) {
+    app.route(
+      "/",
+      createPersonalAiCredentialInternalRoutes(personalAiCredentialRedemption),
     );
   }
 

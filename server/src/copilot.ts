@@ -18,6 +18,10 @@ import type {
   AgentActor,
   AgentAdaptiveReasoningCeiling,
 } from "./agents/profile-types";
+import type {
+  GovernedRemoteRunProperties,
+  PersonalAiRunGovernanceInput,
+} from "./ai-connections/run-delivery";
 import { projectRunInputForModel } from "./attachments/model-images";
 import type { AgentFetch, StallGuard } from "./channels/stall-guard";
 import type { DeploymentConfig } from "./config";
@@ -396,6 +400,8 @@ export async function buildAgents(
   handoff?: HandoffForRun,
   /** Model-only input enrichment after prompt-safe projection. Applied only to built-in Bots. */
   prepareRunInput?: PrepareRunInput,
+  /** Server-owned personal-provider fields for remote runs, resolved from a trusted actor closure. */
+  governRemoteRun?: GovernRemoteRun,
 ): Promise<Record<string, AbstractAgent>> {
   const vendors = await loadVendors().catch(() => [] as readonly string[]);
   return Object.fromEntries(
@@ -415,6 +421,7 @@ export async function buildAgents(
           agentFetch,
           handoff,
           prepareRunInput,
+          governRemoteRun,
         ),
       ]),
     ),
@@ -434,6 +441,7 @@ async function buildAgent(
   agentFetch?: AgentFetch,
   handoff?: HandoffForRun,
   prepareRunInput?: PrepareRunInput,
+  governRemoteRun?: GovernRemoteRun,
 ): Promise<AbstractAgent> {
   if (agent.type === "unavailable") {
     return new UnavailableAgent(agent);
@@ -497,6 +505,7 @@ async function buildAgent(
       narrowing ? offeredFor : undefined,
       agentFetch,
       handoff,
+      governRemoteRun,
     );
   }
 
@@ -568,6 +577,14 @@ export type HandoffForRun = (
   input: RunAgentInput,
 ) => Promise<readonly GrantedTool[]>;
 
+/** Attach application-owned identity and personal-provider delivery to one authorized remote run. */
+export type GovernRemoteRun = (
+  input: PersonalAiRunGovernanceInput,
+) => Promise<GovernedRemoteRunProperties | undefined>;
+
+/** Resolve the governor from the authenticated/routine-owned actor, never from AG-UI input. */
+export type GovernRemoteRunForActor = (actorId: string) => GovernRemoteRun;
+
 /**
  * How a deployment narrows a Bot's tools to the ones a run is about. Absent means it does not.
  *
@@ -587,6 +604,16 @@ export type ToolSelection = {
   /** Overrides the default catalogue size below which nothing is narrowed. */
   floor?: number;
 };
+
+function withoutGovernedRunProperties(
+  properties: RunAgentInput["forwardedProps"],
+): Record<string, unknown> {
+  const safe = { ...(properties ?? {}) } as Record<string, unknown>;
+  delete safe.openbotRun;
+  delete safe.openbotCredentialLease;
+  delete safe.openbotAdmissionKey;
+  return safe;
+}
 
 /**
  * A remote AG-UI agent that states its standing role on every run.
@@ -631,6 +658,8 @@ function remoteAgentWithStandingRole(
   agentFetch?: AgentFetch,
   /** Run-scoped handoff and escalation tools, executed by this deployment on callback. */
   handoff?: HandoffForRun,
+  /** Personal-provider delivery, made from the actor already authorized for this Bot. */
+  governRemoteRun?: GovernRemoteRun,
 ) {
   const remote = new HttpAgent({
     url: agent.endpoint,
@@ -681,6 +710,7 @@ function remoteAgentWithStandingRole(
     tools: GrantedTool[],
     input: RunAgentInput,
     next: AbstractAgent,
+    governed?: GovernedRemoteRunProperties,
   ) => {
     const safeInput = projectRunInputForModel(input);
     const holdingsMessage = holdingsMessageFor(tools);
@@ -722,7 +752,7 @@ function remoteAgentWithStandingRole(
       ],
       // Who the Bot is calling back as, so the audit row names it rather than "an agent".
       forwardedProps: {
-        ...(input.forwardedProps ?? {}),
+        ...withoutGovernedRunProperties(input.forwardedProps),
         openbotBotId: agent.id,
         ...(agent.model ? { openbotAgentModel: agent.model } : {}),
         ...(reasoningEffort
@@ -755,6 +785,9 @@ function remoteAgentWithStandingRole(
              * cannot prove whose run it is should not be spending anybody's grants.
              */
             {}),
+        // Last by design. The browser/model may send fields with these names, but only the result
+        // of the trusted actor closure reaches the managed endpoint.
+        ...(governed ?? {}),
       },
     } as never);
   };
@@ -770,10 +803,22 @@ function remoteAgentWithStandingRole(
         Promise.all([
           narrow ? narrow(input) : Promise.resolve(tools),
           handoff?.(agent.id, input) ?? Promise.resolve([]),
-        ]).then(([offered, passing]) =>
-          passing.length > 0 ? [...offered, ...passing] : offered,
+          governRemoteRun?.({
+            botId: agent.id,
+            endpoint: agent.endpoint,
+            runId: input.runId,
+            threadId: input.threadId,
+            forwardedProps: input.forwardedProps ?? {},
+          }),
+        ]).then(([offered, passing, governed]) => ({
+          offered: passing.length > 0 ? [...offered, ...passing] : offered,
+          governed,
+        })),
+      ).pipe(
+        switchMap(({ offered, governed }) =>
+          runWith(offered, input, next, governed),
         ),
-      ).pipe(switchMap((offered) => runWith(offered, input, next))),
+      ),
     ),
   );
 
@@ -914,6 +959,8 @@ export async function resolveRuntimeAgents(
   onlyBotId?: string,
   /** Per-actor model input preparation; ignored for remote AG-UI endpoints. */
   prepareRunInput?: PrepareRunInput,
+  /** Server-owned personal-provider delivery for remote agents. */
+  governRemoteRun?: GovernRemoteRun,
 ): Promise<Record<string, AbstractAgent>> {
   const all = await loadAgents();
   if (all.length === 0) {
@@ -945,6 +992,7 @@ export async function resolveRuntimeAgents(
     agentFetch,
     handoff,
     prepareRunInput,
+    governRemoteRun,
   );
 }
 
@@ -1025,6 +1073,8 @@ export function createRequestAgents(
   handoffForActor?: (actorId: string) => HandoffForRun,
   /** Server-authorized multimodal preparation for built-in Bots only. */
   prepareRunInputForActor?: PrepareRunInputForActor,
+  /** Server-owned remote-run properties resolved only from the trusted request actor. */
+  governRemoteRunForActor?: GovernRemoteRunForActor,
 ) {
   return async ({ request }: { request: Request }) => {
     const actor = await identifyActor(request);
@@ -1042,6 +1092,7 @@ export function createRequestAgents(
       handoffForActor?.(actor.id),
       undefined,
       prepareRunInputForActor?.(actor.id),
+      governRemoteRunForActor?.(actor.id),
     );
   };
 }
@@ -1186,6 +1237,8 @@ export function mountCopilotRuntime(
   runtimeTimingOptions?: RuntimeTimingOptions,
   /** Server-authorized multimodal preparation for built-in Bots only. */
   prepareRunInputForActor?: PrepareRunInputForActor,
+  /** Server-owned remote-run properties resolved only from the trusted actor. */
+  governRemoteRunForActor?: GovernRemoteRunForActor,
 ) {
   const { intelligence } = config.runtime;
 
@@ -1229,6 +1282,7 @@ export function mountCopilotRuntime(
       // what each of them was granted, on every delivery and again on every retry.
       input.botId,
       prepareRunInputForActor?.(actor.id),
+      governRemoteRunForActor?.(actor.id),
     );
     return agents[input.botId] ?? null;
   };
@@ -1281,6 +1335,7 @@ export function mountCopilotRuntime(
       agentFetch,
       handoffForActor,
       prepareRunInputForActor,
+      governRemoteRunForActor,
     ) as never,
   });
 

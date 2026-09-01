@@ -40,11 +40,15 @@ function jsonMediaType(value: string | undefined) {
  * service compares that signed tuple to the durable row and live connection before returning a
  * provider-discriminated secret exactly once.
  */
-export function createPersonalAiCredentialInternalRoutes(options: {
+export type PersonalAiCredentialInternalRoutesOptions = {
   service: Pick<PersonalAiCredentialLeaseService, "redeem">;
   encryptionKey: string;
   managedAgentToken: string;
-}) {
+};
+
+export function createPersonalAiCredentialInternalRoutes(
+  options: PersonalAiCredentialInternalRoutesOptions,
+) {
   const routes = new Hono();
   const limitBody = bodyLimit({
     maxSize: MAX_REDEMPTION_BODY_BYTES,

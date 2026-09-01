@@ -487,13 +487,13 @@ attach a lease and actor admission key after agent authorization.
 
 **Acceptance criteria:**
 
-- [ ] Server-owned forwarded properties overwrite client attempts to provide actor/lease fields.
-- [ ] A user with no active connection receives the Settings guidance before the remote agent is called.
-- [ ] Handoffs and routine runs mint leases for their original trusted actor, not the model or browser body.
+- [x] Server-owned forwarded properties overwrite client attempts to provide actor/lease fields.
+- [x] A user with no active connection receives the Settings guidance before the remote agent is called.
+- [x] Handoffs and routine runs mint leases for their original trusted actor, not the model or browser body.
 
 **Verification:**
 
-- [ ] `bun test server/tests/copilot.test.ts server/tests/agent-handoff-delivery.test.ts server/tests/routine-endpoint.test.ts`
+- [x] `bun test server/tests/copilot.test.ts server/tests/agent-handoff-delivery.test.ts server/tests/routine-endpoint.test.ts`
 
 **Dependencies:** Task 16.
 

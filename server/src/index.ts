@@ -20,7 +20,12 @@ import { handoffTool } from "./agents/handoff-tool";
 import { createAgentProfileStore } from "./agents/profile-store";
 import type { AgentActor } from "./agents/profile-types";
 import { createRuntimeAgentLoader } from "./agents/runtime-agents";
+import { createPersonalAiCredentialLeaseService } from "./ai-connections/leases";
 import { createOpenRouterKeyValidator } from "./ai-connections/openrouter";
+import {
+  createPersonalAiRunGovernorForActor,
+  trustedRunDepth,
+} from "./ai-connections/run-delivery";
 import {
   createPersonalAiConnectionStore,
   createPersonalAiOwnedCredentialRetirer,
@@ -183,6 +188,20 @@ const personalAiConnectionStore = createPersonalAiConnectionStore({
   database,
   encryptionKey: config.keyEncryptionKey,
 });
+const personalAiCredentialLeases = createPersonalAiCredentialLeaseService({
+  database,
+  encryptionKey: config.keyEncryptionKey,
+});
+const managedAgentEndpoint = config.managedAgent?.endpoint.toString();
+const governRemoteRunForActor = managedAgentEndpoint
+  ? (actorUserId: string) =>
+      createPersonalAiRunGovernorForActor({
+        actorUserId,
+        encryptionKey: config.keyEncryptionKey,
+        managedAgentEndpoint,
+        leases: personalAiCredentialLeases,
+      })
+  : undefined;
 const openRouterKeyValidator = createOpenRouterKeyValidator();
 const agentVault = {
   store: credentialStore,
@@ -772,6 +791,7 @@ const buildAgentFor = async ({
     // asked what they hold.
     agentId,
     prepareRunInputForActor(actor.id),
+    governRemoteRunForActor?.(actor.id),
   );
   const agent = agents[agentId];
   if (!agent) {
@@ -922,12 +942,13 @@ const copilotRuntime = mountCopilotRuntime(
       actorId,
       runId: input.runId,
       threadId: input.threadId,
-      depth: from?.depth ?? 0,
+      depth: trustedRunDepth(from, actorId, botId),
     };
     return handoffToolsForRun(run);
   },
   undefined,
   prepareRunInputForActor,
+  governRemoteRunForActor,
 );
 
 /**
@@ -1194,6 +1215,13 @@ const app = createApp(
       (origin): origin is string => origin !== undefined,
     ),
   },
+  config.managedAgent
+    ? {
+        service: personalAiCredentialLeases,
+        encryptionKey: config.keyEncryptionKey,
+        managedAgentToken: config.managedAgent.token,
+      }
+    : undefined,
 );
 
 /**

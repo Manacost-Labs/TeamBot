@@ -8,6 +8,7 @@ import {
   builtInAgentConfiguration,
   createRequestAgents,
   disableInspectorMetadata,
+  type GovernRemoteRun,
   registeredAgentFromRow,
   resolveRuntimeAgents,
   standingRoleMessage,
@@ -619,6 +620,142 @@ describe("standing agent roles", () => {
     expect(endpoint.requests.at(-1)?.forwardedProps).not.toMatchObject({
       openbotAgentReasoningEffort: "adaptive",
     });
+  });
+
+  test("overwrites every client-supplied governed run property before dialling a remote Bot", async () => {
+    await using endpoint = fakeAgUiEndpoint();
+    const governed: GovernRemoteRun = async (input) => {
+      expect(input).toMatchObject({
+        botId: "agent_expense",
+        forwardedProps: {
+          openbotRun: "browser-run",
+          openbotCredentialLease: "browser-lease",
+          openbotAdmissionKey: "browser-actor",
+        },
+      });
+      return {
+        openbotRun: "server-run",
+        openbotCredentialLease: "server-lease",
+        openbotAdmissionKey: "server-actor",
+      };
+    };
+    const agents = await buildAgents(
+      [remoteAgent(endpoint.url)],
+      { provider: "openai", defaultModel: "gpt-5.6-terra" },
+      null,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      governed,
+    );
+
+    agents.agent_expense?.setMessages([userMessage("Check this.")]);
+    await agents.agent_expense?.runAgent({
+      forwardedProps: {
+        openbotRun: "browser-run",
+        openbotCredentialLease: "browser-lease",
+        openbotAdmissionKey: "browser-actor",
+      },
+    });
+
+    expect(endpoint.requests.at(-1)?.forwardedProps).toMatchObject({
+      openbotRun: "server-run",
+      openbotCredentialLease: "server-lease",
+      openbotAdmissionKey: "server-actor",
+    });
+    expect(
+      JSON.stringify(endpoint.requests.at(-1)?.forwardedProps),
+    ).not.toContain("browser-");
+  });
+
+  test("fails governed preparation before the remote endpoint is called", async () => {
+    await using endpoint = fakeAgUiEndpoint();
+    const agents = await buildAgents(
+      [remoteAgent(endpoint.url)],
+      { provider: "openai", defaultModel: "gpt-5.6-terra" },
+      null,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      async () => {
+        throw new Error(
+          "AI недоступен: подключите ChatGPT или OpenRouter в настройках",
+        );
+      },
+    );
+
+    agents.agent_expense?.setMessages([userMessage("Check this.")]);
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(agents.agent_expense?.runAgent()).rejects.toThrow(
+        "AI недоступен: подключите ChatGPT или OpenRouter в настройках",
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+    expect(endpoint.requests).toEqual([]);
+  });
+
+  test("governs only the managed endpoint when customer and managed Bots coexist", async () => {
+    await using managedEndpoint = fakeAgUiEndpoint();
+    await using customerEndpoint = fakeAgUiEndpoint();
+    const visited: string[] = [];
+    const governed: GovernRemoteRun = async (input) => {
+      visited.push(input.endpoint);
+      return input.endpoint === managedEndpoint.url
+        ? {
+            openbotRun: "server-run",
+            openbotCredentialLease: "server-lease",
+            openbotAdmissionKey: "server-actor",
+          }
+        : undefined;
+    };
+    const agents = await buildAgents(
+      [
+        remoteAgent(managedEndpoint.url),
+        remoteAgent(customerEndpoint.url, {
+          id: "agent_customer",
+          name: "Customer Agent",
+        }),
+      ],
+      { provider: "openai", defaultModel: "gpt-5.6-terra" },
+      null,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      governed,
+    );
+
+    agents.agent_expense?.setMessages([userMessage("Managed work")]);
+    agents.agent_customer?.setMessages([userMessage("Customer work")]);
+    await agents.agent_expense?.runAgent();
+    await agents.agent_customer?.runAgent();
+
+    expect(visited).toEqual([managedEndpoint.url, customerEndpoint.url]);
+    expect(managedEndpoint.requests.at(-1)?.forwardedProps).toMatchObject({
+      openbotCredentialLease: "server-lease",
+    });
+    expect(customerEndpoint.requests.at(-1)?.forwardedProps).not.toHaveProperty(
+      "openbotCredentialLease",
+    );
   });
 
   test("resolves a deleted coworker as a tombstone that never reaches its endpoint", async () => {
