@@ -1,6 +1,12 @@
 import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { AppVariables } from "../auth/guards";
+import {
+  type ChatGptDeviceFlowService,
+  type ChatGptDeviceFlowStart,
+  type ChatGptDeviceFlowStatus,
+  ChatGptDeviceFlowUnavailableError,
+} from "./device-flows";
 import type {
   OpenRouterKeyValidationFailureCode,
   OpenRouterKeyValidator,
@@ -12,6 +18,7 @@ import type {
 } from "./store";
 
 const CONNECTION_PATH = "/api/ai-connections";
+const CHATGPT_DEVICE_FLOW_PATH = `${CONNECTION_PATH}/chatgpt/device-flow`;
 const MAX_MUTATION_BODY_BYTES = 16 * 1_024;
 
 export type PersonalAiConnectionRouteStore = Pick<
@@ -24,6 +31,7 @@ export type PersonalAiConnectionRoutesOptions = Readonly<{
   validator: OpenRouterKeyValidator;
   requireUser: MiddlewareHandler<{ Variables: AppVariables }>;
   allowedOrigins: readonly string[];
+  deviceFlows?: ChatGptDeviceFlowService;
 }>;
 
 type PublicConnection = Readonly<{
@@ -165,6 +173,34 @@ function connectionEnvelope(status: PersonalAiConnectionStatus | null): {
   return { connection: status ? publicConnection(status) : null };
 }
 
+function publicDeviceFlow(
+  flow: ChatGptDeviceFlowStatus | ChatGptDeviceFlowStart,
+) {
+  const projected: Record<string, unknown> = {
+    flowId: flow.flowId,
+    state: flow.state,
+    expiresAt: flow.expiresAt.toISOString(),
+    retryable: flow.retryable,
+  };
+  if ("verificationUrl" in flow && "userCode" in flow) {
+    projected.verificationUrl = flow.verificationUrl;
+    projected.userCode = flow.userCode;
+  }
+  return { flow: projected };
+}
+
+function deviceFlowFailure(
+  context: Context<{ Variables: AppVariables }>,
+  error: unknown,
+) {
+  return error instanceof ChatGptDeviceFlowUnavailableError
+    ? context.json({ error: "ChatGPT connection flow is unavailable." }, 404)
+    : context.json(
+        { error: "ChatGPT connection is temporarily unavailable." },
+        503,
+      );
+}
+
 function unavailable(context: Context<{ Variables: AppVariables }>) {
   return context.json(
     { error: "Personal AI connection is temporarily unavailable." },
@@ -199,6 +235,7 @@ export function createPersonalAiConnectionRoutes(
 ) {
   const routes = new Hono<{ Variables: AppVariables }>();
   const configuredOrigins = canonicalOrigins(options.allowedOrigins);
+  const deviceFlows = options.deviceFlows;
   const rejectQuery = noQuery();
   const requireMutationOrigin = mutationOrigin(configuredOrigins);
   const requireJson = exactJsonMediaType();
@@ -261,12 +298,15 @@ export function createPersonalAiConnectionRoutes(
       }
 
       try {
-        const status = await options.store.connect({
-          actorUserId: context.var.actor.id,
-          provider: "openrouter",
-          plaintext: body.apiKey,
-          safeMetadata: validation.metadata,
-        });
+        const status = await options.store.connect(
+          {
+            actorUserId: context.var.actor.id,
+            provider: "openrouter",
+            plaintext: body.apiKey,
+            safeMetadata: validation.metadata,
+          },
+          deviceFlows?.cancelInvalidated,
+        );
         return context.json(connectionEnvelope(status));
       } catch {
         return unavailable(context);
@@ -289,13 +329,99 @@ export function createPersonalAiConnectionRoutes(
         );
       }
       try {
-        const status = await options.store.disconnect(context.var.actor.id);
+        const status = await options.store.disconnect(
+          context.var.actor.id,
+          deviceFlows?.cancelInvalidated,
+        );
         return context.json(connectionEnvelope(status));
       } catch {
         return unavailable(context);
       }
     },
   );
+
+  if (deviceFlows) {
+    routes.use(CHATGPT_DEVICE_FLOW_PATH, async (context, next) => {
+      context.header("cache-control", "private, no-store");
+      await next();
+    });
+    routes.use(`${CHATGPT_DEVICE_FLOW_PATH}/*`, async (context, next) => {
+      context.header("cache-control", "private, no-store");
+      await next();
+    });
+
+    routes.post(
+      CHATGPT_DEVICE_FLOW_PATH,
+      options.requireUser,
+      rejectQuery,
+      requireMutationOrigin,
+      requireJson,
+      limitMutationBody,
+      async (context) => {
+        const body = await context.req.json().catch(() => undefined);
+        if (
+          !body ||
+          typeof body !== "object" ||
+          Array.isArray(body) ||
+          Object.keys(body).length !== 0
+        ) {
+          return context.json(
+            { error: "An empty JSON object is required." },
+            400,
+          );
+        }
+        try {
+          const flow = await deviceFlows.start(context.var.actor.id);
+          return context.json(publicDeviceFlow(flow), 201);
+        } catch (error) {
+          return deviceFlowFailure(context, error);
+        }
+      },
+    );
+
+    routes.get(
+      `${CHATGPT_DEVICE_FLOW_PATH}/:flowId`,
+      options.requireUser,
+      rejectQuery,
+      async (context) => {
+        try {
+          const flow = await deviceFlows.status(
+            context.var.actor.id,
+            context.req.param("flowId"),
+          );
+          return context.json(publicDeviceFlow(flow));
+        } catch (error) {
+          return deviceFlowFailure(context, error);
+        }
+      },
+    );
+
+    routes.delete(
+      `${CHATGPT_DEVICE_FLOW_PATH}/:flowId`,
+      options.requireUser,
+      rejectQuery,
+      requireMutationOrigin,
+      limitMutationBody,
+      async (context) => {
+        const body = await context.req.arrayBuffer().catch(() => undefined);
+        if (body?.byteLength !== 0) {
+          return context.json(
+            { error: "A cancellation request must have an empty body." },
+            400,
+          );
+        }
+        try {
+          const flow = await deviceFlows.cancel(
+            context.var.actor.id,
+            context.req.param("flowId"),
+          );
+          return context.json(publicDeviceFlow(flow));
+        } catch (error) {
+          return deviceFlowFailure(context, error);
+        }
+      },
+    );
+  }
 
   return routes;
 }

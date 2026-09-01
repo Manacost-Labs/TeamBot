@@ -5,6 +5,7 @@ import { authoriseAgentCall, sameToken } from "./agents/callback-token";
 import type { BotAccessCheck } from "./agents/profile-policy";
 import type { AgentProfileStore } from "./agents/profile-store";
 import { createAgentRoutes } from "./agents/routes";
+import type { ChatGptDeviceFlowService } from "./ai-connections/device-flows";
 import {
   createPersonalAiCredentialInternalRoutes,
   type PersonalAiCredentialInternalRoutesOptions,
@@ -240,10 +241,12 @@ export function createApp(
   /** Actor-owned personal AI settings; appended to preserve positional call sites. */
   personalAiConnections?: Omit<
     PersonalAiConnectionRoutesOptions,
-    "requireUser"
+    "requireUser" | "deviceFlows"
   >,
   /** Private one-use credential redemption; appended to preserve positional call sites. */
   personalAiCredentialRedemption?: PersonalAiCredentialInternalRoutesOptions,
+  /** Actor-owned ChatGPT device login; appended to preserve positional call sites. */
+  personalAiDeviceFlows?: ChatGptDeviceFlowService,
 ) {
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -837,6 +840,7 @@ export function createApp(
       createPersonalAiConnectionRoutes({
         ...personalAiConnections,
         requireUser,
+        deviceFlows: personalAiDeviceFlows,
       }),
     );
   }

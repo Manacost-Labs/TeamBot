@@ -20,6 +20,10 @@ import { handoffTool } from "./agents/handoff-tool";
 import { createAgentProfileStore } from "./agents/profile-store";
 import type { AgentActor } from "./agents/profile-types";
 import { createRuntimeAgentLoader } from "./agents/runtime-agents";
+import {
+  createChatGptDeviceAuthAgentClient,
+  createChatGptDeviceFlowService,
+} from "./ai-connections/device-flows";
 import { createPersonalAiCredentialLeaseService } from "./ai-connections/leases";
 import { createOpenRouterKeyValidator } from "./ai-connections/openrouter";
 import {
@@ -192,6 +196,16 @@ const personalAiCredentialLeases = createPersonalAiCredentialLeaseService({
   database,
   encryptionKey: config.keyEncryptionKey,
 });
+const personalAiDeviceFlows = config.managedAgent
+  ? createChatGptDeviceFlowService({
+      database,
+      connections: personalAiConnectionStore,
+      agent: createChatGptDeviceAuthAgentClient({
+        managedAgentEndpoint: config.managedAgent.endpoint.toString(),
+        managedAgentToken: config.managedAgent.token,
+      }),
+    })
+  : undefined;
 const managedAgentEndpoint = config.managedAgent?.endpoint.toString();
 const governRemoteRunForActor = managedAgentEndpoint
   ? (actorUserId: string) =>
@@ -1222,6 +1236,7 @@ const app = createApp(
         managedAgentToken: config.managedAgent.token,
       }
     : undefined,
+  personalAiDeviceFlows,
 );
 
 /**

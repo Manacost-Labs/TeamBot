@@ -225,6 +225,13 @@
       "when": 1788223442042,
       "tag": "0031_personal_ai",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1788229205120,
+      "tag": "0032_tan_exiles",
+      "breakpoints": true
     }
   ]
 }

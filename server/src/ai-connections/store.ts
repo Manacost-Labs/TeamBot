@@ -1,12 +1,17 @@
 import { createHash } from "node:crypto";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   type CredentialStoreValue,
   createCredentialStore,
   encryptSecret,
 } from "../credentials";
 import type { Database } from "../db/client";
-import { auditEvents, credentials, userAiConnections } from "../db/schema";
+import {
+  auditEvents,
+  credentials,
+  personalAiDeviceFlows,
+  userAiConnections,
+} from "../db/schema";
 
 export type PersonalAiProvider = "chatgpt" | "openrouter";
 export type PersonalAiConnectionState = "active" | "disconnected";
@@ -60,7 +65,7 @@ type StoreInput = {
   now?: () => Date;
 };
 
-type ConnectInput = {
+export type PersonalAiConnectInput = {
   actorUserId: string;
   provider: PersonalAiProvider;
   plaintext: string;
@@ -68,6 +73,29 @@ type ConnectInput = {
 };
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+const PREPARED_PERSONAL_AI_CONNECTION = Symbol(
+  "prepared-personal-ai-connection",
+);
+
+/** Opaque encrypted input that can safely cross into one caller-owned database transaction. */
+export type PreparedPersonalAiConnection = Readonly<{
+  [PREPARED_PERSONAL_AI_CONNECTION]: true;
+  actorUserId: string;
+  provider: PersonalAiProvider;
+  metadata: Record<string, unknown>;
+  desired: Omit<CredentialStoreValue, "encryptedValue" | "metadata">;
+  encryptedValue: string;
+}>;
+
+export type StoredPersonalAiConnection = Readonly<{
+  credentialId: string;
+  status: PersonalAiConnectionStatus;
+  invalidatedChatGptFlowIds: readonly string[];
+}>;
+
+export type InvalidatedChatGptFlowCanceller = (
+  flowIds: readonly string[],
+) => Promise<void>;
 
 const MAX_OPENROUTER_CREDENTIAL_CHARACTERS = 4_096;
 // The current ChatGPT runtime consumes one serialized auth document. 256 Ki characters leaves ample
@@ -165,13 +193,42 @@ function connectionStatus(input: {
   };
 }
 
-async function lockActor(transaction: Transaction, actorUserId: string) {
+export async function lockPersonalAiActor(
+  transaction: Transaction,
+  actorUserId: string,
+) {
   // There is no connection row to lock on a person's first connect. A transaction-scoped advisory
   // lock serialises that empty-row case too, preventing two first connects from leaving an orphan
   // live credential when they race to upsert the same user primary key.
   await transaction.execute(
     sql`select pg_advisory_xact_lock(hashtextextended(${actorUserId}, 0))`,
   );
+}
+
+async function invalidateChatGptDeviceFlows(
+  transaction: Transaction,
+  actorUserId: string,
+  updatedAt: Date,
+): Promise<readonly string[]> {
+  const invalidated = await transaction
+    .update(personalAiDeviceFlows)
+    .set({ state: "cancelled", updatedAt })
+    .where(
+      and(
+        eq(personalAiDeviceFlows.userId, actorUserId),
+        inArray(personalAiDeviceFlows.state, ["pending", "collecting"]),
+      ),
+    )
+    .returning({ id: personalAiDeviceFlows.id });
+  return invalidated.map(({ id }) => id);
+}
+
+async function cancelInvalidatedFlows(
+  flowIds: readonly string[],
+  cancel?: InvalidatedChatGptFlowCanceller,
+) {
+  if (flowIds.length === 0 || !cancel) return;
+  await cancel(flowIds).catch(() => undefined);
 }
 
 async function recordDatabaseAudit(
@@ -237,9 +294,9 @@ export function createPersonalAiConnectionStore(input: StoreInput) {
     return row ? connectionStatus(row) : null;
   }
 
-  async function connect(
-    connectInput: ConnectInput,
-  ): Promise<PersonalAiConnectionStatus> {
+  async function prepareConnection(
+    connectInput: PersonalAiConnectInput,
+  ): Promise<PreparedPersonalAiConnection> {
     if (!connectInput.actorUserId || !isProvider(connectInput.provider)) {
       throw new Error("Personal AI connection input is invalid");
     }
@@ -256,148 +313,215 @@ export function createPersonalAiConnectionStore(input: StoreInput) {
       throw new Error("Personal AI credential exceeds its safe size");
     }
 
-    const metadata = projectPersonalAiSafeMetadata(
-      connectInput.safeMetadata,
+    const metadata = Object.freeze(
+      projectPersonalAiSafeMetadata(connectInput.safeMetadata),
     ) as Record<string, unknown>;
-    const desired: Omit<CredentialStoreValue, "encryptedValue" | "metadata"> = {
-      kind: "model",
-      provider: connectInput.provider,
-      keyId: derivePersonalAiCredentialKeyId(
-        connectInput.actorUserId,
-        connectInput.provider,
-      ),
-    };
+    const desired: Omit<CredentialStoreValue, "encryptedValue" | "metadata"> =
+      Object.freeze({
+        kind: "model",
+        provider: connectInput.provider,
+        keyId: derivePersonalAiCredentialKeyId(
+          connectInput.actorUserId,
+          connectInput.provider,
+        ),
+      });
     // Encryption is deliberately outside the transaction so a pooled connection is not held while
     // WebCrypto does work. Only the encrypted envelope crosses into the database callback.
     const encryptedValue = await encryptSecret(
       input.encryptionKey,
       connectInput.plaintext,
     );
-    const result = await input.database.transaction(async (transaction) => {
-      await lockActor(transaction, connectInput.actorUserId);
-      const timestamp = now();
+    return Object.freeze({
+      [PREPARED_PERSONAL_AI_CONNECTION]: true as const,
+      actorUserId: connectInput.actorUserId,
+      provider: connectInput.provider,
+      metadata,
+      desired,
+      encryptedValue,
+    });
+  }
 
-      const [existing] = await transaction
-        .select({
-          credentialId: userAiConnections.credentialId,
-        })
-        .from(userAiConnections)
-        .where(eq(userAiConnections.userId, connectInput.actorUserId))
-        .for("update");
-
-      const [previous] = existing
-        ? await transaction
-            .select({
-              id: credentials.id,
-              kind: credentials.kind,
-              provider: credentials.provider,
-              keyId: credentials.keyId,
-              revokedAt: credentials.revokedAt,
-            })
-            .from(credentials)
-            .where(eq(credentials.id, existing.credentialId))
-            .for("update")
+  /**
+   * Rotate the vault row and connection pointer inside a transaction owned by the caller.
+   *
+   * This is intentionally not a plaintext API: validation and encryption happen before the caller
+   * opens its transaction. Device-flow completion can therefore commit the vault rotation, pointer,
+   * audit event and completed flow marker on one connection without holding it across network or
+   * WebCrypto work.
+   */
+  async function connectPrepared(
+    transaction: Transaction,
+    prepared: PreparedPersonalAiConnection,
+  ): Promise<StoredPersonalAiConnection> {
+    if (
+      !prepared ||
+      typeof prepared !== "object" ||
+      prepared[PREPARED_PERSONAL_AI_CONNECTION] !== true ||
+      !prepared.actorUserId ||
+      !isProvider(prepared.provider) ||
+      prepared.desired.kind !== "model" ||
+      prepared.desired.provider !== prepared.provider ||
+      prepared.desired.keyId !==
+        derivePersonalAiCredentialKeyId(
+          prepared.actorUserId,
+          prepared.provider,
+        ) ||
+      typeof prepared.encryptedValue !== "string" ||
+      prepared.encryptedValue.length === 0
+    ) {
+      throw new Error("Prepared personal AI connection is invalid");
+    }
+    await lockPersonalAiActor(transaction, prepared.actorUserId);
+    const timestamp = now();
+    const invalidatedChatGptFlowIds =
+      prepared.provider === "openrouter"
+        ? await invalidateChatGptDeviceFlows(
+            transaction,
+            prepared.actorUserId,
+            timestamp,
+          )
         : [];
 
-      const value: CredentialStoreValue = {
-        ...desired,
-        metadata,
-        encryptedValue,
-      };
-      const previousMatchesDesired =
-        previous?.revokedAt === null &&
-        previous.kind === desired.kind &&
-        previous.provider === desired.provider &&
-        previous.keyId === desired.keyId;
+    const [existing] = await transaction
+      .select({
+        credentialId: userAiConnections.credentialId,
+      })
+      .from(userAiConnections)
+      .where(eq(userAiConnections.userId, prepared.actorUserId))
+      .for("update");
 
-      let stored: { id: string; revokedAt: Date | null };
-      if (previousMatchesDesired && previous) {
-        stored = await credentialStore.rotate(
-          { ...value, previousCredentialId: previous.id },
-          transaction,
-        );
-      } else {
-        if (previous?.revokedAt === null) {
-          // Provider switches cannot use `rotate`: the vault correctly requires the old and new key
-          // identity to match. Revoke plus create is still atomic here because both receive this
-          // transaction, along with the pointer update below.
-          await credentialStore.revoke(previous.id, transaction);
-        }
+    const [previous] = existing
+      ? await transaction
+          .select({
+            id: credentials.id,
+            kind: credentials.kind,
+            provider: credentials.provider,
+            keyId: credentials.keyId,
+            revokedAt: credentials.revokedAt,
+          })
+          .from(credentials)
+          .where(eq(credentials.id, existing.credentialId))
+          .for("update")
+      : [];
 
-        const liveDesired = await credentialStore.findLiveByKey(
-          desired,
-          transaction,
-        );
-        stored = liveDesired
-          ? await credentialStore.rotate(
-              { ...value, previousCredentialId: liveDesired.id },
-              transaction,
-            )
-          : await credentialStore.create(value, transaction);
-      }
+    const value: CredentialStoreValue = {
+      ...prepared.desired,
+      metadata: prepared.metadata,
+      encryptedValue: prepared.encryptedValue,
+    };
+    const previousMatchesDesired =
+      previous?.revokedAt === null &&
+      previous.kind === prepared.desired.kind &&
+      previous.provider === prepared.desired.provider &&
+      previous.keyId === prepared.desired.keyId;
 
-      const write = {
-        provider: connectInput.provider,
-        credentialId: stored.id,
-        state: "active" as const,
-        validatedAt: timestamp,
-        disconnectedAt: null,
-        updatedAt: timestamp,
-      };
-      const [connection] = existing
-        ? await transaction
-            .update(userAiConnections)
-            .set(write)
-            .where(eq(userAiConnections.userId, connectInput.actorUserId))
-            .returning({
-              provider: userAiConnections.provider,
-              state: userAiConnections.state,
-              validatedAt: userAiConnections.validatedAt,
-              disconnectedAt: userAiConnections.disconnectedAt,
-              updatedAt: userAiConnections.updatedAt,
-            })
-        : await transaction
-            .insert(userAiConnections)
-            .values({ userId: connectInput.actorUserId, ...write })
-            .returning({
-              provider: userAiConnections.provider,
-              state: userAiConnections.state,
-              validatedAt: userAiConnections.validatedAt,
-              disconnectedAt: userAiConnections.disconnectedAt,
-              updatedAt: userAiConnections.updatedAt,
-            });
-      if (!connection) {
-        throw new Error("Personal AI connection could not be stored");
-      }
-
-      const status = connectionStatus({
-        ...connection,
-        metadata,
-        credentialRevokedAt: stored.revokedAt,
-      });
-      await recordAudit(
+    let stored: { id: string; revokedAt: Date | null };
+    if (previousMatchesDesired && previous) {
+      stored = await credentialStore.rotate(
+        { ...value, previousCredentialId: previous.id },
         transaction,
-        {
-          action: existing ? "replaced" : "connected",
-          actorUserId: connectInput.actorUserId,
-          provider: status.provider,
-          state: status.state,
-        },
-        timestamp,
       );
-      return status;
-    });
+    } else {
+      if (previous?.revokedAt === null) {
+        // Provider switches cannot use `rotate`: the vault correctly requires the old and new key
+        // identity to match. Revoke plus create is still atomic here because both receive this
+        // transaction, along with the pointer update below.
+        await credentialStore.revoke(previous.id, transaction);
+      }
 
-    return result;
+      const liveDesired = await credentialStore.findLiveByKey(
+        prepared.desired,
+        transaction,
+      );
+      stored = liveDesired
+        ? await credentialStore.rotate(
+            { ...value, previousCredentialId: liveDesired.id },
+            transaction,
+          )
+        : await credentialStore.create(value, transaction);
+    }
+
+    const write = {
+      provider: prepared.provider,
+      credentialId: stored.id,
+      state: "active" as const,
+      validatedAt: timestamp,
+      disconnectedAt: null,
+      updatedAt: timestamp,
+    };
+    const [connection] = existing
+      ? await transaction
+          .update(userAiConnections)
+          .set(write)
+          .where(eq(userAiConnections.userId, prepared.actorUserId))
+          .returning({
+            provider: userAiConnections.provider,
+            state: userAiConnections.state,
+            validatedAt: userAiConnections.validatedAt,
+            disconnectedAt: userAiConnections.disconnectedAt,
+            updatedAt: userAiConnections.updatedAt,
+          })
+      : await transaction
+          .insert(userAiConnections)
+          .values({ userId: prepared.actorUserId, ...write })
+          .returning({
+            provider: userAiConnections.provider,
+            state: userAiConnections.state,
+            validatedAt: userAiConnections.validatedAt,
+            disconnectedAt: userAiConnections.disconnectedAt,
+            updatedAt: userAiConnections.updatedAt,
+          });
+    if (!connection) {
+      throw new Error("Personal AI connection could not be stored");
+    }
+
+    const status = connectionStatus({
+      ...connection,
+      metadata: prepared.metadata,
+      credentialRevokedAt: stored.revokedAt,
+    });
+    await recordAudit(
+      transaction,
+      {
+        action: existing ? "replaced" : "connected",
+        actorUserId: prepared.actorUserId,
+        provider: status.provider,
+        state: status.state,
+      },
+      timestamp,
+    );
+    return { credentialId: stored.id, status, invalidatedChatGptFlowIds };
+  }
+
+  async function connect(
+    connectInput: PersonalAiConnectInput,
+    cancelInvalidated?: InvalidatedChatGptFlowCanceller,
+  ): Promise<PersonalAiConnectionStatus> {
+    const prepared = await prepareConnection(connectInput);
+    const stored = await input.database.transaction((transaction) =>
+      connectPrepared(transaction, prepared),
+    );
+    await cancelInvalidatedFlows(
+      stored.invalidatedChatGptFlowIds,
+      cancelInvalidated,
+    );
+    return stored.status;
   }
 
   async function disconnect(
     actorUserId: string,
+    cancelInvalidated?: InvalidatedChatGptFlowCanceller,
   ): Promise<PersonalAiConnectionStatus | null> {
     if (!actorUserId) throw new Error("Personal AI actor is required");
 
-    return input.database.transaction(async (transaction) => {
-      await lockActor(transaction, actorUserId);
+    const result = await input.database.transaction(async (transaction) => {
+      await lockPersonalAiActor(transaction, actorUserId);
+      const invalidatedAt = now();
+      const invalidatedChatGptFlowIds = await invalidateChatGptDeviceFlows(
+        transaction,
+        actorUserId,
+        invalidatedAt,
+      );
       const [connection] = await transaction
         .select({
           credentialId: userAiConnections.credentialId,
@@ -410,7 +534,9 @@ export function createPersonalAiConnectionStore(input: StoreInput) {
         .from(userAiConnections)
         .where(eq(userAiConnections.userId, actorUserId))
         .for("update");
-      if (!connection) return null;
+      if (!connection) {
+        return { status: null, invalidatedChatGptFlowIds };
+      }
 
       const [credential] = await transaction
         .select({
@@ -426,11 +552,14 @@ export function createPersonalAiConnectionStore(input: StoreInput) {
       }
 
       if (connection.state === "disconnected") {
-        return connectionStatus({
-          ...connection,
-          metadata: credential.metadata,
-          credentialRevokedAt: credential.revokedAt,
-        });
+        return {
+          status: connectionStatus({
+            ...connection,
+            metadata: credential.metadata,
+            credentialRevokedAt: credential.revokedAt,
+          }),
+          invalidatedChatGptFlowIds,
+        };
       }
 
       if (credential.revokedAt === null) {
@@ -470,11 +599,22 @@ export function createPersonalAiConnectionStore(input: StoreInput) {
         },
         timestamp,
       );
-      return status;
+      return { status, invalidatedChatGptFlowIds };
     });
+    await cancelInvalidatedFlows(
+      result.invalidatedChatGptFlowIds,
+      cancelInvalidated,
+    );
+    return result.status;
   }
 
-  return { connect, status, disconnect };
+  return {
+    connect,
+    connectPrepared,
+    disconnect,
+    prepareConnection,
+    status,
+  };
 }
 
 /**

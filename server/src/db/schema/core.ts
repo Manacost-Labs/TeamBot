@@ -59,7 +59,7 @@ export const personalAiConnectionState = pgEnum(
 );
 export const personalAiDeviceFlowState = pgEnum(
   "personal_ai_device_flow_state",
-  ["pending", "completed", "failed", "cancelled", "expired"],
+  ["pending", "collecting", "completed", "failed", "cancelled", "expired"],
 );
 
 export const users = pgTable("users", {
@@ -426,9 +426,9 @@ export const personalAiDeviceFlows = pgTable(
     updatedAt: updatedAt(),
   },
   (table) => [
-    uniqueIndex("personal_ai_device_flows_pending_user_idx")
+    uniqueIndex("personal_ai_device_flows_active_user_idx")
       .on(table.userId)
-      .where(sql`${table.state} = 'pending'`),
+      .where(sql`${table.state} in ('pending', 'collecting')`),
     index("personal_ai_device_flows_expiry_idx").on(
       table.state,
       table.expiresAt,

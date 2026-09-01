@@ -657,13 +657,13 @@ browser and store the completed auth document in the encrypted vault.
 
 **Acceptance criteria:**
 
-- [ ] Start/poll/cancel derive actor from the session and refuse another actor's flow generically.
-- [ ] Only the server collector receives completion material; it validates shape before atomic connection rotation.
-- [ ] Restart/expiry produces an explicit retryable state and never a connected status without a live credential.
+- [x] Start/poll/cancel derive actor from the session and refuse another actor's flow generically.
+- [x] Only the server collector receives completion material; it validates shape before atomic connection rotation.
+- [x] Restart/expiry produces an explicit retryable state and never a connected status without a live credential.
 
 **Verification:**
 
-- [ ] `bun test server/tests/chatgpt-device-flow.test.ts server/tests/ai-connection-routes.test.ts`
+- [x] `bun test server/tests/chatgpt-device-flow.test.ts server/tests/ai-connection-routes.test.ts`
 
 **Dependencies:** Tasks 11, 13 and 22.
 
