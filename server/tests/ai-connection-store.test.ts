@@ -1,12 +1,12 @@
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import {
   createPersonalAiConnectionStore,
   derivePersonalAiCredentialKeyId,
   type PersonalAiConnectionAuditEvent,
 } from "../src/ai-connections/store";
-import { decryptSecret } from "../src/credentials";
+import { createCredentialStore, decryptSecret } from "../src/credentials";
 import { createDatabase } from "../src/db/client";
 import {
   auditEvents,
@@ -23,6 +23,14 @@ const database = createDatabase(
   TEST_POOL,
 );
 const actorIds: string[] = [];
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
 
 async function createActor() {
   const actorUserId = `ai-connection-${randomUUID()}`;
@@ -73,6 +81,89 @@ afterAll(async () => {
 });
 
 describe("actor-owned personal AI connection store", () => {
+  test("rejects provider-specific boundary+1 credentials before encryption or logging", async () => {
+    const acceptedActorUserId = await createActor();
+    const openRouterActorUserId = await createActor();
+    const chatGptActorUserId = await createActor();
+    const events: PersonalAiConnectionAuditEvent[] = [];
+    const logged: unknown[][] = [];
+    const consoleSpies = [
+      spyOn(console, "log").mockImplementation((...values) => {
+        logged.push(values);
+      }),
+      spyOn(console, "warn").mockImplementation((...values) => {
+        logged.push(values);
+      }),
+      spyOn(console, "error").mockImplementation((...values) => {
+        logged.push(values);
+      }),
+    ];
+
+    try {
+      const store = createPersonalAiConnectionStore({
+        database,
+        encryptionKey,
+      });
+      const accepted = "o".repeat(4_096);
+      await expect(
+        store.connect({
+          actorUserId: acceptedActorUserId,
+          provider: "openrouter",
+          plaintext: accepted,
+          safeMetadata: {},
+        }),
+      ).resolves.toMatchObject({ state: "active" });
+
+      // An invalid encryption key makes the ordering observable: a boundary error must win without
+      // invoking WebCrypto. ChatGPT's 256 Ki-character ceiling is deliberately generous enough for
+      // the existing auth-document runtime contract while still bounding server memory consumption.
+      const rejectingStore = createPersonalAiConnectionStore({
+        database,
+        encryptionKey: "invalid-aes-key",
+        audit: { record: async (event) => events.push(event) },
+      });
+      const openRouterMarker = "openrouter-marker";
+      const chatGptMarker = "chatgpt-marker";
+      const oversizedOpenRouter = `${openRouterMarker}${"o".repeat(
+        4_097 - openRouterMarker.length,
+      )}`;
+      const oversizedChatGpt = `${chatGptMarker}${"c".repeat(
+        256 * 1_024 + 1 - chatGptMarker.length,
+      )}`;
+
+      for (const input of [
+        {
+          actorUserId: openRouterActorUserId,
+          provider: "openrouter" as const,
+          plaintext: oversizedOpenRouter,
+        },
+        {
+          actorUserId: chatGptActorUserId,
+          provider: "chatgpt" as const,
+          plaintext: oversizedChatGpt,
+        },
+      ]) {
+        await expect(
+          rejectingStore.connect({ ...input, safeMetadata: {} }),
+        ).rejects.toThrow("Personal AI credential exceeds its safe size");
+      }
+
+      expect(await rowsFor(openRouterActorUserId)).toEqual({
+        connectionRows: [],
+        credentialRows: [],
+      });
+      expect(await rowsFor(chatGptActorUserId)).toEqual({
+        connectionRows: [],
+        credentialRows: [],
+      });
+      expect(events).toEqual([]);
+      expect(JSON.stringify(logged)).not.toContain("openrouter-marker");
+      expect(JSON.stringify(logged)).not.toContain("chatgpt-marker");
+    } finally {
+      for (const consoleSpy of consoleSpies) consoleSpy.mockRestore();
+    }
+  });
+
   test("connects an actor with an encrypted, server-addressed credential and a safe status", async () => {
     const actorUserId = await createActor();
     const events: PersonalAiConnectionAuditEvent[] = [];
@@ -284,6 +375,208 @@ describe("actor-owned personal AI connection store", () => {
       ),
     ).resolves.toBe("still-live-secret");
     expect(JSON.stringify(after)).not.toContain("must-roll-back");
+  });
+
+  test("never projects an externally revoked credential as active", async () => {
+    const actorUserId = await createActor();
+    const store = createPersonalAiConnectionStore({ database, encryptionKey });
+    await store.connect({
+      actorUserId,
+      provider: "openrouter",
+      plaintext: "later-revoked",
+      safeMetadata: { limitUsd: 10 },
+    });
+    const before = await rowsFor(actorUserId);
+    const credentialId = before.connectionRows[0]?.credentialId;
+    expect(credentialId).toBeDefined();
+
+    await createCredentialStore(database).revoke(credentialId as string);
+
+    const outward = await store.status(actorUserId);
+    expect(outward?.state).toBe("disconnected");
+    expect(outward?.disconnectedAt).toBeInstanceOf(Date);
+    const after = await rowsFor(actorUserId);
+    expect(after.connectionRows[0]?.state).toBe("active");
+    expect(outward?.disconnectedAt?.getTime()).toBe(
+      after.credentialRows[0]?.revokedAt?.getTime(),
+    );
+  });
+
+  test("captures a connect timestamp only after acquiring the actor lock", async () => {
+    const actorUserId = await createActor();
+    const actorLocked = deferred();
+    const releaseActor = deferred();
+    const nowCalled = deferred();
+    let nowCalls = 0;
+    const expectedTimestamp = new Date("2026-08-31T12:00:00.000Z");
+    const blocker = database.transaction(async (transaction) => {
+      await transaction.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${actorUserId}, 0))`,
+      );
+      actorLocked.resolve();
+      await releaseActor.promise;
+    });
+    await actorLocked.promise;
+
+    const store = createPersonalAiConnectionStore({
+      database,
+      encryptionKey,
+      now: () => {
+        nowCalls += 1;
+        nowCalled.resolve();
+        return expectedTimestamp;
+      },
+    });
+    const pendingConnect = store.connect({
+      actorUserId,
+      provider: "openrouter",
+      plaintext: "timestamp-secret",
+      safeMetadata: {},
+    });
+    const calledWhileLocked = await Promise.race([
+      nowCalled.promise.then(() => true),
+      Bun.sleep(100).then(() => false),
+    ]);
+
+    releaseActor.resolve();
+    await blocker;
+    const status = await pendingConnect;
+    expect(calledWhileLocked).toBe(false);
+    expect(nowCalls).toBe(1);
+    expect(status.updatedAt).toEqual(expectedTimestamp);
+  });
+
+  test("rolls connection and credential writes back when the database audit insert fails", async () => {
+    const actorUserId = await createActor();
+    const constraintName = `test_personal_ai_audit_${randomUUID().replaceAll("-", "")}`;
+    await database.execute(
+      sql.raw(
+        `alter table "audit_events" add constraint "${constraintName}" check ("target_id" <> '${actorUserId}') not valid`,
+      ),
+    );
+
+    try {
+      const store = createPersonalAiConnectionStore({
+        database,
+        encryptionKey,
+      });
+      await expect(
+        store.connect({
+          actorUserId,
+          provider: "openrouter",
+          plaintext: "must-roll-back-with-audit",
+          safeMetadata: {},
+        }),
+      ).rejects.toThrow();
+      expect(await rowsFor(actorUserId)).toEqual({
+        connectionRows: [],
+        credentialRows: [],
+      });
+      const auditRows = await database
+        .select({ id: auditEvents.id })
+        .from(auditEvents)
+        .where(eq(auditEvents.actorUserId, actorUserId));
+      expect(auditRows).toEqual([]);
+    } finally {
+      await database.execute(
+        sql.raw(
+          `alter table "audit_events" drop constraint if exists "${constraintName}"`,
+        ),
+      );
+    }
+  });
+
+  test("treats an injected auditor as an additional transactional gate", async () => {
+    const actorUserId = await createActor();
+    const store = createPersonalAiConnectionStore({
+      database,
+      encryptionKey,
+      audit: {
+        record: async () => {
+          throw new Error("test auditor rejected event");
+        },
+      },
+    });
+
+    await expect(
+      store.connect({
+        actorUserId,
+        provider: "openrouter",
+        plaintext: "must-roll-back-with-hook",
+        safeMetadata: {},
+      }),
+    ).rejects.toThrow("test auditor rejected event");
+    expect(await rowsFor(actorUserId)).toEqual({
+      connectionRows: [],
+      credentialRows: [],
+    });
+    const auditRows = await database
+      .select({ id: auditEvents.id })
+      .from(auditEvents)
+      .where(eq(auditEvents.actorUserId, actorUserId));
+    expect(auditRows).toEqual([]);
+  });
+
+  test("serializes transactional audit hooks and database event order with actor commits", async () => {
+    const actorUserId = await createActor();
+    const firstAuditEntered = deferred();
+    const releaseFirstAudit = deferred();
+    const observed: PersonalAiConnectionAuditEvent["action"][] = [];
+    const timestamps = [
+      new Date("2026-08-31T13:00:00.000Z"),
+      new Date("2026-08-31T13:00:01.000Z"),
+    ];
+    const store = createPersonalAiConnectionStore({
+      database,
+      encryptionKey,
+      now: () => timestamps.shift() as Date,
+      audit: {
+        record: async (event) => {
+          if (event.action === "connected") {
+            firstAuditEntered.resolve();
+            await releaseFirstAudit.promise;
+          }
+          observed.push(event.action);
+        },
+      },
+    });
+
+    const first = store.connect({
+      actorUserId,
+      provider: "openrouter",
+      plaintext: "first-concurrent-secret",
+      safeMetadata: {},
+    });
+    await firstAuditEntered.promise;
+    const second = store.connect({
+      actorUserId,
+      provider: "openrouter",
+      plaintext: "second-concurrent-secret",
+      safeMetadata: {},
+    });
+    await Bun.sleep(50);
+    releaseFirstAudit.resolve();
+    await Promise.all([first, second]);
+
+    expect(observed).toEqual(["connected", "replaced"]);
+    const auditRows = await database
+      .select({
+        eventType: auditEvents.eventType,
+        createdAt: auditEvents.createdAt,
+      })
+      .from(auditEvents)
+      .where(eq(auditEvents.actorUserId, actorUserId))
+      .orderBy(auditEvents.createdAt);
+    expect(auditRows).toEqual([
+      {
+        eventType: "personal_ai_connection.connected",
+        createdAt: new Date("2026-08-31T13:00:00.000Z"),
+      },
+      {
+        eventType: "personal_ai_connection.replaced",
+        createdAt: new Date("2026-08-31T13:00:01.000Z"),
+      },
+    ]);
   });
 
   test("disconnects atomically and is safe to repeat or call without a row", async () => {

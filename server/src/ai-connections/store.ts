@@ -41,6 +41,14 @@ export type PersonalAiConnectionAuditEvent = {
   state: PersonalAiConnectionState;
 };
 
+/**
+ * An optional, additional transaction gate for security-sensitive integrations and tests.
+ *
+ * The store always writes its authoritative database audit row first. `record` then runs while the
+ * actor advisory lock and database transaction are still open; rejecting it rolls the connection,
+ * credential and database audit row back together. Implementations therefore must be bounded and
+ * must not perform irreversible external side effects that cannot participate in that rollback.
+ */
 export type PersonalAiConnectionAuditor = {
   record: (event: PersonalAiConnectionAuditEvent) => Promise<void>;
 };
@@ -61,8 +69,20 @@ type ConnectInput = {
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
+const MAX_OPENROUTER_CREDENTIAL_CHARACTERS = 4_096;
+// The current ChatGPT runtime consumes one serialized auth document. 256 Ki characters leaves ample
+// room for its token/account JSON while preventing an authenticated request from feeding unbounded
+// plaintext into WebCrypto. The value is intentionally checked without trim, echo or logging.
+const MAX_CHATGPT_AUTH_DOCUMENT_CHARACTERS = 256 * 1_024;
+
 function isProvider(value: unknown): value is PersonalAiProvider {
   return value === "chatgpt" || value === "openrouter";
+}
+
+function maxCredentialCharacters(provider: PersonalAiProvider) {
+  return provider === "openrouter"
+    ? MAX_OPENROUTER_CREDENTIAL_CHARACTERS
+    : MAX_CHATGPT_AUTH_DOCUMENT_CHARACTERS;
 }
 
 function finiteNonNegative(value: unknown): number | undefined {
@@ -117,13 +137,30 @@ function connectionStatus(input: {
   disconnectedAt: Date | null;
   updatedAt: Date;
   metadata: unknown;
+  // Some PostgreSQL adapters surface a joined timestamp as an ISO string at runtime even though the
+  // schema type is Date. Normalize this internal-only input before projecting the public contract.
+  credentialRevokedAt?: Date | string | null;
 }): PersonalAiConnectionStatus {
+  const credentialRevokedAt = input.credentialRevokedAt;
+  const revokedAt = credentialRevokedAt
+    ? credentialRevokedAt instanceof Date
+      ? credentialRevokedAt
+      : new Date(credentialRevokedAt)
+    : null;
+  const state =
+    input.state === "active" && revokedAt ? "disconnected" : input.state;
+  const disconnectedAt =
+    state === "disconnected"
+      ? (input.disconnectedAt ?? revokedAt)
+      : input.disconnectedAt;
+  const updatedAt =
+    revokedAt && revokedAt > input.updatedAt ? revokedAt : input.updatedAt;
   return {
     provider: input.provider,
-    state: input.state,
+    state,
     validatedAt: input.validatedAt,
-    disconnectedAt: input.disconnectedAt,
-    updatedAt: input.updatedAt,
+    disconnectedAt,
+    updatedAt,
     safeMetadata: projectPersonalAiSafeMetadata(input.metadata),
   };
 }
@@ -137,20 +174,23 @@ async function lockActor(transaction: Transaction, actorUserId: string) {
   );
 }
 
-function databaseAuditor(database: Database): PersonalAiConnectionAuditor {
-  return {
-    record: async (event) => {
-      await database.insert(auditEvents).values({
-        eventType: `personal_ai_connection.${event.action}`,
-        targetType: "user_ai_connection",
-        targetId: event.actorUserId,
-        actorUserId: event.actorUserId,
-        // The provider and state are the full permitted audit payload. In particular there is no
-        // metadata, key id, credential id, ciphertext or plaintext on this path.
-        payload: { provider: event.provider, state: event.state },
-      });
-    },
-  };
+async function recordDatabaseAudit(
+  transaction: Transaction,
+  event: PersonalAiConnectionAuditEvent,
+  createdAt: Date,
+) {
+  await transaction.insert(auditEvents).values({
+    eventType: `personal_ai_connection.${event.action}`,
+    targetType: "user_ai_connection",
+    targetId: event.actorUserId,
+    actorUserId: event.actorUserId,
+    // The provider and state are the full permitted audit payload. In particular there is no
+    // metadata, key id, credential id, ciphertext or plaintext on this path.
+    payload: { provider: event.provider, state: event.state },
+    // PostgreSQL's default `now()` is the transaction start, which can predate time spent waiting on
+    // the actor lock. An explicit post-lock timestamp makes per-actor audit order match commit order.
+    createdAt,
+  });
 }
 
 /**
@@ -163,17 +203,15 @@ function databaseAuditor(database: Database): PersonalAiConnectionAuditor {
 export function createPersonalAiConnectionStore(input: StoreInput) {
   const credentialStore = createCredentialStore(input.database);
   const now = input.now ?? (() => new Date());
-  const audit = input.audit ?? databaseAuditor(input.database);
 
-  async function emit(event: PersonalAiConnectionAuditEvent) {
-    // The connection is authoritative. Audit is written after commit so an audit-store outage cannot
-    // roll back a valid provider connection or make a committed operation look failed to its caller.
-    try {
-      await audit.record(event);
-    } catch {
-      // Nothing from the rejected audit write is logged: even error objects from storage adapters can
-      // contain query parameters. Operational audit health is monitored at its own boundary.
-    }
+  async function recordAudit(
+    transaction: Transaction,
+    event: PersonalAiConnectionAuditEvent,
+    createdAt: Date,
+  ) {
+    // The database event is authoritative and cannot be replaced by the optional hook.
+    await recordDatabaseAudit(transaction, event, createdAt);
+    await input.audit?.record(event);
   }
 
   async function status(
@@ -187,6 +225,7 @@ export function createPersonalAiConnectionStore(input: StoreInput) {
         disconnectedAt: userAiConnections.disconnectedAt,
         updatedAt: userAiConnections.updatedAt,
         metadata: credentials.metadata,
+        credentialRevokedAt: credentials.revokedAt,
       })
       .from(userAiConnections)
       .innerJoin(
@@ -210,6 +249,12 @@ export function createPersonalAiConnectionStore(input: StoreInput) {
     ) {
       throw new Error("Personal AI credential is required");
     }
+    if (
+      connectInput.plaintext.length >
+      maxCredentialCharacters(connectInput.provider)
+    ) {
+      throw new Error("Personal AI credential exceeds its safe size");
+    }
 
     const metadata = projectPersonalAiSafeMetadata(
       connectInput.safeMetadata,
@@ -228,10 +273,9 @@ export function createPersonalAiConnectionStore(input: StoreInput) {
       input.encryptionKey,
       connectInput.plaintext,
     );
-    const timestamp = now();
-
     const result = await input.database.transaction(async (transaction) => {
       await lockActor(transaction, connectInput.actorUserId);
+      const timestamp = now();
 
       const [existing] = await transaction
         .select({
@@ -326,19 +370,25 @@ export function createPersonalAiConnectionStore(input: StoreInput) {
         throw new Error("Personal AI connection could not be stored");
       }
 
-      return {
-        status: connectionStatus({ ...connection, metadata }),
-        action: existing ? ("replaced" as const) : ("connected" as const),
-      };
+      const status = connectionStatus({
+        ...connection,
+        metadata,
+        credentialRevokedAt: stored.revokedAt,
+      });
+      await recordAudit(
+        transaction,
+        {
+          action: existing ? "replaced" : "connected",
+          actorUserId: connectInput.actorUserId,
+          provider: status.provider,
+          state: status.state,
+        },
+        timestamp,
+      );
+      return status;
     });
 
-    await emit({
-      action: result.action,
-      actorUserId: connectInput.actorUserId,
-      provider: result.status.provider,
-      state: result.status.state,
-    });
-    return result.status;
+    return result;
   }
 
   async function disconnect(
@@ -346,7 +396,7 @@ export function createPersonalAiConnectionStore(input: StoreInput) {
   ): Promise<PersonalAiConnectionStatus | null> {
     if (!actorUserId) throw new Error("Personal AI actor is required");
 
-    const result = await input.database.transaction(async (transaction) => {
+    return input.database.transaction(async (transaction) => {
       await lockActor(transaction, actorUserId);
       const [connection] = await transaction
         .select({
@@ -360,7 +410,7 @@ export function createPersonalAiConnectionStore(input: StoreInput) {
         .from(userAiConnections)
         .where(eq(userAiConnections.userId, actorUserId))
         .for("update");
-      if (!connection) return { status: null, changed: false };
+      if (!connection) return null;
 
       const [credential] = await transaction
         .select({
@@ -376,13 +426,11 @@ export function createPersonalAiConnectionStore(input: StoreInput) {
       }
 
       if (connection.state === "disconnected") {
-        return {
-          status: connectionStatus({
-            ...connection,
-            metadata: credential.metadata,
-          }),
-          changed: false,
-        };
+        return connectionStatus({
+          ...connection,
+          metadata: credential.metadata,
+          credentialRevokedAt: credential.revokedAt,
+        });
       }
 
       if (credential.revokedAt === null) {
@@ -407,24 +455,23 @@ export function createPersonalAiConnectionStore(input: StoreInput) {
       if (!disconnected) {
         throw new Error("Personal AI connection could not be disconnected");
       }
-      return {
-        status: connectionStatus({
-          ...disconnected,
-          metadata: credential.metadata,
-        }),
-        changed: true,
-      };
-    });
-
-    if (result.changed && result.status) {
-      await emit({
-        action: "disconnected",
-        actorUserId,
-        provider: result.status.provider,
-        state: result.status.state,
+      const status = connectionStatus({
+        ...disconnected,
+        metadata: credential.metadata,
+        credentialRevokedAt: timestamp,
       });
-    }
-    return result.status;
+      await recordAudit(
+        transaction,
+        {
+          action: "disconnected",
+          actorUserId,
+          provider: status.provider,
+          state: status.state,
+        },
+        timestamp,
+      );
+      return status;
+    });
   }
 
   return { connect, status, disconnect };
