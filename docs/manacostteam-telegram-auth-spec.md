@@ -84,6 +84,16 @@ only the documented login fields. The server:
 The Telegram bot token is read only by the authentication service. It is never returned, logged,
 stored in a browser or copied into the tenant package.
 
+> Compatibility note (2026-09-01): Telegram now recommends its OIDC authorization-code flow with
+> PKCE and archives the iframe widget documentation. This approved first release deliberately keeps
+> the legacy bot-token HMAC callback for the existing bot. The state uses a separate HttpOnly browser
+> binding and every accepted Telegram proof is reserved once, but the legacy payload still does not
+> cryptographically bind that state and can be raced if a valid callback query leaks before first
+> use. Callback responses therefore use `no-store` and `Referrer-Policy: no-referrer`, callback query
+> values must be redacted from access logs, and moving to OIDC requires a separately approved design
+> and migration. References: [current Telegram Login](https://core.telegram.org/bots/telegram-login)
+> and [archived widget verification](https://core.telegram.org/widgets/login/#checking-authorization).
+
 ### Internal identity
 
 The stable authentication subject is `telegram:<numeric-id>` and is bound to one opaque internal

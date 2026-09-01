@@ -118,14 +118,14 @@ the current OAuth configuration for other deployments.
 
 **Acceptance criteria:**
 
-- [ ] Telegram mode requires an HTTPS public URL, session secret, bot username/token and non-empty owner set.
-- [ ] Owner IDs must be a subset of canonical positive allowlist IDs; duplicates and malformed values fail boot.
-- [ ] `OPENBOT_SINGLE_USER` cannot become a fallback when Telegram mode is selected.
+- [x] Telegram mode requires an HTTPS public URL, session secret, bot username/token and non-empty owner set.
+- [x] Owner IDs must be a subset of canonical positive allowlist IDs; duplicates and malformed values fail boot.
+- [x] `OPENBOT_SINGLE_USER` cannot become a fallback when Telegram mode is selected.
 
 **Verification:**
 
-- [ ] `bun test server/tests/config.test.ts`
-- [ ] Table-driven tests cover every missing, malformed and conflicting configuration.
+- [x] `bun test server/tests/config.test.ts`
+- [x] Table-driven tests cover every missing, malformed and conflicting configuration.
 
 **Dependencies:** Task 3.
 
