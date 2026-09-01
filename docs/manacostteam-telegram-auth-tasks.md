@@ -144,14 +144,14 @@ the short-lived, one-time login state.
 
 **Acceptance criteria:**
 
-- [ ] Official signature fixtures pass; modified, stale, future, missing and malformed payloads fail generically.
-- [ ] Hash comparison is constant-time and safe for unequal lengths.
-- [ ] Login state is origin/return-path bound, expires, and can be consumed exactly once.
+- [x] Official signature fixtures pass; modified, stale, future, missing and malformed payloads fail generically.
+- [x] Hash comparison is constant-time and safe for unequal lengths.
+- [x] Login state is origin/return-path bound, expires, and can be consumed exactly once.
 
 **Verification:**
 
-- [ ] `bun test server/tests/telegram-login.test.ts`
-- [ ] Replay and open-redirect fixtures are refused without creating users or sessions.
+- [x] `bun test server/tests/telegram-login.test.ts`
+- [x] Replay and open-redirect fixtures are refused without creating users or sessions.
 
 **Dependencies:** Task 4.
 
