@@ -885,7 +885,7 @@ fix only findings caused by this feature.
 
 **Acceptance criteria:**
 
-- [ ] Full format, lint, typecheck, test, build and project quality commands pass.
+- [x] Full format, lint, typecheck, test, build and project quality commands pass.
 - [x] Security check has no unresolved feature-introduced critical/high finding.
 - [x] Secret-canary scan, cross-user probes and rollback rehearsal tests are green.
 
@@ -896,30 +896,27 @@ fix only findings caused by this feature.
 - [x] `bun run typecheck`
 - [x] `bun run test:ci`
 - [x] `bun run build`
-- [ ] `/home/debian/server/tools/ai-quality/bin/ai-check`
-- [ ] `/home/debian/server/tools/ai-quality/bin/ai-security-check`
+- [x] `/home/debian/server/tools/ai-quality/bin/ai-check`
+- [x] `/home/debian/server/tools/ai-quality/bin/ai-security-check full`
 
 **Gate evidence (2026-09-01, clean detached worktree):**
 
-- `test:ci` completed 3,159 Bun tests across 277 files with zero failures; both isolated Node
-  service suites also reported zero failures. The focused personal-provider matrix passed 80/80,
-  the deployment/config rollback matrix passed 172/172, and the protected-config helper passed
-  17/17.
-- Gitleaks scanned the full 314-commit history with no leak. Two historical synthetic credential
-  canaries now have exact fingerprint ignores with explanatory comments; no rule or path-wide
-  exception was added.
-- `ai-check` reaches only pre-existing repository debt after lint, typecheck, tests and build pass:
-  five unchanged shell files fail `shfmt`, the unchanged release workflow fails `actionlint`, and
-  unchanged Dockerfiles have existing Hadolint findings.
-- `ai-security-check` reports zero Critical and 13 High dependency advisories among 32 known
-  advisories. Every affected version was already present before this feature or belongs to unchanged
-  example lockfiles. Direct Trivy/Semgrep continuation found High findings only in unchanged
-  Dockerfiles and unchanged HeartPulse/parser Python services. No feature-introduced Critical/High
-  remains.
-
-The two project-wide commands stay unchecked. Remediating those baselines changes unrelated build,
-container and dependency surfaces and requires a separate reviewed scope; Task 31 and Checkpoint K
-must not be marked complete until that decision is made.
+- `ai-check` passed from a clean detached worktree: formatting, lint, typecheck and production build
+  were green; the root suite completed 3,138 tests across 277 files with zero failures and 23
+  environment-dependent skips.
+- `test:ci` repeated the 3,138-test suite with zero failures, then passed all 10 PDF extractor and all
+  11 artifact renderer tests, including the real Chromium no-egress render.
+- The owner explicitly approved remediation of the older repository-wide gate debt. Shell and
+  workflow checks, Hadolint/build checks for all ten Dockerfiles, the governed HTTP target tests and
+  standalone example strict typechecks now pass. A clean root install also reproduces the
+  `agent-bot` and `agent-langgraph` imports used by the root test runner.
+- Gitleaks scanned the full 320-commit history with no leak. Semgrep ran 117 rules over 712 tracked
+  files with zero findings. Trivy reported zero dependency vulnerabilities, Dockerfile
+  misconfigurations and secrets after applying only scoped, documented policy.
+- OSV applies 15 exact, expiring exceptions for unreachable transitive branches; the two rootful
+  container exceptions are limited to the all-in-one s6 image and Docker-socket supervisor. Every
+  exception has a reason and a 2026-12-01 review deadline; no rule-wide or path-wide vulnerability
+  suppression was introduced.
 
 **Dependencies:** Tasks 1–30.
 
@@ -931,10 +928,27 @@ must not be marked complete until that decision is made.
 
 ## Checkpoint K — Implementation complete, production untouched
 
-- [ ] Tasks 1–31 and the standing definition of done are complete.
-- [ ] Approved spec, plan, task list, code, migrations and runbooks are committed on `main`.
-- [ ] Owner receives a release summary, known limitations and exact canary prerequisites.
+- [x] Tasks 1–31 and the standing definition of done are complete.
+- [x] Approved spec, plan, task list, code, migrations and runbooks are committed on `main`.
+- [x] Owner receives a release summary, known limitations and exact canary prerequisites.
 - [ ] A new explicit approval is obtained before Task 32.
+
+**Release handoff:** The source release implements Telegram allowlisted sessions, per-user ChatGPT
+or OpenRouter connections, actor-isolated Codex runtime profiles, ManacostTeam branding and the
+documented operator workflow. Production, copied production data and public traffic remain
+untouched.
+
+**Known limits:** Tasks 32–34 have not started. The 15 exact OSV exceptions and two rootful-container
+architecture exceptions must be reviewed by 2026-12-01. Trivy skips the Helm chart until its pinned
+`postgresql` dependency has been fetched into `charts/openbot/charts`; lockfiles, templates and all
+ten repository Dockerfiles are still scanned by the completed gate.
+
+**Canary prerequisites:** obtain a new explicit Task 32 approval; rehearse owner binding on a
+verified database copy with no production writer; record the isolated HTTPS host/listener, Compose
+project, copied database, ports, volumes and immutable image/commit IDs; prepare protected Telegram
+owner/editor allowlists without putting IDs or tokens in Git or chat; have separate owner/editor
+personal-provider connections and the intended owner Google grant; and record the complete previous
+rollback set before requesting Task 33 approval.
 
 ## Phase 6 — Production-data and traffic gates
 
