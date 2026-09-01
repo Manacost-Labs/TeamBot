@@ -476,3 +476,27 @@ export function createPersonalAiConnectionStore(input: StoreInput) {
 
   return { connect, status, disconnect };
 }
+
+/**
+ * Adapt the actor-owned connection store to the application's offboarding contract.
+ *
+ * The administrator identity is intentionally not forwarded into the connection store: it is
+ * needed by other retirers for their audit records, while this store already records the affected
+ * actor and never accepts an ownership selector beyond that actor id. The People store records the
+ * administrator's access-revocation separately before running this adapter.
+ */
+export function createPersonalAiOwnedCredentialRetirer(
+  store: Pick<
+    ReturnType<typeof createPersonalAiConnectionStore>,
+    "status" | "disconnect"
+  >,
+) {
+  return async (userId: string, _by: string): Promise<{ retired: number }> => {
+    const before = await store.status(userId);
+    const after = await store.disconnect(userId);
+    return {
+      retired:
+        before?.state === "active" && after?.state === "disconnected" ? 1 : 0,
+    };
+  };
+}

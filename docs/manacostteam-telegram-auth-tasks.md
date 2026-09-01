@@ -429,13 +429,13 @@ the credentials.
 
 **Acceptance criteria:**
 
-- [ ] Two users may hold different providers/credentials without status or mutation crossover.
-- [ ] Concurrent replace/disconnect yields exactly one active-or-none outcome, never two live credentials.
-- [ ] Revoking a person retires their personal AI connection without affecting another user.
+- [x] Two users may hold different providers/credentials without status or mutation crossover.
+- [x] Concurrent replace/disconnect yields exactly one active-or-none outcome, never two live credentials.
+- [x] Revoking a person retires their personal AI connection without affecting another user.
 
 **Verification:**
 
-- [ ] `bun test server/tests/ai-connections.integration.test.ts server/tests/credentials.test.ts`
+- [x] `bun test server/tests/ai-connections.integration.test.ts server/tests/credentials.test.ts`
 
 **Dependencies:** Tasks 13–14.
 

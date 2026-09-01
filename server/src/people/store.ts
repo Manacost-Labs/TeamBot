@@ -147,6 +147,35 @@ export type OwnedCredentialRetirer = (
   by: string,
 ) => Promise<{ retired: number }>;
 
+/**
+ * Run every offboarding action even when one vault is temporarily unavailable.
+ *
+ * Access and sessions have already been revoked when this is called. Each credential system is an
+ * independent cleanup boundary, so failing fast would leave later systems holding live secrets for
+ * a removed person. Rejection details stay server-side and are deliberately replaced by one stable,
+ * content-free error after every action has had its chance to retire what it owns.
+ */
+export function composeOwnedCredentialRetirers(
+  ...retirers: readonly OwnedCredentialRetirer[]
+): OwnedCredentialRetirer {
+  return async (userId, by) => {
+    const results = await Promise.allSettled(
+      retirers.map((retire) => retire(userId, by)),
+    );
+    if (results.some((result) => result.status === "rejected")) {
+      throw new Error("One or more owned credentials could not be retired");
+    }
+
+    return {
+      retired: results.reduce(
+        (total, result) =>
+          total + (result.status === "fulfilled" ? result.value.retired : 0),
+        0,
+      ),
+    };
+  };
+}
+
 export function createPeopleStore(
   database: Database,
   initialAdminEmails: readonly string[],

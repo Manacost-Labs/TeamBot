@@ -21,7 +21,10 @@ import { createAgentProfileStore } from "./agents/profile-store";
 import type { AgentActor } from "./agents/profile-types";
 import { createRuntimeAgentLoader } from "./agents/runtime-agents";
 import { createOpenRouterKeyValidator } from "./ai-connections/openrouter";
-import { createPersonalAiConnectionStore } from "./ai-connections/store";
+import {
+  createPersonalAiConnectionStore,
+  createPersonalAiOwnedCredentialRetirer,
+} from "./ai-connections/store";
 import { createApp } from "./app";
 import { createArtifactExportStore } from "./artifacts/export-store";
 import { createArtifactRenderer } from "./artifacts/renderer-client";
@@ -86,7 +89,10 @@ import {
 } from "./credentials";
 import { createDatabase } from "./db/client";
 import { createGoogleDocumentEditService } from "./editor/google-document-edits";
-import { createPeopleStore } from "./people/store";
+import {
+  composeOwnedCredentialRetirers,
+  createPeopleStore,
+} from "./people/store";
 import { useArtifactTools } from "./plugins/builtin-artifacts";
 import { useConversationAttachmentTools } from "./plugins/builtin-conversation-attachments";
 import { useRoutineTools } from "./plugins/builtin-routines";
@@ -290,7 +296,12 @@ const peopleStore = createPeopleStore(
    * during module initialisation — it runs when an administrator removes somebody, over HTTP — so by
    * then the binding is there.
    */
-  (userId, by) => pluginStore.retireConnectionsFor(userId, by),
+  composeOwnedCredentialRetirers(
+    // Personal AI first in the source order for readability; the composer starts every independent
+    // cleanup and waits for all of them, so a plugin outage cannot leave this credential live.
+    createPersonalAiOwnedCredentialRetirer(personalAiConnectionStore),
+    (userId, by) => pluginStore.retireConnectionsFor(userId, by),
+  ),
 );
 if (config.auth?.telegram) {
   // Run before Better Auth and before `serve`: removed IDs lose sessions on every replica before
