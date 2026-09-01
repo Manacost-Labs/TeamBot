@@ -630,14 +630,14 @@ sharing history, tools or provider state.
 
 **Acceptance criteria:**
 
-- [ ] Start returns only opaque flow ID, verification URL, user code and expiry.
-- [ ] Status never returns the auth document; completion is available only to the server-to-server collector.
-- [ ] Timeout, cancel, duplicate start, process error and service shutdown terminate the child and remove the home.
+- [x] Start returns only opaque flow ID, verification URL, user code and expiry.
+- [x] Status never returns the auth document; completion is available only to the server-to-server collector.
+- [x] Timeout, cancel, duplicate start, process error and service shutdown terminate the child and remove the home.
 
 **Verification:**
 
-- [ ] `bun test agent-codex/tests/device-auth.test.ts agent-codex/tests/index.test.ts`
-- [ ] Installed-CLI start/cancel probe leaves no temporary file or child process.
+- [x] `bun test agent-codex/tests/device-auth.test.ts agent-codex/tests/index.test.ts`
+- [x] Installed-CLI start/cancel probe leaves no temporary file or child process.
 
 **Dependencies:** Task 1.
 
