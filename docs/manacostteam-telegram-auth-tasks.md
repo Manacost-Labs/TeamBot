@@ -345,14 +345,14 @@ bounded, injectable client.
 
 **Acceptance criteria:**
 
-- [ ] Only `https://openrouter.ai/api/v1/key` can be contacted and redirects to another origin are refused.
-- [ ] Invalid/revoked/rate-limited/network failures return stable safe reason codes.
-- [ ] Successful projection keeps only explicitly allowlisted non-secret metadata.
+- [x] Only `https://openrouter.ai/api/v1/key` can be contacted and redirects to another origin are refused.
+- [x] Invalid/revoked/rate-limited/network failures return stable safe reason codes.
+- [x] Successful projection keeps only explicitly allowlisted non-secret metadata.
 
 **Verification:**
 
-- [ ] `bun test server/tests/openrouter-key-validator.test.ts`
-- [ ] Adversarial responses cannot inject headers, URLs, key suffixes or raw bodies into logs/status.
+- [x] `bun test server/tests/openrouter-key-validator.test.ts`
+- [x] Adversarial responses cannot inject headers, URLs, key suffixes or raw bodies into logs/status.
 
 **Dependencies:** Task 11.
 
