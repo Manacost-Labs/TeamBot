@@ -402,14 +402,14 @@ session guard.
 
 **Acceptance criteria:**
 
-- [ ] The form never repopulates a saved key and clears input after submission/failure/unmount.
-- [ ] Connected, invalid, replacing and disconnected states are understandable in Russian.
-- [ ] No user-entered base URL/model/credential ID field exists in the first release.
+- [x] The form never repopulates a saved key and clears input after submission/failure/unmount.
+- [x] Connected, invalid, replacing and disconnected states are understandable in Russian.
+- [x] No user-entered base URL/model/credential ID field exists in the first release.
 
 **Verification:**
 
-- [ ] `bun test app/src/routes/_authed/settings/ai-connections.test.tsx`
-- [ ] Component test confirms query cache and rendered DOM never retain plaintext after mutation settles.
+- [x] `bun test app/src/routes/_authed/settings/ai-connections.test.tsx`
+- [x] Component test confirms query cache and rendered DOM never retain plaintext after mutation settles.
 
 **Dependencies:** Task 13.
 
