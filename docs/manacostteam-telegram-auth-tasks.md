@@ -826,14 +826,14 @@ validation without placing values in command arguments, Git or output.
 
 **Acceptance criteria:**
 
-- [ ] Helpers prompt privately, write only ignored mode-`0600` configuration and redact diagnostics.
-- [ ] Dry-run reports missing variable names and allowlist relationships, never values.
-- [ ] Owner/editor updates cannot accidentally remove the last owner without an explicit refused operation.
+- [x] Helpers prompt privately, write only ignored mode-`0600` configuration and redact diagnostics.
+- [x] Dry-run reports missing variable names and allowlist relationships, never values.
+- [x] Owner/editor updates cannot accidentally remove the last owner without an explicit refused operation.
 
 **Verification:**
 
-- [ ] Shell helper tests run with temporary files and synthetic values.
-- [ ] `shellcheck` and `shfmt -d` pass for new/changed scripts.
+- [x] Shell helper tests run with temporary files and synthetic values.
+- [x] `shellcheck` and `shfmt -d` pass for new/changed scripts.
 
 **Dependencies:** Tasks 4, 8 and 28.
 
@@ -847,9 +847,9 @@ validation without placing values in command arguments, Git or output.
 
 ## Checkpoint J — Deployable source release
 
-- [ ] Tasks 27–29 pass with no production mutation.
-- [ ] Compose contains no global ChatGPT/OpenRouter credential path.
-- [ ] Operator can prepare all required configuration without pasting a secret into chat or shell history.
+- [x] Tasks 27–29 pass with no production mutation.
+- [x] Compose contains no global ChatGPT/OpenRouter credential path.
+- [x] Operator can prepare all required configuration without pasting a secret into chat or shell history.
 
 ### Task 30: Authentication and personal-provider runbooks
 

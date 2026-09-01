@@ -11,6 +11,8 @@ docs/plans/
 .env
 .env.*
 !.env.example
+# Private operator input for ManacostTeam authentication. Never add this file to Git.
+/.env.manacostteam-auth
 # Per-Bot egress proxies. Carries credentials in the URL, like .env does.
 egress.env
 node_modules/
