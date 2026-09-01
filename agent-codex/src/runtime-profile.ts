@@ -1,8 +1,27 @@
-import { chmod, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const PRIVATE_DIRECTORY_MODE = 0o700;
+const PRIVATE_FILE_MODE = 0o600;
+
+export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+export const OPENROUTER_API_KEY_ENVIRONMENT_KEY = "OPENROUTER_API_KEY";
+
+const OPENROUTER_CONFIG = `model_provider = "manacost_openrouter"
+
+[model_providers.manacost_openrouter]
+name = "OpenRouter"
+base_url = "${OPENROUTER_BASE_URL}"
+wire_api = "responses"
+env_key = "${OPENROUTER_API_KEY_ENVIRONMENT_KEY}"
+requires_openai_auth = false
+
+[shell_environment_policy]
+inherit = "core"
+ignore_default_excludes = false
+exclude = ["${OPENROUTER_API_KEY_ENVIRONMENT_KEY}"]
+`;
 
 /**
  * Process settings needed by the Codex binary itself. Authentication and application credentials
@@ -40,6 +59,13 @@ export type CreateCodexRuntimeProfileOptions = {
   environment?: NodeJS.ProcessEnv;
   parentDirectory?: string;
   additionalEnvironmentKeys?: readonly string[];
+};
+
+export type CreateOpenRouterRuntimeProfileOptions = Omit<
+  CreateCodexRuntimeProfileOptions,
+  "additionalEnvironmentKeys"
+> & {
+  apiKey: string;
 };
 
 export function buildCodexChildEnvironment(
@@ -89,6 +115,45 @@ export async function createCodexRuntimeProfile(
     };
   } catch (error) {
     await rm(codexHome, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+/**
+ * Create the fixed OpenRouter provider understood by the installed Codex CLI.
+ *
+ * The secret stays in the Codex process environment because `env_key` is how the provider reads
+ * it. The generated shell policy removes that same variable from every command Codex starts. No
+ * base URL, wire protocol or additional config is accepted from run/browser input.
+ */
+export async function createOpenRouterRuntimeProfile(
+  options: CreateOpenRouterRuntimeProfileOptions,
+): Promise<CodexRuntimeProfile> {
+  if (!options.apiKey.trim()) {
+    throw new Error("An OpenRouter API key is required.");
+  }
+
+  const profile = await createCodexRuntimeProfile({
+    environment: options.environment,
+    parentDirectory: options.parentDirectory,
+  });
+  try {
+    const configPath = join(profile.codexHome, "config.toml");
+    await writeFile(configPath, OPENROUTER_CONFIG, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: PRIVATE_FILE_MODE,
+    });
+    await chmod(configPath, PRIVATE_FILE_MODE);
+    return {
+      ...profile,
+      environment: {
+        ...profile.environment,
+        [OPENROUTER_API_KEY_ENVIRONMENT_KEY]: options.apiKey.trim(),
+      },
+    };
+  } catch (error) {
+    await profile.dispose();
     throw error;
   }
 }
