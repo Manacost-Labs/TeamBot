@@ -23,6 +23,9 @@ async function runDeploy(...services: string[]) {
     docker,
     `#!/bin/sh
 printf '%s\\n' "$*" >> "$DEPLOY_TEST_LOG"
+for name in TELEGRAM_LOGIN_BOT_TOKEN TELEGRAM_ALLOWED_USER_IDS TELEGRAM_OWNER_USER_IDS OPENROUTER_MODEL; do
+  if printenv "$name" >/dev/null 2>&1; then printf 'ENV_PRESENT %s\\n' "$name" >> "$DEPLOY_TEST_LOG"; fi
+done
 if [ "$1" = "info" ]; then exit 0; fi
 if [ "$1" = "compose" ] && [ "$5" = "ps" ]; then exit 0; fi
 exit 0
@@ -42,6 +45,10 @@ exit 0
         PATH: `${directory}:${Bun.env.PATH ?? ""}`,
         DEPLOY_TEST_LOG: log,
         ARTIFACT_RENDERER_TOKEN: "test-renderer-token",
+        TELEGRAM_LOGIN_BOT_TOKEN: "123456:synthetic-test-token",
+        TELEGRAM_ALLOWED_USER_IDS: "123456789,987654321",
+        TELEGRAM_OWNER_USER_IDS: "123456789",
+        OPENROUTER_MODEL: "openai/synthetic-test-model",
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -83,4 +90,18 @@ test("a full deployment stops the network-sharing worker before replacement", as
   expect(log).toContain("build\n");
   expect(log).toContain("stop --timeout 30 routine-worker\n");
   expect(log).toContain("up -d --no-build --wait\n");
+});
+
+test("uses the base and protected environment files only as Compose interpolation sources", async () => {
+  const log = await runDeploy("agent-codex");
+  const repository = join(import.meta.dir, "..");
+
+  expect(log).toContain(
+    `compose --env-file ${join(repository, ".env")} --env-file ${join(repository, ".env.manacostteam-auth")} -f ${join(repository, "docker-compose.production.yml")} config --quiet\n`,
+  );
+  expect(log).not.toContain("TELEGRAM_LOGIN_BOT_TOKEN=");
+  expect(log).not.toContain("TELEGRAM_ALLOWED_USER_IDS=");
+  expect(log).not.toContain("TELEGRAM_OWNER_USER_IDS=");
+  expect(log).not.toContain("OPENROUTER_MODEL=");
+  expect(log).not.toContain("ENV_PRESENT");
 });

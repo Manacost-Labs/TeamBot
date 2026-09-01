@@ -4,6 +4,8 @@ set -euo pipefail
 
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 compose_file="$repo_dir/docker-compose.production.yml"
+base_environment_file="$repo_dir/.env"
+protected_auth_environment_file="$repo_dir/.env.manacostteam-auth"
 drain_timeout_seconds=${DEPLOY_DRAIN_TIMEOUT_SECONDS:-1800}
 
 if ! [[ "$drain_timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
@@ -11,12 +13,31 @@ if ! [[ "$drain_timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
 	exit 2
 fi
 
+# The protected file, not an inherited interactive shell, is authoritative for these values. This
+# also keeps them out of every Docker, sudo and helper process the deployment starts.
+unset TELEGRAM_LOGIN_BOT_TOKEN TELEGRAM_ALLOWED_USER_IDS TELEGRAM_OWNER_USER_IDS OPENROUTER_MODEL
+
 docker_cmd=(docker)
 if ! docker info >/dev/null 2>&1; then
 	# Compose must receive required interpolation variables through sudo.
 	docker_cmd=(sudo -n -E docker)
 fi
-compose_cmd=("${docker_cmd[@]}" compose -f "$compose_file")
+# `--env-file` feeds Compose interpolation only. Services still receive only the explicit variables
+# in the Compose file, so the combined Telegram/OpenRouter operator file is never injected wholesale
+# into the model-facing agent container. Values stay out of arguments; only protected file paths are
+# passed to Compose. Removing these four inherited variables also makes the protected file the only
+# source at Compose's highest interpolation precedence.
+compose_cmd=(
+	env
+	-u TELEGRAM_LOGIN_BOT_TOKEN
+	-u TELEGRAM_ALLOWED_USER_IDS
+	-u TELEGRAM_OWNER_USER_IDS
+	-u OPENROUTER_MODEL
+	"${docker_cmd[@]}" compose
+	--env-file "$base_environment_file"
+	--env-file "$protected_auth_environment_file"
+	-f "$compose_file"
+)
 
 if [[ -z ${ARTIFACT_RENDERER_TOKEN:-} ]]; then
 	artifact_container=workkolodahearthstonecom-artifact-renderer-1

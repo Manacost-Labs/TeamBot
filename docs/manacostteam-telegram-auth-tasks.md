@@ -799,14 +799,14 @@ runtime and no globally mounted Codex profile.
 
 **Acceptance criteria:**
 
-- [ ] New configuration refuses `OPENBOT_SINGLE_USER=true` with Telegram mode.
-- [ ] `agent-codex` receives internal endpoints/tokens but no host `auth.json` or global model credential.
-- [ ] Existing research-source secrets remain restricted to the services that already require them.
+- [x] New configuration refuses `OPENBOT_SINGLE_USER=true` with Telegram mode.
+- [x] `agent-codex` receives internal endpoints/tokens but no host `auth.json` or global model credential.
+- [x] Existing research-source secrets remain restricted to the services that already require them.
 
 **Verification:**
 
-- [ ] `bun test tests/compose.test.ts server/tests/config.test.ts`
-- [ ] `docker compose -f docker-compose.production.yml config --quiet` with protected fixture values.
+- [x] `bun test tests/compose.test.ts server/tests/config.test.ts`
+- [x] `docker compose -f docker-compose.production.yml config --quiet` with protected fixture values.
 
 **Dependencies:** Checkpoint I.
 

@@ -15,13 +15,12 @@ RUN bun install --frozen-lockfile --production
 COPY agent-codex/src ./src
 COPY agent-codex/config.toml ./config.toml
 COPY agent-codex/src/research-source.mjs /usr/local/bin/research-source
-COPY agent-codex/config.toml /home/bun/.codex/config.toml
 COPY shared /app/shared
 
-RUN mkdir -p /workspace /youtube-workspace /research-runs /home/bun/.codex /run/openbot-codex \
+RUN mkdir -p /workspace /youtube-workspace /research-runs /run/openbot-codex \
   && chmod 0555 /usr/local/bin/research-source \
   && chmod 0700 /run/openbot-codex \
-  && chown -R bun:bun /workspace /youtube-workspace /research-runs /home/bun/.codex /run/openbot-codex /app
+  && chown -R bun:bun /workspace /youtube-workspace /research-runs /run/openbot-codex /app
 
 USER bun
 ENV PORT=4202

@@ -307,6 +307,107 @@ test("shares research provider credentials only with OpenBot and agent runtimes"
   }
 });
 
+test("keeps Telegram and personal provider credentials on their narrow production boundaries", () => {
+  const production = readFileSync(
+    join(import.meta.dir, "..", "docker-compose.production.yml"),
+    "utf8",
+  );
+  const parsed = parse(production, { merge: true }) as {
+    services?: Record<
+      string,
+      {
+        env_file?: string | string[];
+        environment?: Record<string, string>;
+        tmpfs?: string[];
+        volumes?: string[];
+      }
+    >;
+  };
+  const openbot = parsed.services?.openbot;
+  const agent = parsed.services?.["agent-codex"];
+  const routineWorker = parsed.services?.["routine-worker"];
+
+  expect(openbot?.environment).toMatchObject({
+    OPENAI_API_KEY: "",
+    OPENROUTER_API_KEY: "",
+    OPENBOT_SINGLE_USER: "$" + "{OPENBOT_SINGLE_USER:-false}",
+    OPENBOT_PUBLIC_URL:
+      "$" + "{OPENBOT_PUBLIC_URL:?OPENBOT_PUBLIC_URL is required}",
+    OPENBOT_APP_URL:
+      "$" + "{OPENBOT_PUBLIC_URL:?OPENBOT_PUBLIC_URL is required}",
+    TRUSTED_ORIGINS:
+      "$" + "{OPENBOT_PUBLIC_URL:?OPENBOT_PUBLIC_URL is required}",
+    BETTER_AUTH_SECRET:
+      "$" + "{BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required}",
+    TELEGRAM_LOGIN_BOT_USERNAME:
+      "$" +
+      "{TELEGRAM_LOGIN_BOT_USERNAME:?TELEGRAM_LOGIN_BOT_USERNAME is required}",
+    TELEGRAM_LOGIN_BOT_TOKEN:
+      "$" + "{TELEGRAM_LOGIN_BOT_TOKEN:?TELEGRAM_LOGIN_BOT_TOKEN is required}",
+    TELEGRAM_ALLOWED_USER_IDS:
+      "$" +
+      "{TELEGRAM_ALLOWED_USER_IDS:?TELEGRAM_ALLOWED_USER_IDS is required}",
+    TELEGRAM_OWNER_USER_IDS:
+      "$" + "{TELEGRAM_OWNER_USER_IDS:?TELEGRAM_OWNER_USER_IDS is required}",
+    MANAGED_AGENT_TOKEN:
+      "$" + "{MANAGED_AGENT_TOKEN:?MANAGED_AGENT_TOKEN is required}",
+  });
+
+  expect(agent?.environment).toMatchObject({
+    OPENBOT_INTERNAL_URL: "http://openbot:3001",
+    MANAGED_AGENT_TOKEN:
+      "$" + "{MANAGED_AGENT_TOKEN:?MANAGED_AGENT_TOKEN is required}",
+    AGENT_TOOL_TOKEN: "$" + "{AGENT_TOOL_TOKEN:?AGENT_TOOL_TOKEN is required}",
+    OPENROUTER_MODEL: "$" + "{OPENROUTER_MODEL:?OPENROUTER_MODEL is required}",
+  });
+  for (const forbidden of [
+    "BETTER_AUTH_SECRET",
+    "TELEGRAM_LOGIN_BOT_USERNAME",
+    "TELEGRAM_LOGIN_BOT_TOKEN",
+    "TELEGRAM_ALLOWED_USER_IDS",
+    "TELEGRAM_OWNER_USER_IDS",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "CODEX_AUTH_PATH",
+    "CODEX_HOME",
+    "HOME",
+  ]) {
+    expect(agent?.environment).not.toHaveProperty(forbidden);
+  }
+
+  expect(agent?.volumes ?? []).not.toEqual(
+    expect.arrayContaining([
+      expect.stringMatching(
+        /(?:auth\.json|\/(?:home\/[^/]+\/)?\.codex)(?:\/|$)/,
+      ),
+    ]),
+  );
+  expect(agent?.tmpfs).toEqual([
+    "/run/openbot-codex:size=67108864,mode=0700,uid=1000,gid=1000",
+  ]);
+  expect(agent?.env_file).toBeUndefined();
+
+  for (const service of Object.values(parsed.services ?? {})) {
+    const environmentFiles = Array.isArray(service.env_file)
+      ? service.env_file
+      : service.env_file
+        ? [service.env_file]
+        : [];
+    expect(environmentFiles).not.toContain(".env.manacostteam-auth");
+  }
+  expect(routineWorker?.env_file).toBeUndefined();
+  expect(routineWorker?.environment).not.toHaveProperty("OPENAI_API_KEY");
+  expect(routineWorker?.environment).not.toHaveProperty("OPENROUTER_API_KEY");
+
+  const agentDockerfile = readFileSync(
+    join(import.meta.dir, "..", "agent-codex", "Dockerfile"),
+    "utf8",
+  );
+  expect(agentDockerfile).toContain("FROM oven/bun:1.3.14-slim");
+  expect(agentDockerfile).not.toContain("/home/bun/.codex");
+  expect(agentDockerfile).not.toContain("auth.json");
+});
+
 test("does not expose attachment storage to local Bot or computer services", () => {
   const compose = readFileSync(
     join(import.meta.dir, "..", "docker-compose.yml"),

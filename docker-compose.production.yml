@@ -106,6 +106,11 @@ services:
     environment:
       <<: *research-provider-credentials
       NODE_ENV: production
+      # ManacostTeam runs managed employees only through each actor's personal connection. An old
+      # `.env` may still contain the local-development server fallback, so override both global
+      # model-key names instead of letting `env_file` silently re-enable a shared credential.
+      OPENAI_API_KEY: ""
+      OPENROUTER_API_KEY: ""
       EMBEDDED_POSTGRES: "on"
       EMBEDDED_COMPUTER: "off"
       DATABASE_URL: postgres://openbot@127.0.0.1:5432/openbot
@@ -115,18 +120,28 @@ services:
       ARTIFACT_RENDERER_URL: http://artifact-renderer:8080
       ARTIFACT_RENDERER_TOKEN: ${ARTIFACT_RENDERER_TOKEN:?ARTIFACT_RENDERER_TOKEN is required}
       PDF_EXTRACTOR_URL: http://pdf-extractor:8080
-      OPENBOT_SINGLE_USER: "true"
-      OPENBOT_PUBLIC_URL: https://work-origin.kolodahearthstone.com
-      OPENBOT_APP_URL: https://work-origin.kolodahearthstone.com
-      TRUSTED_ORIGINS: https://work-origin.kolodahearthstone.com
+      # Telegram is the production identity boundary. Leaving the local-development escape hatch
+      # set to true is an explicit configuration error that the server refuses at startup.
+      OPENBOT_SINGLE_USER: ${OPENBOT_SINGLE_USER:-false}
+      # One operator-supplied HTTPS origin drives Telegram callbacks, browser redirects and trusted
+      # origins. The canary can therefore use its own hostname without editing the release source.
+      OPENBOT_PUBLIC_URL: ${OPENBOT_PUBLIC_URL:?OPENBOT_PUBLIC_URL is required}
+      OPENBOT_APP_URL: ${OPENBOT_PUBLIC_URL:?OPENBOT_PUBLIC_URL is required}
+      TRUSTED_ORIGINS: ${OPENBOT_PUBLIC_URL:?OPENBOT_PUBLIC_URL is required}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required}
+      TELEGRAM_LOGIN_BOT_USERNAME: ${TELEGRAM_LOGIN_BOT_USERNAME:?TELEGRAM_LOGIN_BOT_USERNAME is required}
+      TELEGRAM_LOGIN_BOT_TOKEN: ${TELEGRAM_LOGIN_BOT_TOKEN:?TELEGRAM_LOGIN_BOT_TOKEN is required}
+      TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:?TELEGRAM_ALLOWED_USER_IDS is required}
+      TELEGRAM_OWNER_USER_IDS: ${TELEGRAM_OWNER_USER_IDS:?TELEGRAM_OWNER_USER_IDS is required}
       MANAGED_AGENT_AG_UI_URL: http://agent-codex:4202/ag-ui
+      MANAGED_AGENT_TOKEN: ${MANAGED_AGENT_TOKEN:?MANAGED_AGENT_TOKEN is required}
       AGENT_ENDPOINT_ALLOWED_HOSTS: "agent-codex:4202,editor-gateway:8080"
       AGENT_CONNECTION_TEST_TIMEOUT_MS: "45000"
       AGENT_COMPUTER_URL: http://agent-computer:4100
       COMPUTER_TOKEN: ${COMPUTER_TOKEN:?COMPUTER_TOKEN is required}
       PARSER_OPS_URL: http://host.docker.internal:4031
       HEARTPULSE_OPS_URL: http://host.docker.internal:4032
-      WORKER_SHARED_SECRET: ${AGENT_TOOL_TOKEN}
+      WORKER_SHARED_SECRET: ${AGENT_TOOL_TOKEN:?AGENT_TOOL_TOKEN is required}
     ports:
       - "127.0.0.1:3021:3001"
     volumes:
@@ -164,10 +179,9 @@ services:
       - -eu
       - -c
       - password=$$(cat /run/openbot-postgres/pgpassword); export DATABASE_URL="postgres://openbot:$${password}@127.0.0.1:5432/openbot"; exec bun worker/src/index.ts
-    env_file: .env
     environment:
       SERVER_INTERNAL_URL: http://127.0.0.1:3001
-      WORKER_SHARED_SECRET: ${AGENT_TOOL_TOKEN}
+      WORKER_SHARED_SECRET: ${AGENT_TOOL_TOKEN:?AGENT_TOOL_TOKEN is required}
     volumes:
       - openbot-postgres:/run/openbot-postgres:ro
     network_mode: service:openbot
@@ -184,10 +198,11 @@ services:
     environment:
       <<: *research-provider-credentials
       PORT: "4202"
-      MANAGED_AGENT_TOKEN: ${MANAGED_AGENT_TOKEN}
-      AGENT_TOOL_TOKEN: ${AGENT_TOOL_TOKEN}
+      OPENBOT_INTERNAL_URL: http://openbot:3001
+      MANAGED_AGENT_TOKEN: ${MANAGED_AGENT_TOKEN:?MANAGED_AGENT_TOKEN is required}
+      AGENT_TOOL_TOKEN: ${AGENT_TOOL_TOKEN:?AGENT_TOOL_TOKEN is required}
       CODEX_MODEL: ${CODEX_MODEL:-}
-      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:?OPENROUTER_MODEL is required}
       # The default assistant may use the deployment's configured model; control agents override
       # this per-agent with GPT-5.6 Luna xhigh. Concise summaries are streamed to the Russian
       # progress card; private reasoning tokens never leave the model.
@@ -206,10 +221,13 @@ services:
       RESEARCH_MODEL: gpt-5.6-luna
       RESEARCH_REASONING_EFFORT: xhigh
       RESEARCH_SOURCES_URL: http://research-sources:8777
-      RESEARCH_SOURCE_GATEWAY_TOKEN: ${AGENT_TOOL_TOKEN}
+      RESEARCH_SOURCE_GATEWAY_TOKEN: ${AGENT_TOOL_TOKEN:?AGENT_TOOL_TOKEN is required}
       OPENBOT_TOOL_URL: http://openbot:3001/api/agent-tools/call
+    # Every run receives its own mode-0700 CODEX_HOME below this memory-backed root. UID/GID 1000
+    # is the pinned oven/bun image's `bun` user; stopping the container removes any crash residue.
+    tmpfs:
+      - /run/openbot-codex:size=67108864,mode=0700,uid=1000,gid=1000
     volumes:
-      - /home/debian/.codex/auth.json:/home/bun/.codex/auth.json
       - /srv/projects/agents/control-data/api:/workspace
       - /srv/projects/web/HeartPulse-worktrees/heartpulse-control:/workspace-heartpulse
       - ../ResearchTeam:/workspace-research:ro
@@ -239,7 +257,7 @@ services:
     restart: unless-stopped
     environment:
       <<: *research-provider-credentials
-      SOURCE_GATEWAY_TOKEN: ${AGENT_TOOL_TOKEN}
+      SOURCE_GATEWAY_TOKEN: ${AGENT_TOOL_TOKEN:?AGENT_TOOL_TOKEN is required}
       HEARTHSTONE_STATS_API_URL: https://api.kolodahearthstone.com/v1
     networks:
       - app
@@ -264,11 +282,11 @@ services:
       EDITOR_ANALYZER_URL: http://editor-analyzer:8731
       EDITOR_PROVIDER: agui
       EDITOR_AGUI_URL: http://agent-codex:4202/ag-ui
-      EDITOR_AGUI_TOKEN: ${MANAGED_AGENT_TOKEN}
+      EDITOR_AGUI_TOKEN: ${MANAGED_AGENT_TOKEN:?MANAGED_AGENT_TOKEN is required}
       # Candidate registration uses the same trusted service boundary as agent tool callbacks.
       # The token stays in the gateway and is never forwarded to the editor model.
       EDITOR_OPENBOT_URL: http://openbot:3001
-      EDITOR_OPENBOT_TOKEN: ${AGENT_TOOL_TOKEN}
+      EDITOR_OPENBOT_TOKEN: ${AGENT_TOOL_TOKEN:?AGENT_TOOL_TOKEN is required}
       EDITOR_MODEL: gpt-5.6-luna
       EDITOR_REASONING_EFFORT: xhigh
       EDITOR_MAX_ATTEMPTS: "3"
