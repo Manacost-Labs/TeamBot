@@ -740,13 +740,13 @@ races across two users.
 
 **Acceptance criteria:**
 
-- [ ] User A cannot poll, redeem, run or refresh user B's flow/profile/credential.
-- [ ] Reconnect retires the old document; late refresh from the old run is refused.
-- [ ] Service restart and forced child exit leave no reusable plaintext or false connected status.
+- [x] User A cannot poll, redeem, run or refresh user B's flow/profile/credential.
+- [x] Reconnect retires the old document; late refresh from the old run is refused.
+- [x] Service restart and forced child exit leave no reusable plaintext or false connected status.
 
 **Verification:**
 
-- [ ] `bun test server/tests/chatgpt-isolation.integration.test.ts agent-codex/tests/chatgpt-isolation.integration.test.ts`
+- [x] `bun test server/tests/chatgpt-isolation.integration.test.ts agent-codex/tests/chatgpt-isolation.integration.test.ts`
 
 **Dependencies:** Task 25.
 
@@ -759,9 +759,9 @@ races across two users.
 
 ## Checkpoint I — Both provider paths
 
-- [ ] Tasks 25–26 and all OpenRouter tests pass together.
-- [ ] Provider replacement, disconnect and absence have deterministic no-fallback behavior.
-- [ ] One active run per actor prevents ChatGPT refresh races without blocking a different actor.
+- [x] Tasks 25–26 and all OpenRouter tests pass together.
+- [x] Provider replacement, disconnect and absence have deterministic no-fallback behavior.
+- [x] One active run per actor prevents ChatGPT refresh races without blocking a different actor.
 
 ## Phase 5 — Product, deployment package and documentation
 
