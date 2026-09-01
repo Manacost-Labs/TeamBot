@@ -202,14 +202,14 @@ Telegram mode is configured, without exposing secret configuration.
 
 **Acceptance criteria:**
 
-- [ ] `/api/capabilities` returns only the public bot username and Telegram-enabled flag.
-- [ ] The sign screen loads the widget with the server-minted state and handles generic callback failures in Russian.
-- [ ] OAuth/SSO buttons remain unchanged for non-ManacostTeam deployments.
+- [x] `/api/capabilities` returns only the public bot username and Telegram-enabled flag.
+- [x] The sign screen loads the widget with the server-minted state and handles generic callback failures in Russian.
+- [x] OAuth/SSO buttons remain unchanged for non-ManacostTeam deployments.
 
 **Verification:**
 
-- [ ] `bun test app/src/lib/auth app/src/routes/sign.test.tsx server/tests/health.test.ts`
-- [ ] Browser component test renders no bot token, internal origin or arbitrary redirect.
+- [x] `bun test app/src/lib/auth app/src/routes/sign.test.tsx server/tests/health.test.ts`
+- [x] Browser component test renders no bot token, internal origin or arbitrary redirect.
 
 **Dependencies:** Task 6.
 

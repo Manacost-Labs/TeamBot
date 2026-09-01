@@ -350,7 +350,7 @@ function createTelegramFixture(
     const response = await auth.handler(
       new Request(
         `${TELEGRAM_BASE_URL}/api/auth/telegram/state?returnPath=${encodeURIComponent(returnPath)}`,
-        { headers: { origin: TELEGRAM_BASE_URL } },
+        { method: "POST", headers: { origin: TELEGRAM_BASE_URL } },
       ),
     );
     expect(response.status).toBe(200);
@@ -393,6 +393,31 @@ function createTelegramFixture(
 }
 
 describe("verified Telegram account binding", () => {
+  test("issues state only for POST from the exact trusted origin", async () => {
+    const fixture = createTelegramFixture();
+    const url = `${TELEGRAM_BASE_URL}/api/auth/telegram/state?returnPath=/`;
+
+    const get = await fixture.auth.handler(
+      new Request(url, { headers: { origin: TELEGRAM_BASE_URL } }),
+    );
+    const missingOrigin = await fixture.auth.handler(
+      new Request(url, { method: "POST" }),
+    );
+    const exactOrigin = await fixture.auth.handler(
+      new Request(url, {
+        method: "POST",
+        headers: { origin: TELEGRAM_BASE_URL },
+      }),
+    );
+
+    expect([404, 405]).toContain(get.status);
+    expect(missingOrigin.status).toBe(401);
+    expect(exactOrigin.status).toBe(200);
+    await expect(exactOrigin.json()).resolves.toEqual({
+      state: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+  });
+
   test("creates one opaque editor and returns the same normal session user", async () => {
     const fixture = createTelegramFixture();
     const firstState = await fixture.issueState();

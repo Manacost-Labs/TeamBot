@@ -259,6 +259,13 @@ export function createApp(
        * companies use this deployment, which is not theirs to have before they sign in.
        */
       ssoConfigured: ((await identityProviders?.list()) ?? []).length > 0,
+      /*
+       * Telegram's widget needs its public BotFather username, and nothing else from the
+       * server-only configuration. Keep the explicit projection: the token, allowlist, owner set
+       * and trusted origins all live beside this value in `config.auth.telegram`.
+       */
+      telegramEnabled: Boolean(config.auth?.telegram),
+      botUsername: config.auth?.telegram?.botUsername ?? null,
     }),
   );
   /*
@@ -300,7 +307,26 @@ export function createApp(
       }
     }
 
-    return auth.handler(context.req.raw);
+    const response = await auth.handler(context.req.raw);
+    const path = new URL(context.req.url).pathname;
+    if (
+      path === "/api/auth/telegram/callback" &&
+      config.auth?.telegram &&
+      response.status >= 400
+    ) {
+      /*
+       * Authentication failures are intentionally indistinguishable on the public screen. The
+       * auth boundary still expires its transient cookie in `response`; preserve every response
+       * header while replacing the private JSON refusal with a fixed, same-origin destination.
+      */
+      const headers = new Headers(response.headers);
+      headers.delete("content-length");
+      headers.delete("content-type");
+      headers.set("location", "/sign?telegramError=1");
+      return new Response(null, { status: 303, headers });
+    }
+
+    return response;
   });
 
   const authenticationUnavailable: MiddlewareHandler<{

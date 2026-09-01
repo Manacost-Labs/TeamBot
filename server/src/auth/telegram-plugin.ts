@@ -173,7 +173,9 @@ export function telegramSessionPlugin(
     endpoints: {
       telegramState: createAuthEndpoint(
         "/telegram/state",
-        { method: "GET", requireHeaders: true },
+        // POST makes browsers attach Origin even on a same-origin request. A GET cannot reliably
+        // carry that proof, which would make the exact-origin guard below reject the real screen.
+        { method: "POST", requireHeaders: true },
         async (context) => {
           secureResponseHeaders(context);
           if (!isVerifiedFlow(options) || !context.request) unauthorized();

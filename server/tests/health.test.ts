@@ -31,6 +31,8 @@ describe("runtime capabilities", () => {
       // A boolean, not a list: naming the registered providers would tell anybody who loads the
       // sign-in page which companies use this deployment.
       ssoConfigured: false,
+      telegramEnabled: false,
+      botUsername: null,
     });
   });
 
@@ -49,9 +51,97 @@ describe("runtime capabilities", () => {
       "durableHistory",
       "authProviders",
       "ssoConfigured",
+      "telegramEnabled",
+      "botUsername",
     ]);
     // The provider list is names, never the clients and secrets behind them.
     expect(body).not.toContain("google-client-secret");
+  });
+
+  test("projects only the public Telegram widget settings", async () => {
+    const telegramApp = createApp(
+      loadConfig(
+        testEnvironment({
+          GOOGLE_OAUTH_CLIENT_ID: undefined,
+          GOOGLE_OAUTH_CLIENT_SECRET: undefined,
+          INITIAL_ADMIN_EMAILS: undefined,
+          BETTER_AUTH_URL: undefined,
+          OPENBOT_PUBLIC_URL: "https://work.kolodahearthstone.com",
+          TELEGRAM_LOGIN_BOT_USERNAME: "ManacostTeamBot",
+          TELEGRAM_LOGIN_BOT_TOKEN: "123456:not-for-the-browser",
+          TELEGRAM_ALLOWED_USER_IDS: "810001,810002",
+          TELEGRAM_OWNER_USER_IDS: "810001",
+          TRUSTED_ORIGINS: "https://internal-auth.example",
+        }),
+      ),
+    );
+
+    const response = await telegramApp.request(
+      "http://openbot.local/api/capabilities",
+    );
+    const body = await response.text();
+    const parsed = (await new Response(body).json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(parsed).toEqual({
+      mode: "intelligence",
+      durableHistory: true,
+      authProviders: [],
+      ssoConfigured: false,
+      telegramEnabled: true,
+      botUsername: "ManacostTeamBot",
+    });
+    expect(Object.keys(parsed)).toEqual([
+      "mode",
+      "durableHistory",
+      "authProviders",
+      "ssoConfigured",
+      "telegramEnabled",
+      "botUsername",
+    ]);
+    expect(body).not.toContain("not-for-the-browser");
+    expect(body).not.toContain("810001");
+    expect(body).not.toContain("810002");
+    expect(body).not.toContain("internal-auth.example");
+    expect(body).not.toContain("OPENBOT_PUBLIC_URL");
+  });
+
+  test("turns private Telegram callback failures into one generic sign-in result", async () => {
+    const telegramApp = createApp(
+      loadConfig(
+        testEnvironment({
+          GOOGLE_OAUTH_CLIENT_ID: undefined,
+          GOOGLE_OAUTH_CLIENT_SECRET: undefined,
+          INITIAL_ADMIN_EMAILS: undefined,
+          BETTER_AUTH_URL: undefined,
+          OPENBOT_PUBLIC_URL: "https://work.kolodahearthstone.com",
+          TELEGRAM_LOGIN_BOT_USERNAME: "ManacostTeamBot",
+          TELEGRAM_LOGIN_BOT_TOKEN: "123456:not-for-the-browser",
+          TELEGRAM_ALLOWED_USER_IDS: "810001",
+          TELEGRAM_OWNER_USER_IDS: "810001",
+        }),
+      ),
+      {
+        handler: () =>
+          new Response("private verification detail", {
+            status: 401,
+            headers: {
+              "set-cookie":
+                "telegram_login_binding=; Path=/; Max-Age=0; HttpOnly; Secure",
+            },
+          }),
+        api: { getSession: async () => null },
+      },
+    );
+
+    const response = await telegramApp.request(
+      "http://openbot.local/api/auth/telegram/callback?state=bad",
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/sign?telegramError=1");
+    expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+    expect(await response.text()).toBe("");
   });
 });
 

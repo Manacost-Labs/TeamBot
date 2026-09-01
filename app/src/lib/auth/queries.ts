@@ -28,7 +28,12 @@ export type SignInOptions = {
    * use this deployment, before they have signed in.
    */
   sso: boolean;
+  /** The only public Telegram setting: the BotFather username used by the official widget. */
+  telegram: { botUsername: string } | null;
 };
+
+const TELEGRAM_BOT_USERNAME = /^[A-Za-z][A-Za-z0-9_]{1,28}[Bb][Oo][Tt]$/;
+const TELEGRAM_LOGIN_STATE = /^[a-f0-9]{64}$/;
 
 async function signInOptions(): Promise<SignInOptions> {
   // The whole body, so both fields arrive together. Reading a field off the Response `client`
@@ -36,12 +41,44 @@ async function signInOptions(): Promise<SignInOptions> {
   // while the server was saying it has one.
   const body = (await (
     await client("/api/capabilities", { fallback: "Could not load sign-in" })
-  ).json()) as { authProviders?: AuthProviderId[]; ssoConfigured?: boolean };
+  ).json()) as {
+    authProviders?: AuthProviderId[];
+    ssoConfigured?: boolean;
+    telegramEnabled?: boolean;
+    botUsername?: unknown;
+  };
+
+  const botUsername =
+    body.telegramEnabled === true &&
+    typeof body.botUsername === "string" &&
+    TELEGRAM_BOT_USERNAME.test(body.botUsername)
+      ? body.botUsername
+      : null;
 
   return {
     providers: body.authProviders ?? [],
     sso: body.ssoConfigured === true,
+    telegram: botUsername ? { botUsername } : null,
   };
+}
+
+/** Ask the server for one browser-bound state; neither the destination nor its shape is caller-controlled. */
+export async function telegramLoginState(
+  signal?: AbortSignal,
+): Promise<string> {
+  const response = await client("/api/auth/telegram/state?returnPath=/", {
+    fallback: "Could not prepare Telegram sign-in",
+    method: "POST",
+    signal,
+  });
+  const body = (await response.json()) as { state?: unknown };
+  if (
+    typeof body.state !== "string" ||
+    !TELEGRAM_LOGIN_STATE.test(body.state)
+  ) {
+    throw new Error("Telegram sign-in returned an invalid state");
+  }
+  return body.state;
 }
 
 /**
