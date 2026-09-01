@@ -1,9 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { sso } from "@better-auth/sso";
 import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
 import { genericOAuth, okta } from "better-auth/plugins";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import type { AuditEventInput, AuditStore } from "../audit";
 import { recordAuditEvent } from "../audit";
 import type { DeploymentConfig } from "../config";
@@ -12,12 +13,132 @@ import {
   accounts,
   sessions,
   ssoProviders,
+  userRoles,
   users,
   verifications,
 } from "../db/schema";
 import { encryptSsoConfig } from "./encrypt-sso-config";
-import { applyConfiguredAdmin, seedRole } from "./roles";
+import {
+  applyConfiguredAdmin,
+  roleForTelegramBinding,
+  seedRole,
+  setRole,
+} from "./roles";
+import type { VerifiedTelegramLogin } from "./telegram-login";
 import { telegramSessionPlugin } from "./telegram-plugin";
+
+const TELEGRAM_PROVIDER_ID = "telegram";
+const TELEGRAM_ISSUER = "telegram";
+
+class TelegramBindingRaceLost extends Error {}
+
+/**
+ * Bind a verified immutable Telegram subject to exactly one local user.
+ *
+ * New editors are provisioned in one database transaction. The account insert uses the schema's
+ * `(provider_id, account_id)` unique index as the concurrency gate; a losing transaction throws so
+ * its tentative user row is rolled back, then resolves the winner. Owners never self-provision:
+ * Task 8 must explicitly insert their account binding to the retained owner row first.
+ */
+export function createTelegramIdentityProvisioner(
+  database: Database,
+  ownerUserIds: ReadonlySet<string>,
+) {
+  const findBoundUserId = async (subject: string) => {
+    const [row] = await database
+      .select({ userId: accounts.userId })
+      .from(accounts)
+      .innerJoin(users, eq(users.id, accounts.userId))
+      .where(
+        and(
+          eq(accounts.providerId, TELEGRAM_PROVIDER_ID),
+          eq(accounts.issuer, TELEGRAM_ISSUER),
+          eq(accounts.accountId, subject),
+        ),
+      )
+      .limit(1);
+    return row?.userId ?? null;
+  };
+
+  return async (
+    login: VerifiedTelegramLogin,
+  ): Promise<{ userId: string } | null> => {
+    const subject = `telegram:${login.id}`;
+    const isOwner = ownerUserIds.has(login.id);
+    const existingUserId = await findBoundUserId(subject);
+    const existingRole = roleForTelegramBinding(
+      isOwner,
+      Boolean(existingUserId),
+    );
+    if (existingUserId) {
+      if (existingRole) await setRole(database, existingUserId, existingRole);
+      return { userId: existingUserId };
+    }
+    if (isOwner) return null;
+
+    const userId = randomUUID();
+    const email = `${randomUUID()}@telegram.manacost.invalid`;
+    const name = [login.firstName, login.lastName].filter(Boolean).join(" ");
+
+    try {
+      const result = await database.transaction(async (transaction) => {
+        const [alreadyBound] = await transaction
+          .select({ userId: accounts.userId })
+          .from(accounts)
+          .innerJoin(users, eq(users.id, accounts.userId))
+          .where(
+            and(
+              eq(accounts.providerId, TELEGRAM_PROVIDER_ID),
+              eq(accounts.issuer, TELEGRAM_ISSUER),
+              eq(accounts.accountId, subject),
+            ),
+          )
+          .limit(1);
+        if (alreadyBound)
+          return { userId: alreadyBound.userId, created: false };
+
+        await transaction.insert(users).values({
+          id: userId,
+          email,
+          name,
+          image: login.photoUrl,
+          emailVerified: true,
+        });
+        const insertedAccount = await transaction
+          .insert(accounts)
+          .values({
+            id: randomUUID(),
+            accountId: subject,
+            providerId: TELEGRAM_PROVIDER_ID,
+            issuer: TELEGRAM_ISSUER,
+            userId,
+          })
+          .onConflictDoNothing()
+          .returning({ userId: accounts.userId });
+        if (insertedAccount.length !== 1) {
+          // Throwing rolls back the user inserted immediately above.
+          throw new TelegramBindingRaceLost();
+        }
+
+        await transaction
+          .delete(userRoles)
+          .where(and(eq(userRoles.userId, userId), ne(userRoles.role, "user")));
+        await transaction
+          .insert(userRoles)
+          .values({ userId, role: "user" })
+          .onConflictDoNothing();
+        return { userId, created: true };
+      });
+
+      return { userId: result.userId };
+    } catch (error) {
+      if (!(error instanceof TelegramBindingRaceLost)) throw error;
+      const winnerUserId = await findBoundUserId(subject);
+      if (!winnerUserId) return null;
+      return { userId: winnerUserId };
+    }
+  };
+}
 
 /**
  * Write a row about a sign-in, and never let the writing of it stop one.
@@ -127,9 +248,29 @@ export function createAuth(
    * sign-in screen has one code path and does not need to know which kind each provider is.
    */
   const plugins = [
-    // Registered fail-closed until the verified Telegram resolver is wired in Tasks 4-6. This keeps
-    // session minting inside Better Auth without exposing a temporary browser-controlled bypass.
-    telegramSessionPlugin(),
+    ...(authConfig.telegram
+      ? [
+          telegramSessionPlugin({
+            telegram: {
+              botToken: authConfig.telegram.botToken,
+              allowedUserIds: authConfig.telegram.allowedUserIds,
+              ownerUserIds: authConfig.telegram.ownerUserIds,
+              trustedOrigin: authConfig.baseUrl,
+            },
+            provisionVerifiedUser: createTelegramIdentityProvisioner(
+              database,
+              authConfig.telegram.ownerUserIds,
+            ),
+            recordRefusal: async (reason) => {
+              await record(auditStore, {
+                eventType: "session.refused",
+                targetType: "person",
+                payload: { reason },
+              });
+            },
+          }),
+        ]
+      : [telegramSessionPlugin()]),
     ...(authConfig.okta
       ? [
           genericOAuth({
@@ -199,6 +340,9 @@ export function createAuth(
        */
       encryptOAuthTokens: true,
     },
+    // Telegram state consumption and proof reservation must be atomic across replicas. Better
+    // Auth's verification primitives provide that guarantee only on the database-backed path.
+    verification: { storeInDatabase: true },
     plugins,
     socialProviders: {
       ...(authConfig.google ? { google: authConfig.google } : {}),

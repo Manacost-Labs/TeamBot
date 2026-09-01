@@ -169,14 +169,14 @@ binding and owner/editor role provisioning.
 
 **Acceptance criteria:**
 
-- [ ] An allowlisted new subject creates one opaque user, one Telegram account and the configured role.
-- [ ] A returning subject resolves to the same user; a browser cannot select or rebind a user ID.
-- [ ] Unknown, revoked or removed IDs create neither user nor session and produce only safe audit metadata.
+- [x] An allowlisted new subject creates one opaque user, one Telegram account and the configured role.
+- [x] A returning subject resolves to the same user; a browser cannot select or rebind a user ID.
+- [x] Unknown, revoked or removed IDs create neither user nor session and produce only safe audit metadata.
 
 **Verification:**
 
-- [ ] `bun test server/tests/telegram-plugin.test.ts server/tests/guards.test.ts`
-- [ ] Database integration test proves account subject uniqueness under two concurrent callbacks.
+- [x] `bun test server/tests/telegram-plugin.test.ts server/tests/guards.test.ts`
+- [x] Database integration test proves account subject uniqueness under two concurrent callbacks.
 
 **Dependencies:** Tasks 4–5.
 
@@ -191,9 +191,9 @@ binding and owner/editor role provisioning.
 
 ## Checkpoint B — Server-side Telegram authentication
 
-- [ ] Tasks 4–6 pass with no browser code.
-- [ ] Owner/editor/unknown/replay cases leave the expected users, roles, sessions and audit events.
-- [ ] Existing Google, Microsoft, Okta and SSO tests remain green.
+- [x] Tasks 4–6 pass with no browser code.
+- [x] Owner/editor/unknown/replay cases leave the expected users, roles, sessions and audit events.
+- [x] Existing Google, Microsoft, Okta and SSO tests remain green.
 
 ### Task 7: Telegram sign-in screen
 

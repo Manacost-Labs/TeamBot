@@ -5,6 +5,23 @@ import { userRoles, users } from "../db/schema";
 export type OpenBotRole = "admin" | "user";
 
 /**
+ * Telegram owners are migration targets, not ordinary self-provisioning users.
+ *
+ * An owner becomes an administrator only after an operator has explicitly bound the immutable
+ * Telegram subject to the retained owner row. New editors receive `user`; returning editors keep
+ * the role an administrator assigned in People. Keeping this decision server-side prevents a
+ * callback or profile field from selecting its own role.
+ */
+export function roleForTelegramBinding(
+  isConfiguredOwner: boolean,
+  hasExplicitBinding: boolean,
+): OpenBotRole | null {
+  if (isConfiguredOwner && !hasExplicitBinding) return null;
+  if (isConfiguredOwner) return "admin";
+  return hasExplicitBinding ? null : "user";
+}
+
+/**
  * Whether this address is an administrator by configuration.
  *
  * A floor, not the whole answer. Somebody named here is always an administrator and cannot be
