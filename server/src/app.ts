@@ -318,7 +318,7 @@ export function createApp(
        * Authentication failures are intentionally indistinguishable on the public screen. The
        * auth boundary still expires its transient cookie in `response`; preserve every response
        * header while replacing the private JSON refusal with a fixed, same-origin destination.
-      */
+       */
       const headers = new Headers(response.headers);
       headers.delete("content-length");
       headers.delete("content-type");
