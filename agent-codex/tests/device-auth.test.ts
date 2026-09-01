@@ -325,6 +325,28 @@ describe("ChatGPT device authentication coordinator", () => {
     });
   });
 
+  test("shutdown waits for an in-flight profile creation and removes its home", async () => {
+    const profileGate = deferred<void>();
+    const fixtureState = fixture({ profileGate: profileGate.promise });
+    const starting = fixtureState.coordinator.start(
+      "66666666-6666-4666-8666-666666666666",
+    );
+    let shutdownSettled = false;
+    const shutdown = fixtureState.coordinator.shutdown().then(() => {
+      shutdownSettled = true;
+    });
+
+    await Bun.sleep(0);
+    expect(shutdownSettled).toBe(false);
+    profileGate.resolve();
+
+    await shutdown;
+    await expect(starting).rejects.toMatchObject({ code: "service_stopped" });
+    expect(fixtureState.exits).toHaveLength(0);
+    expect(fixtureState.profiles).toHaveLength(1);
+    await expect(access(fixtureState.profiles[0]!.codexHome)).rejects.toThrow();
+  });
+
   test("shutdown clears a completed auth document and no longer reports completion", async () => {
     const fixtureState = fixture({});
     const started = await fixtureState.coordinator.start();

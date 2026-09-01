@@ -243,6 +243,7 @@ async function safeAuthDocument(profile: CodexRuntimeProfile) {
 export class ChatGptDeviceAuthCoordinator {
   private readonly flows = new Map<string, FlowRecord>();
   private readonly startingFlowIds = new Set<string>();
+  private readonly pendingStarts = new Set<Promise<DeviceAuthStartResult>>();
   private readonly ttlMs: number;
   private readonly readyTimeoutMs: number;
   private readonly terminationGraceMs: number;
@@ -274,7 +275,19 @@ export class ChatGptDeviceAuthCoordinator {
     this.spawn = options.spawn ?? spawnInstalledCodex;
   }
 
-  async start(requestedFlowId = randomUUID()): Promise<DeviceAuthStartResult> {
+  start(requestedFlowId = randomUUID()): Promise<DeviceAuthStartResult> {
+    const pending = this.startFlow(requestedFlowId);
+    this.pendingStarts.add(pending);
+    void pending.then(
+      () => this.pendingStarts.delete(pending),
+      () => this.pendingStarts.delete(pending),
+    );
+    return pending;
+  }
+
+  private async startFlow(
+    requestedFlowId: string,
+  ): Promise<DeviceAuthStartResult> {
     if (this.stopped) throw new DeviceAuthFlowError("service_stopped");
     const flowId = canonicalFlowId(requestedFlowId);
     if (this.flows.has(flowId) || this.startingFlowIds.has(flowId)) {
@@ -379,19 +392,23 @@ export class ChatGptDeviceAuthCoordinator {
   async shutdown(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
-    await Promise.all(
-      [...this.flows.values()].map(async (flow) => {
-        if (flow.state === "pending") {
-          await this.transition(flow, "cancelled", true);
-        } else {
-          flow.authDocument = undefined;
-          if (flow.state === "completed") flow.state = "cancelled";
-          if (flow.expiryTimer) clearTimeout(flow.expiryTimer);
-          await this.cleanup(flow, false);
-          this.schedulePurge(flow);
-        }
-      }),
-    );
+    const starts = [...this.pendingStarts];
+    await Promise.all([
+      Promise.all(
+        [...this.flows.values()].map(async (flow) => {
+          if (flow.state === "pending") {
+            await this.transition(flow, "cancelled", true);
+          } else {
+            flow.authDocument = undefined;
+            if (flow.state === "completed") flow.state = "cancelled";
+            if (flow.expiryTimer) clearTimeout(flow.expiryTimer);
+            await this.cleanup(flow, false);
+            this.schedulePurge(flow);
+          }
+        }),
+      ),
+      Promise.allSettled(starts),
+    ]);
   }
 
   private flow(flowId: string): FlowRecord {
