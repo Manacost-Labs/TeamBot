@@ -319,14 +319,14 @@ the existing encrypted credential vault.
 
 **Acceptance criteria:**
 
-- [ ] Every operation receives the authenticated actor ID; no caller supplies a target user or credential ID.
-- [ ] Replacement rotates the encrypted credential and connection pointer atomically.
-- [ ] Status projections contain provider/state/time and safe metadata, never ciphertext or plaintext.
+- [x] Every operation receives the authenticated actor ID; no caller supplies a target user or credential ID.
+- [x] Replacement rotates the encrypted credential and connection pointer atomically.
+- [x] Status projections contain provider/state/time and safe metadata, never ciphertext or plaintext.
 
 **Verification:**
 
-- [ ] `bun test server/tests/ai-connection-store.test.ts server/tests/credentials.test.ts`
-- [ ] Transaction-failure fixtures leave the previous connection live and reveal no secret.
+- [x] `bun test server/tests/ai-connection-store.test.ts server/tests/credentials.test.ts`
+- [x] Transaction-failure fixtures leave the previous connection live and reveal no secret.
 
 **Dependencies:** Task 10.
 
