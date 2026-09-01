@@ -59,7 +59,7 @@ COPY examples examples
 COPY --from=app-build /app/app/dist app/dist
 ENV APP_DIST_DIR=/app/app/dist
 
-USER openbot:openbot
+USER 1001:1001
 
 ENV NODE_ENV=production
 ENV PORT=3001

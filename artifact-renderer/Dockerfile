@@ -10,9 +10,8 @@ RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
 COPY --chown=pwuser:pwuser src ./src
 
-# The official image owns this stable account; its numeric id is an image implementation detail.
-# hadolint ignore=DL3066
-USER pwuser
+# The official image pins `pwuser` to uid/gid 1001; numeric ids remain resolvable without NSS.
+USER 1001:1001
 EXPOSE 8080
 
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \

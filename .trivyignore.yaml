@@ -1,0 +1,22 @@
+---
+misconfigurations:
+  - id: AVD-DS-0002
+    paths:
+      - Dockerfile
+    expired_at: 2026-12-01
+    statement: >-
+      The all-in-one image uses s6 as PID 1 to initialise an optional PostgreSQL
+      volume and then drop the API/browser and database services to distinct
+      pwuser and postgres accounts. A single Dockerfile USER would either break
+      volume ownership setup or collapse those service boundaries. Reassess by
+      2026-12-01 as the multi-container deployment becomes the default.
+  - id: AVD-DS-0002
+    paths:
+      - supervisor/Dockerfile
+    expired_at: 2026-12-01
+    statement: >-
+      The isolated supervisor must reach the host Docker socket, whose group ID
+      is host-dependent. Membership in that socket group already grants Docker
+      control equivalent to root; a static image USER would not reduce that
+      authority and would make the deployment non-portable. Keep this service
+      unaffiliated with agent workloads and reassess by 2026-12-01.

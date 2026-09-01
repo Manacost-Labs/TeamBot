@@ -5,16 +5,20 @@
 FROM oven/bun:1.3-alpine
 
 WORKDIR /app
+RUN chown bun:bun /app
 # The lockfile as well as the manifest: `--frozen-lockfile` with no lockfile present resolves afresh
 # and exits 0, so the file has to be here for the flag to mean anything.
-COPY agent-langgraph/package.json agent-langgraph/bun.lock ./agent-langgraph/
-RUN cd agent-langgraph && bun install --frozen-lockfile
+COPY --chown=1000:1000 agent-langgraph/package.json agent-langgraph/bun.lock ./agent-langgraph/
+WORKDIR /app/agent-langgraph
+RUN bun install --frozen-lockfile
+WORKDIR /app
 
 # The repo's own layout, kept exactly, so `../../shared/bot-prompt` resolves the same here as it
 # does on a laptop. Flattening src to /app/src would change the depth and break only on deploy.
-COPY shared ./shared
-COPY agent-langgraph/src ./agent-langgraph/src
+COPY --chown=1000:1000 shared ./shared
+COPY --chown=1000:1000 agent-langgraph/src ./agent-langgraph/src
 
 ENV PORT=4201
 EXPOSE 4201
+USER 1000:1000
 CMD ["bun", "agent-langgraph/src/index.ts"]

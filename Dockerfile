@@ -28,9 +28,13 @@ ARG BUN_VERSION=1.3.14
 # root's home. Set before the install, or the installer has already chosen the wrong directory.
 ENV BUN_INSTALL=/usr/local
 ENV PATH="/usr/local/bin:${PATH}"
-RUN apt-get update && apt-get install -y --no-install-recommends unzip xz-utils \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      unzip=6.0-28ubuntu4.1 \
+      xz-utils=5.6.1+really5.4.5-1ubuntu0.3 \
   && rm -rf /var/lib/apt/lists/* \
-  && curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"
+  && curl -fsSL -o /tmp/install-bun.sh https://bun.sh/install \
+  && bash /tmp/install-bun.sh "bun-v${BUN_VERSION}" \
+  && rm /tmp/install-bun.sh
 
 
 FROM base AS deps
@@ -51,17 +55,21 @@ RUN bun install --frozen-lockfile
 # pinned twenty-odd lines above for the same reason; this is the install below it.
 COPY agent-computer/package.json agent-computer/package.json
 COPY agent-computer/bun.lock agent-computer/bun.lock
-RUN cd agent-computer && bun install --frozen-lockfile
+WORKDIR /src/agent-computer
+RUN bun install --frozen-lockfile
+WORKDIR /src
 
 # A second tree with the build-time dependencies left out, for the runtime stage to take. Vite,
 # biome and the test tooling are a gigabyte that nothing in a running container imports.
 RUN mkdir -p /prod && cp package.json bun.lock /prod/ \
   && cp -r app/package.json /prod/app-package.json \
-  && cd /prod && mkdir -p app server worker \
-  && cp /src/app/package.json app/package.json \
-  && cp /src/server/package.json server/package.json \
-  && cp /src/worker/package.json worker/package.json \
-  && bun install --frozen-lockfile --production
+  && mkdir -p /prod/app /prod/server /prod/worker \
+  && cp /src/app/package.json /prod/app/package.json \
+  && cp /src/server/package.json /prod/server/package.json \
+  && cp /src/worker/package.json /prod/worker/package.json
+WORKDIR /prod
+RUN bun install --frozen-lockfile --production
+WORKDIR /src
 
 
 FROM deps AS app-build
@@ -127,7 +135,8 @@ COPY docker/s6 /etc/s6-overlay
 # a container lives and dies with that container unless /var/lib/postgresql is a mounted volume, and
 # the audit trail is the thing you would be losing.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      postgresql-16 postgresql-16-pgvector \
+      postgresql-16=16.15-0ubuntu0.24.04.1 \
+      postgresql-16-pgvector=0.6.0-1 \
   && rm -rf /var/lib/apt/lists/* \
   && mkdir -p /var/lib/postgresql/data /var/run/postgresql \
   && chown -R postgres:postgres /var/lib/postgresql /var/run/postgresql
@@ -152,7 +161,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # which is why per-Bot computers and gVisor are not optional extras next to this feature. Run the
 # image with `--security-opt no-new-privileges` where the platform allows, which turns setuid off
 # entirely for anything not named here.
-RUN apt-get update && apt-get install -y --no-install-recommends sudo \
+RUN apt-get update && apt-get install -y --no-install-recommends sudo=1.9.15p5-3ubuntu5.24.04.2 \
   && rm -rf /var/lib/apt/lists/* \
   && printf '%s\n' \
     'pwuser ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt, /usr/bin/dpkg, /usr/bin/apt-key, /usr/bin/apt-cache' \
@@ -214,6 +223,6 @@ EXPOSE 3001
 # One port out. The browser's 4100 is deliberately not exposed: it holds real logins and its only
 # caller is the process next to it.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
-  CMD bun -e "const r = await fetch('http://127.0.0.1:3001/health'); process.exit(r.ok ? 0 : 1)"
+  CMD ["bun", "-e", "const r = await fetch('http://127.0.0.1:3001/health'); process.exit(r.ok ? 0 : 1)"]
 
 ENTRYPOINT ["/init"]

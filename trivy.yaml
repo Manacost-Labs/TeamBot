@@ -1,0 +1,4 @@
+---
+# Trivy only auto-loads the legacy .trivyignore format. Point it at the
+# structured policy so every exception remains scanner- and path-scoped.
+ignorefile: .trivyignore.yaml
