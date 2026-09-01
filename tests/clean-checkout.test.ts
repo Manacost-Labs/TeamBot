@@ -26,7 +26,22 @@ const rootManifest = manifest(".");
 const workspaces = rootManifest.workspaces ?? [];
 
 /** Packages with their own manifest that the root install does not reach. */
-const OUTSIDE_THE_WORKSPACES = ["agent-computer", "supervisor"] as const;
+const OUTSIDE_THE_WORKSPACES = [
+  "agent-bot",
+  "agent-computer",
+  "agent-langgraph",
+  "supervisor",
+] as const;
+
+const LOADED_BY_ROOT_TESTS: Record<
+  (typeof OUTSIDE_THE_WORKSPACES)[number],
+  readonly string[]
+> = {
+  "agent-bot": ["@ag-ui/core", "@ag-ui/encoder", "openai"],
+  "agent-computer": ["yaml"],
+  "agent-langgraph": ["@ag-ui/core", "@langchain/core"],
+  supervisor: [],
+};
 
 describe("a clone that has only run bun install", () => {
   test.each(OUTSIDE_THE_WORKSPACES)(
@@ -42,10 +57,10 @@ describe("a clone that has only run bun install", () => {
         ...(rootManifest.devDependencies ?? {}),
       };
 
-      // Only what the root test run actually loads. Playwright is imported by the service entry
-      // point, which no test imports, and it is installed inside the container image instead.
-      const loadedByTests = declared.filter((name) => name === "yaml");
-      for (const name of loadedByTests) {
+      // Only what the root test run actually loads. Some service entry points are exercised in a
+      // child process, while dependencies used only inside a container remain image-local.
+      for (const name of LOADED_BY_ROOT_TESTS[packageName]) {
+        expect(declared).toContain(name);
         expect(rootHas).toHaveProperty(name);
       }
     },
