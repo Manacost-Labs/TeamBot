@@ -571,14 +571,14 @@ the existing per-agent/global limits continue to apply.
 
 **Acceptance criteria:**
 
-- [ ] The server-configured model/provider is used and client model override cannot cross providers.
-- [ ] Existing reasoning, tools, research finalization and artifact behavior remain unchanged.
-- [ ] Child/profile cleanup occurs after success, failure, cancellation and forced kill.
+- [x] The server-configured model/provider is used and client model override cannot cross providers.
+- [x] Existing reasoning, tools, research finalization and artifact behavior remain unchanged.
+- [x] Child/profile cleanup occurs after success, failure, cancellation and forced kill.
 
 **Verification:**
 
-- [ ] `bun test agent-codex/tests/runtime-profile.test.ts agent-codex/tests/codex-run.test.ts agent-codex/tests/history.test.ts`
-- [ ] Controlled Responses endpoint completes one AG-UI run through the real Codex child.
+- [x] `bun test agent-codex/tests/runtime-profile.test.ts agent-codex/tests/codex-run.test.ts agent-codex/tests/history.test.ts`
+- [x] Controlled Responses endpoint completes one AG-UI run through the real Codex child.
 
 **Dependencies:** Tasks 2, 18 and 19.
 
@@ -598,13 +598,13 @@ sharing history, tools or provider state.
 
 **Acceptance criteria:**
 
-- [ ] Two actors receive distinct leases, provider contexts, Intelligence user IDs and audit actors.
-- [ ] Tool callbacks remain authorized by the original signed run and never by OpenRouter output.
-- [ ] Secret canaries are absent from browser events, tool results and bounded service logs.
+- [x] Two actors receive distinct leases, provider contexts, Intelligence user IDs and audit actors.
+- [x] Tool callbacks remain authorized by the original signed run and never by OpenRouter output.
+- [x] Secret canaries are absent from browser events, tool results and bounded service logs.
 
 **Verification:**
 
-- [ ] `bun test server/tests/personal-ai-run.integration.test.ts agent-codex/tests/personal-provider.integration.test.ts`
+- [x] `bun test server/tests/personal-ai-run.integration.test.ts agent-codex/tests/personal-provider.integration.test.ts`
 
 **Dependencies:** Task 20.
 
@@ -617,9 +617,9 @@ sharing history, tools or provider state.
 
 ## Checkpoint G — OpenRouter execution slice
 
-- [ ] Tasks 19–21 pass together.
-- [ ] One controlled end-to-end run creates real progressive AG-UI events and governed tool audit.
-- [ ] No global or owner credential is consulted when a user connection is absent.
+- [x] Tasks 19–21 pass together.
+- [x] One controlled end-to-end run creates real progressive AG-UI events and governed tool audit.
+- [x] No global or owner credential is consulted when a user connection is absent.
 
 ## Phase 4 — ChatGPT/Codex personal connection
 
