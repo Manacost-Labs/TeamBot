@@ -8,6 +8,51 @@ import parser_ops_service as service
 
 
 class ParserOpsValidationTest(unittest.TestCase):
+    def test_api_url_requires_a_public_https_base(self) -> None:
+        unsafe = (
+            "file:///etc/passwd",
+            "http://api.kolodahearthstone.com",
+            "https://127.0.0.1",
+            "https://127.1",
+            "https://2130706433",
+            "https://0x7f000001",
+            "https://10.0.0.1",
+            "https://169.254.169.254",
+            "https://[::1]",
+            "https://user@example.com",
+            "https://api.kolodahearthstone.com/path",
+            "https://api.kolodahearthstone.com?wrong=1",
+            "https://api.kolodahearthstone.com.evil.example",
+        )
+        for base in unsafe:
+            with self.subTest(base=base), patch.object(service, "API_BASE", base):
+                with self.assertRaises(RuntimeError):
+                    service._validated_api_url("v1/sources")
+
+    def test_api_url_keeps_paths_on_the_configured_origin(self) -> None:
+        self.assertEqual(
+            service._validated_api_url("/v1/sources"),
+            "https://api.kolodahearthstone.com/v1/sources",
+        )
+
+    def test_api_url_rejects_an_absolute_or_fragmented_path(self) -> None:
+        for path in ("https://example.com/private", "//example.com/private", "v1/sources#fragment"):
+            with self.subTest(path=path), self.assertRaises(RuntimeError):
+                service._validated_api_url(path)
+
+    def test_redirect_handler_refuses_every_redirect(self) -> None:
+        handler = service._NoRedirectHandler()
+        self.assertIsNone(
+            handler.redirect_request(
+                None,
+                None,
+                302,
+                "Found",
+                {},
+                "https://api.kolodahearthstone.com/v1/sources",
+            )
+        )
+
     def test_source_ids_rejects_more_than_five_before_any_operation(self) -> None:
         with self.assertRaises(service.Refused):
             service._source_ids([f"source_{index}" for index in range(6)])

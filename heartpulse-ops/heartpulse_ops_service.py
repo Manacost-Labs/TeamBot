@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -19,6 +20,7 @@ import subprocess
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -37,6 +39,7 @@ PUBLIC_BASE_URL = os.environ.get(
     "HEARTHPULSE_PUBLIC_BASE_URL",
     "https://hearthpulse.net",
 ).rstrip("/")
+PUBLIC_HOST = "hearthpulse.net"
 VALIDATION_FILE = Path(os.environ.get("HEARTPULSE_OPS_VALIDATION_FILE", "/var/lib/openbot-heartpulse-ops/validation.json"))
 DEPLOY_HELPER = os.environ.get("HEARTPULSE_DEPLOY_HELPER", "/usr/local/sbin/heartpulse-deploy")
 EXPECTED_BRANCH = "agent/heartpulse-control"
@@ -81,6 +84,67 @@ class Refused(RuntimeError):
     pass
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Keep a configured public endpoint from redirecting into another trust zone."""
+
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        return None
+
+
+HTTP_OPENER = urllib.request.build_opener(_NoRedirectHandler())
+
+
+def _is_loopback_host(hostname: str) -> bool:
+    if hostname.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _validated_request_url(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.username is not None or parsed.password is not None or parsed.fragment:
+        raise RuntimeError("The configured audit URL is unsafe.")
+    hostname = parsed.hostname
+    if hostname is None:
+        raise RuntimeError("The configured audit URL has no host.")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise RuntimeError("The configured audit URL has an invalid port.") from error
+
+    if url == LOCAL_URL:
+        if parsed.scheme not in {"http", "https"} or not _is_loopback_host(hostname):
+            raise RuntimeError("The local audit URL must use HTTP(S) loopback.")
+        return url
+
+    public_base = urllib.parse.urlsplit(PUBLIC_BASE_URL)
+    try:
+        public_base_port = public_base.port
+    except ValueError as error:
+        raise RuntimeError("The public audit base URL has an invalid port.") from error
+    is_plain_public_origin = (
+        public_base.scheme == "https"
+        and public_base.hostname == PUBLIC_HOST
+        and public_base_port in {None, 443}
+        and public_base.username is None
+        and public_base.password is None
+        and public_base.path in {"", "/"}
+        and not public_base.query
+        and not public_base.fragment
+    )
+    is_public_target = (
+        parsed.scheme == "https"
+        and hostname == PUBLIC_HOST
+        and port in {None, 443}
+    )
+    if not is_plain_public_origin or not is_public_target:
+        raise RuntimeError("The public audit URL must stay on its configured HTTPS host.")
+    return url
+
+
 def _redact(value: str) -> str:
     value = re.sub(r"(?i)(authorization|api[_-]?key|token|secret|password)(\s*[:=]\s*)\S+", r"\1\2[redacted]", value)
     return value if len(value) <= MAX_OUTPUT else f"{value[:MAX_OUTPUT]}\n[truncated]"
@@ -104,18 +168,18 @@ def _git(*args: str, timeout: int = 120) -> str:
 
 
 def _request_json(url: str, *, timeout: int = 30) -> tuple[int, Any]:
-    request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "HeartPulse-Control/1.0"})
+    request = urllib.request.Request(_validated_request_url(url), headers={"Accept": "application/json", "User-Agent": "HeartPulse-Control/1.0"})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with HTTP_OPENER.open(request, timeout=timeout) as response:
             return response.status, json.load(response)
     except urllib.error.HTTPError as error:
         return error.code, None
 
 
 def _request_page(url: str, *, timeout: int = 30) -> tuple[int, str, str]:
-    request = urllib.request.Request(url, headers={"Accept": "text/html", "User-Agent": "HeartPulse-Control/1.0"})
+    request = urllib.request.Request(_validated_request_url(url), headers={"Accept": "text/html", "User-Agent": "HeartPulse-Control/1.0"})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with HTTP_OPENER.open(request, timeout=timeout) as response:
             body = response.read(MAX_PAGE_BYTES + 1)
             return response.status, response.headers.get_content_type(), body.decode("utf-8", errors="replace")
     except urllib.error.HTTPError as error:

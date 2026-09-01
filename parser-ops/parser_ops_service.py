@@ -22,6 +22,7 @@ from typing import Any
 
 WORKSPACE = Path(os.environ.get("PARSER_OPS_WORKSPACE", "/srv/projects/agents/control-data/api"))
 API_BASE = os.environ.get("PARSER_OPS_API_BASE", "https://api.kolodahearthstone.com").rstrip("/")
+API_HOST = "api.kolodahearthstone.com"
 RUNTIME_ENV = Path(os.environ.get("PARSER_OPS_RUNTIME_ENV", "/srv/hs-data-api/.env.docker"))
 VALIDATION_FILE = Path(
     os.environ.get(
@@ -47,6 +48,40 @@ SERVER_TOKEN = ""
 
 class Refused(RuntimeError):
     """A caller supplied an unsafe or unsupported request."""
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects so a configured API cannot bounce into another trust zone."""
+
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        return None
+
+
+HTTP_OPENER = urllib.request.build_opener(_NoRedirectHandler())
+
+
+def _validated_api_url(path: str) -> str:
+    base = urllib.parse.urlsplit(API_BASE)
+    hostname = base.hostname
+    try:
+        port = base.port
+    except ValueError as error:
+        raise RuntimeError("The parser API base URL has an invalid port.") from error
+    if (
+        base.scheme != "https"
+        or hostname != API_HOST
+        or port not in {None, 443}
+        or base.username is not None
+        or base.password is not None
+        or base.path not in {"", "/"}
+        or base.query
+        or base.fragment
+    ):
+        raise RuntimeError("The parser API base URL must be a plain HTTPS origin.")
+    relative = urllib.parse.urlsplit(path)
+    if relative.scheme or relative.netloc or relative.fragment:
+        raise RuntimeError("The parser API path must stay relative to the configured origin.")
+    return f"{API_BASE}/{path.lstrip('/')}"
 
 
 def _redact(value: str) -> str:
@@ -111,13 +146,13 @@ def _request_json(
         body = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(
-        f"{API_BASE}/{path.lstrip('/')}",
+        _validated_api_url(path),
         data=body,
         headers=headers,
         method=method,
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with HTTP_OPENER.open(request, timeout=timeout) as response:
             result = json.load(response)
     except urllib.error.HTTPError as error:
         raise RuntimeError(f"Parser API refused {path} with HTTP {error.code}.") from error
