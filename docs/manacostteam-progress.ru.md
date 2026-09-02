@@ -45,7 +45,9 @@ owner-binding на копии, изолированный owner/editor smoke, п
 условия немедленного rollback. Task 32 уже завершён на копии, а отдельное разрешение на Task 33
 получено для loopback-canary. Фактический [canary evidence](manacostteam-canary-evidence.md)
 фиксирует пройденную инфраструктуру и оставшиеся blockers; public cutover по-прежнему требует
-отдельного разрешения. Для rehearsal, canary и cutover используются отдельные
+отдельной проверки. По отдельному разрешению владельца 2026-09-02 runtime уже выкачен в
+production; Cloudflare/DNS route не менялся, поэтому это ещё не полное завершение Task 34.
+Для rehearsal, canary и cutover используются отдельные
 [evidence-документы](manacostteam-rehearsal-evidence.md), [canary evidence](manacostteam-canary-evidence.md)
 и [cutover evidence](manacostteam-cutover-evidence.md), содержащие только безопасные counts,
 bounded IDs и pass/fail поля.
@@ -86,8 +88,9 @@ unit, route и database regression-тесты; ревизия выкачена �
 (`/=200`, `/health=200`, закрытый `/api/results=401`, все 10 runtime-контейнеров `healthy`). Для
 Notion дополнительно сверена живая OAuth-метадата: его `revocation_endpoint` намеренно совпадает с
 `https://mcp.notion.com/token`; это не повод менять закреплённый каталоговый URL. Task 32 завершён,
-Task 33 выполняется в loopback-canary, а Task 34 public cutover по-прежнему требует отдельного
-разрешения.
+Task 33 зафиксирован с инфраструктурными PASS и integration blockers, а runtime Task 34 уже
+перезапущен по явному разрешению владельца. Public route, Google redirect и полноценное observation
+окно всё ещё не закрыты.
 
 Ревизия `ee85f7f` усилила drain-aware deployment helper: проверка текущего `agent-codex` выполняется
 до сборки, ошибки Compose/inspect/resume больше не скрываются, а cleanup возвращает ненулевой код

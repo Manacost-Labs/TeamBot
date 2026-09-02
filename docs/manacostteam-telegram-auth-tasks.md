@@ -4,8 +4,9 @@
 
 Approved by the owner on 2026-09-01. This breakdown implements the approved specification and
 implementation plan. The original approval authorised implementation tasks 1–31. Separate owner
-approvals subsequently authorised Task 32 (copied-production rehearsal) and Task 33 (loopback-only
-canary) on 2026-09-02. Task 34 still requires its own public-cutover approval.
+approvals subsequently authorised Task 32 (copied-production rehearsal), Task 33 (loopback-only
+canary), and a production runtime deployment on 2026-09-02. The runtime deployment did not change
+the Cloudflare/DNS route and does not by itself close Task 34 public-cutover observation.
 
 ## Standing definition of done
 
@@ -942,15 +943,17 @@ healthy. These checks validate the ordinary compatible runtime only and do not s
 - [x] A new explicit approval was obtained before Task 32; the copied-production rehearsal passed.
 - [x] A separate explicit approval was obtained before Task 33; the loopback canary is recorded in
   `docs/manacostteam-canary-evidence.md` and remains incomplete at the integration gate.
-- [ ] A separate explicit approval is obtained before Task 34 public cutover.
+- [x] Explicit owner approval was obtained for the production runtime deployment; public route and
+  full Task 34 observation remain open.
 
 **Release handoff:** The source release implements Telegram allowlisted sessions, per-user ChatGPT
 or OpenRouter connections, actor-isolated Codex runtime profiles, ManacostTeam branding and the
 documented operator workflow. The compatible runtime has already been updated through the ordinary
-production deploy path; copied production data, the public route and canary/cutover traffic gates
-remain untouched.
+production deploy path; the current runtime has been redeployed with the drain-aware helper. The
+Cloudflare/DNS route, editor scenario and canary/cutover integration gates remain open.
 
-**Known limits:** Task 32 is complete, Task 33 is in progress and Task 34 has not started. The 15 exact OSV exceptions and two rootful-container
+**Known limits:** Task 32 is complete, Task 33 has infrastructure PASS but integration blockers, and
+Task 34 runtime deployment is done while public cutover observation remains open. The 15 exact OSV exceptions and two rootful-container
 architecture exceptions must be reviewed by 2026-12-01. Trivy skips the Helm chart until its pinned
 `postgresql` dependency has been fetched into `charts/openbot/charts`; lockfiles, templates and all
 ten repository Dockerfiles are still scanned by the completed gate.
