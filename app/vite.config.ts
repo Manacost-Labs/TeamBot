@@ -8,7 +8,11 @@ export default defineConfig({
   // Route components are loaded only when opened. The chat/computer stack is large and should not
   // block the roster, sign-in screen or employee editor on first paint.
   plugins: [
-    tanstackRouter({ autoCodeSplitting: true }),
+    tanstackRouter({
+      autoCodeSplitting: true,
+      // Tests live next to routes for fast feedback, but are never pages.
+      routeFileIgnorePattern: "\\.(?:test|spec)\\.[cm]?[jt]sx?$",
+    }),
     react(),
     tailwindcss(),
   ],
