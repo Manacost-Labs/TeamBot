@@ -927,7 +927,7 @@ describe("Codex process timing", () => {
     } as RunAgentInput;
 
     await runCodex(input, emptyCallbacks, {
-      spawn: () => researchFinalisationProcess(turnInputs),
+      spawn: () => artifactFinalisationProcess(turnInputs),
       deploymentToolCaller: successfulArtifactCall,
     });
 
@@ -940,7 +940,7 @@ describe("Codex process timing", () => {
 
     await expect(
       runCodex(researchProcessInput(), emptyCallbacks, {
-        spawn: () => researchFinalisationProcess(turnInputs),
+        spawn: () => artifactFinalisationProcess(turnInputs),
         deploymentToolCaller: async () => ({
           text: JSON.stringify({ ok: true }),
           isError: false,
@@ -956,7 +956,7 @@ describe("Codex process timing", () => {
 
     await expect(
       runCodex(researchProcessInput(), emptyCallbacks, {
-        spawn: () => researchFinalisationProcess(turnInputs),
+        spawn: () => artifactFinalisationProcess(turnInputs),
         deploymentToolCaller: async () => ({
           text: JSON.stringify({
             ...VALID_MARKDOWN_ARTIFACT,
@@ -970,6 +970,35 @@ describe("Codex process timing", () => {
         }),
       }),
     ).rejects.toThrow("artifact");
+
+    expect(turnInputs).toHaveLength(2);
+  });
+
+  it("fails a YouTube run after the bounded correction turn creates no artifact", async () => {
+    const turnInputs: string[] = [];
+
+    await expect(
+      runCodex(youtubeProcessInput(), emptyCallbacks, {
+        spawn: () => artifactFinalisationProcess(turnInputs, false),
+      }),
+    ).rejects.toThrow("required Markdown artifact");
+
+    expect(turnInputs).toHaveLength(2);
+    expect(turnInputs[1]).toContain("Create the required deliverable now");
+  });
+
+  it("does not finish a YouTube run for an unverified artifact result", async () => {
+    const turnInputs: string[] = [];
+
+    await expect(
+      runCodex(youtubeProcessInput(), emptyCallbacks, {
+        spawn: () => artifactFinalisationProcess(turnInputs),
+        deploymentToolCaller: async () => ({
+          text: JSON.stringify({ ok: true }),
+          isError: false,
+        }),
+      }),
+    ).rejects.toThrow("required Markdown artifact");
 
     expect(turnInputs).toHaveLength(2);
   });
@@ -1102,6 +1131,27 @@ function chatGptProcessInput(): RunAgentInput {
 
 function researchProcessInput(): RunAgentInput {
   const agentId = process.env.RESEARCH_AGENT_ID?.trim() || "research-analyst";
+  return {
+    ...processInput(),
+    agentId,
+    tools: [
+      {
+        name: "mcp__artifacts__create_artifact",
+        description: "Create a Markdown artifact.",
+        parameters: { type: "object" },
+      },
+    ],
+    forwardedProps: {
+      openbotBotId: agentId,
+      openbotDeploymentTools: ["mcp__artifacts__create_artifact"],
+      openbotRun: "signed-run",
+    },
+  } as unknown as RunAgentInput;
+}
+
+function youtubeProcessInput(): RunAgentInput {
+  const agentId =
+    process.env.YOUTUBE_ANALYST_AGENT_ID?.trim() || "youtube-analyst";
   return {
     ...processInput(),
     agentId,
@@ -1323,7 +1373,10 @@ function fakeChildShell() {
   return child;
 }
 
-function researchFinalisationProcess(turnInputs: string[]) {
+function artifactFinalisationProcess(
+  turnInputs: string[],
+  createArtifact = true,
+) {
   const child = new EventEmitter() as EventEmitter & {
     stdin: PassThrough;
     stdout: PassThrough;
@@ -1376,7 +1429,7 @@ function researchFinalisationProcess(turnInputs: string[]) {
       if (request.method !== "turn/start") return;
       turnInputs.push(request.params?.input?.[0]?.text ?? "");
       const finalising = turnInputs.length > 1;
-      if (finalising) {
+      if (finalising && createArtifact) {
         child.stdout.write(
           `${JSON.stringify({
             id: 900,
