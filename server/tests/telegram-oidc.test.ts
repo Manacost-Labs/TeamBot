@@ -21,20 +21,28 @@ const NONCE = "b".repeat(64);
 const CODE_VERIFIER = "c".repeat(64);
 const NOW_SECONDS = 1_700_000_000;
 
-const { privateKey, publicKey } = generateKeyPairSync("rsa", {
-  modulusLength: 2048,
-});
+const { privateKey: rsaPrivateKey, publicKey: rsaPublicKey } =
+  generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+  });
+const { privateKey: ecPrivateKey, publicKey: ecPublicKey } =
+  generateKeyPairSync("ec", { namedCurve: "P-256" });
 let localJwks: ReturnType<typeof createLocalJWKSet>;
 
 beforeAll(async () => {
-  const jwk = await exportJWK(publicKey);
+  const rsaJwk = await exportJWK(rsaPublicKey);
+  const ecJwk = await exportJWK(ecPublicKey);
   localJwks = createLocalJWKSet({
-    keys: [{ ...jwk, alg: "RS256", kid: "telegram-test-key", use: "sig" }],
+    keys: [
+      { ...rsaJwk, alg: "RS256", kid: "telegram-rsa-test-key", use: "sig" },
+      { ...ecJwk, alg: "ES256", kid: "telegram-ec-test-key", use: "sig" },
+    ],
   } as JSONWebKeySet);
 });
 
 async function signedToken(
   overrides: Record<string, unknown> = {},
+  algorithm: "RS256" | "ES256" = "RS256",
 ): Promise<string> {
   const issuer =
     typeof overrides.iss === "string"
@@ -61,12 +69,18 @@ async function signedToken(
     nonce: NONCE,
     ...profileOverrides,
   })
-    .setProtectedHeader({ alg: "RS256", kid: "telegram-test-key" })
+    .setProtectedHeader({
+      alg: algorithm,
+      kid:
+        algorithm === "RS256"
+          ? "telegram-rsa-test-key"
+          : "telegram-ec-test-key",
+    })
     .setIssuer(issuer)
     .setAudience(audience)
     .setIssuedAt(issuedAt)
     .setExpirationTime(NOW_SECONDS + 300)
-    .sign(privateKey);
+    .sign(algorithm === "RS256" ? rsaPrivateKey : ecPrivateKey);
 }
 
 describe("Telegram OIDC authorization", () => {
@@ -122,7 +136,9 @@ describe("Telegram OIDC authorization", () => {
     expect(request?.headers.get("content-type")).toBe(
       "application/x-www-form-urlencoded",
     );
-    expect(Object.fromEntries(new URLSearchParams(await request?.text()))).toEqual({
+    expect(
+      Object.fromEntries(new URLSearchParams(await request?.text())),
+    ).toEqual({
       client_id: CLIENT_ID,
       code: "one-time-code",
       code_verifier: CODE_VERIFIER,
@@ -178,6 +194,44 @@ describe("Telegram OIDC ID token verification", () => {
     });
   });
 
+  test("accepts Telegram ES256 profile tokens", async () => {
+    const login = await verifyTelegramOidcIdToken(
+      await signedToken({}, "ES256"),
+      {
+        clientId: CLIENT_ID,
+        expectedNonce: NONCE,
+        key: localJwks,
+        nowSeconds: NOW_SECONDS,
+      },
+    );
+
+    expect(login.id).toBe("883935723");
+    expect(login.firstName).toBe("Manacost");
+  });
+
+  test("treats empty optional Telegram profile claims as absent", async () => {
+    const login = await verifyTelegramOidcIdToken(
+      await signedToken({
+        family_name: "",
+        preferred_username: "",
+        picture: "",
+      }),
+      {
+        clientId: CLIENT_ID,
+        expectedNonce: NONCE,
+        key: localJwks,
+        nowSeconds: NOW_SECONDS,
+      },
+    );
+
+    expect(login).toEqual({
+      id: "883935723",
+      firstName: "Manacost",
+      authDate: NOW_SECONDS,
+      replayKey: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+  });
+
   test.each([
     ["wrong issuer", { iss: "https://attacker.example" }, NONCE],
     ["wrong audience", { aud: "other-client" }, NONCE],
@@ -185,16 +239,19 @@ describe("Telegram OIDC ID token verification", () => {
     ["missing Telegram id", { id: undefined }, NONCE],
     ["non-canonical Telegram id", { id: "0883935723" }, NONCE],
     ["an issued-at time from the future", { iat: NOW_SECONDS + 61 }, NONCE],
-  ])("rejects %s with one generic verification error", async (_name, claims, nonce) => {
-    const token = await signedToken(claims as Record<string, unknown>);
+  ])(
+    "rejects %s with one generic verification error",
+    async (_name, claims, nonce) => {
+      const token = await signedToken(claims as Record<string, unknown>);
 
-    await expect(
-      verifyTelegramOidcIdToken(token, {
-        clientId: CLIENT_ID,
-        expectedNonce: nonce as string,
-        key: localJwks,
-        nowSeconds: NOW_SECONDS,
-      }),
-    ).rejects.toThrow("Telegram OIDC verification failed.");
-  });
+      await expect(
+        verifyTelegramOidcIdToken(token, {
+          clientId: CLIENT_ID,
+          expectedNonce: nonce as string,
+          key: localJwks,
+          nowSeconds: NOW_SECONDS,
+        }),
+      ).rejects.toThrow("Telegram OIDC verification failed.");
+    },
+  );
 });

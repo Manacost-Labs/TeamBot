@@ -17,6 +17,7 @@ const CANONICAL_POSITIVE_INTEGER = /^[1-9]\d*$/;
 const FLOW_SECRET = /^[A-Za-z0-9_-]{43,128}$/;
 const PKCE_VERIFIER = /^[A-Za-z0-9._~-]{43,128}$/;
 const USERNAME = /^[A-Za-z0-9_]{1,64}$/;
+const TELEGRAM_PROFILE_SIGNING_ALGORITHMS = ["RS256", "ES256"] as const;
 
 const telegramJwks = createRemoteJWKSet(new URL(TELEGRAM_OIDC_JWKS_ENDPOINT), {
   cacheMaxAge: 10 * 60_000,
@@ -63,7 +64,11 @@ function genericVerificationError(): Error {
 }
 
 function boundedText(value: unknown, maximumLength: number): string | null {
-  if (typeof value !== "string" || value.length < 1 || value.length > maximumLength) {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > maximumLength
+  ) {
     return null;
   }
   return [...value].some((character) => {
@@ -72,6 +77,14 @@ function boundedText(value: unknown, maximumLength: number): string | null {
   })
     ? null
     : value;
+}
+
+function optionalBoundedText(
+  value: unknown,
+  maximumLength: number,
+): string | undefined | null {
+  if (value === undefined || value === null || value === "") return undefined;
+  return boundedText(value, maximumLength);
 }
 
 function canonicalClientId(value: string): boolean {
@@ -112,7 +125,7 @@ function canonicalTelegramId(value: unknown): string | null {
 }
 
 function profilePicture(value: unknown): string | undefined | null {
-  if (value === undefined) return undefined;
+  if (value === undefined || value === null || value === "") return undefined;
   const candidate = boundedText(value, 2_048);
   if (!candidate) return null;
   try {
@@ -188,20 +201,24 @@ export async function exchangeTelegramOidcCode(
       client_id: input.clientId,
       code_verifier: input.codeVerifier,
     });
-    const response = await (input.fetcher ?? fetch)(TELEGRAM_OIDC_TOKEN_ENDPOINT, {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${input.clientId}:${input.clientSecret}`).toString("base64")}`,
-        "Content-Type": "application/x-www-form-urlencoded",
+    const response = await (input.fetcher ?? fetch)(
+      TELEGRAM_OIDC_TOKEN_ENDPOINT,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${input.clientId}:${input.clientSecret}`).toString("base64")}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body,
+        redirect: "error",
+        signal: AbortSignal.timeout(8_000),
       },
-      body,
-      redirect: "error",
-      signal: AbortSignal.timeout(8_000),
-    });
+    );
     const declaredLength = Number(response.headers.get("content-length") ?? 0);
     if (
       !response.ok ||
-      (Number.isFinite(declaredLength) && declaredLength > MAX_TOKEN_RESPONSE_BYTES)
+      (Number.isFinite(declaredLength) &&
+        declaredLength > MAX_TOKEN_RESPONSE_BYTES)
     ) {
       throw genericExchangeError();
     }
@@ -242,7 +259,10 @@ export async function verifyTelegramOidcIdToken(
     }
 
     const { payload } = await jwtVerify(idToken, options.key ?? telegramJwks, {
-      algorithms: ["RS256"],
+      // Telegram supports RS256 and ES256 with the requested `profile` scope. Its EdDSA and
+      // ES256K modes intentionally reject `profile`, so accepting those here would not make this
+      // login flow usable and would unnecessarily widen the verifier policy.
+      algorithms: [...TELEGRAM_PROFILE_SIGNING_ALGORITHMS],
       audience: options.clientId,
       currentDate: new Date(nowSeconds * 1_000),
       issuer: TELEGRAM_OIDC_ISSUER,
@@ -255,21 +275,15 @@ export async function verifyTelegramOidcIdToken(
     const id = canonicalTelegramId(payload.id);
     const firstName =
       boundedText(payload.given_name, 256) ?? boundedText(payload.name, 256);
-    const lastName =
-      payload.family_name === undefined
-        ? undefined
-        : boundedText(payload.family_name, 256);
-    const username =
-      payload.preferred_username === undefined
-        ? undefined
-        : boundedText(payload.preferred_username, 64);
+    const lastName = optionalBoundedText(payload.family_name, 256);
+    const username = optionalBoundedText(payload.preferred_username, 64);
     const picture = profilePicture(payload.picture);
     if (
       !id ||
       !firstName ||
-      (payload.family_name !== undefined && !lastName) ||
-      (username !== undefined &&
-        (username === null || !USERNAME.test(username))) ||
+      lastName === null ||
+      username === null ||
+      (username !== undefined && !USERNAME.test(username)) ||
       picture === null ||
       typeof payload.sub !== "string" ||
       payload.sub.length < 1 ||
