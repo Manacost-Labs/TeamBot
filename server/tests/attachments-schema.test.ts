@@ -148,6 +148,11 @@ describe("attachment metadata schema", () => {
         columns: ["owner_user_id", "channel_id", "message_id"],
         unique: false,
       },
+      {
+        name: "attachments_owner_source_created_idx",
+        columns: ["owner_user_id", "source", "created_at", "id"],
+        unique: false,
+      },
     ]);
 
     expect(config.checks.map((constraint) => constraint.name).sort()).toEqual([
