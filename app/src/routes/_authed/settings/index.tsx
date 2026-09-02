@@ -6,6 +6,7 @@ import {
   PageSection,
   PageShell,
 } from "@/components/layout/page-shell";
+import { RoutineWorkerHealthIndicator } from "@/components/routines/routine-worker-health";
 import { ChatGptConnectionCard } from "@/components/settings/chatgpt-connection-card";
 import { useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
@@ -67,6 +68,12 @@ function RouteComponent() {
             </ItemActions>
           </Item>
         </PageRows>
+      </PageSection>
+      <PageSection
+        description="Показываем реальный сигнал обработчика расписаний, а не только его настройки."
+        title="Состояние автоматизации"
+      >
+        <RoutineWorkerHealthIndicator />
       </PageSection>
       <OpenRouterSettingsCard />
       <ChatGptConnectionCard />
