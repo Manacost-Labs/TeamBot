@@ -26,20 +26,87 @@ export type ClientOptions = {
   fallback?: string;
   /** For the calls a Bot makes on a person's behalf, which are abandoned when the turn is. */
   signal?: AbortSignal;
+  /**
+   * An optional deadline for short requests. Long-running operations should leave this unset and
+   * use their own lifecycle signal instead.
+   */
+  timeoutMs?: number;
 };
+
+/** A short request exceeded its caller-owned deadline. */
+export class ClientTimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`Request timed out after ${timeoutMs} ms.`);
+    this.name = "ClientTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+function positiveTimeout(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value)) return undefined;
+  const timeout = Math.floor(value);
+  return timeout > 0 ? timeout : undefined;
+}
 
 /** Every request in this app is authenticated, and every one of them is JSON or nothing. */
 async function send(path: string, options: ClientOptions): Promise<Response> {
-  return fetch(path, {
-    method: options.method,
-    credentials: "include",
-    headers:
-      options.body === undefined
-        ? undefined
-        : { "content-type": "application/json" },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-    ...(options.signal ? { signal: options.signal } : {}),
-  });
+  const timeout = positiveTimeout(options.timeoutMs);
+  const controller = timeout === undefined ? undefined : new AbortController();
+  const forwardAbort = () => controller?.abort();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  if (controller) {
+    if (options.signal?.aborted) {
+      controller.abort();
+    } else {
+      options.signal?.addEventListener("abort", forwardAbort, { once: true });
+    }
+  }
+
+  const signal = controller?.signal ?? options.signal;
+  try {
+    const request = fetch(path, {
+      method: options.method,
+      credentials: "include",
+      headers:
+        options.body === undefined
+          ? undefined
+          : { "content-type": "application/json" },
+      body:
+        options.body === undefined ? undefined : JSON.stringify(options.body),
+      ...(signal ? { signal } : {}),
+    });
+    if (controller === undefined || timeout === undefined) {
+      return await request;
+    }
+
+    // Abort the underlying fetch and reject our own promise. The race matters for test doubles and
+    // browser adapters that observe AbortSignal but do not reject their fetch promise promptly.
+    const deadline = new Promise<Response>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new ClientTimeoutError(timeout));
+      }, timeout);
+    });
+    return await Promise.race([request, deadline]);
+  } catch (error) {
+    // Preserve an explicit caller cancellation. Only an abort caused by our deadline is translated
+    // to a stable error type so UI code can distinguish it from a sign-out or an interrupted turn.
+    if (error instanceof ClientTimeoutError) throw error;
+    if (
+      controller?.signal.aborted &&
+      !options.signal?.aborted &&
+      timeout !== undefined
+    ) {
+      throw new ClientTimeoutError(timeout);
+    }
+    throw error;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    options.signal?.removeEventListener("abort", forwardAbort);
+  }
 }
 
 /**

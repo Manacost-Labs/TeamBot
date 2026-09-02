@@ -1,5 +1,8 @@
 import { tryClient } from "@/lib/client";
 
+/** Control-plane requests are short; a hung one must not block the input queue forever. */
+const CONTROL_REQUEST_TIMEOUT_MS = 10_000;
+
 /**
  * Handing control of a Bot's computer to a person, and back.
  *
@@ -25,12 +28,17 @@ async function callControl(
   path: string,
   method?: string,
 ): Promise<ControlState | null> {
-  const response = await tryClient(
-    `/api/computers/${computerId}${path}`,
-    method ? { method } : {},
-  );
-  if (!response.ok) return null;
-  return (await response.json()) as ControlState;
+  try {
+    const response = await tryClient(`/api/computers/${computerId}${path}`, {
+      ...(method ? { method } : {}),
+      timeoutMs: CONTROL_REQUEST_TIMEOUT_MS,
+    });
+    if (!response.ok) return null;
+    return (await response.json()) as ControlState;
+  } catch {
+    // A stale control panel must stay usable when the computer service is restarting or times out.
+    return null;
+  }
 }
 
 export function readControl(computerId: string) {
@@ -58,7 +66,11 @@ export async function supplySecret(
   try {
     const response = await tryClient(
       `/api/computers/${computerId}/human/secret`,
-      { method: "POST", body: { text } },
+      {
+        method: "POST",
+        body: { text },
+        timeoutMs: CONTROL_REQUEST_TIMEOUT_MS,
+      },
     );
     if (response.ok) return { ok: true };
     const body = (await response.json().catch(() => null)) as {
@@ -91,6 +103,7 @@ export function sendHumanInput(
       tryClient(`/api/computers/${computerId}/human/${kind}`, {
         method: "POST",
         body,
+        timeoutMs: CONTROL_REQUEST_TIMEOUT_MS,
       }),
     )
     // Fire-and-forget: the user can see/retry input failures, while the input queue must keep moving.
