@@ -5,6 +5,8 @@ import {
   artifactFilenameMatchesMimeType,
   parseArtifactResult,
 } from "./contract";
+import { infiniteQueryOptions } from "@tanstack/react-query";
+import { client } from "@/lib/client";
 
 export type ArtifactMetadata = Readonly<{
   id: string;
@@ -13,6 +15,17 @@ export type ArtifactMetadata = Readonly<{
   size: number;
   messageId: string;
   source: "agent_generated";
+}>;
+
+export type WorkspaceArtifactMetadata = ArtifactMetadata &
+  Readonly<{
+    channelId: string;
+    createdAt: string;
+  }>;
+
+export type WorkspaceArtifactPage = Readonly<{
+  artifacts: readonly WorkspaceArtifactMetadata[];
+  nextCursor: string | null;
 }>;
 
 type AttachmentResponse = {
@@ -31,6 +44,10 @@ type AttachmentResponse = {
 type AttachmentListResponse = {
   attachments?: unknown;
   error?: unknown;
+};
+
+type WorkspaceAttachmentListResponse = AttachmentListResponse & {
+  nextCursor?: unknown;
 };
 
 const ARTIFACT_MIME_TYPE_SET = new Set<string>(ARTIFACT_MIME_TYPES);
@@ -85,6 +102,79 @@ function artifactFromList(value: unknown): ArtifactMetadata | null {
     messageId,
     source: "agent_generated",
   };
+}
+
+function workspaceArtifactFromList(
+  value: unknown,
+): WorkspaceArtifactMetadata | null {
+  const artifact = artifactFromList(value);
+  if (!artifact || typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const channelId = record.channelId;
+  const createdAt = record.createdAt;
+  if (
+    typeof channelId !== "string" ||
+    channelId.length === 0 ||
+    typeof createdAt !== "string" ||
+    Number.isNaN(Date.parse(createdAt))
+  ) {
+    return null;
+  }
+  return { ...artifact, channelId, createdAt };
+}
+
+export const artifactKeys = {
+  all: ["artifacts"] as const,
+  workspace: () => ["artifacts", "workspace"] as const,
+};
+
+/** Read a bounded page of generated files across the signed-in person's active conversations. */
+export async function listWorkspaceArtifacts(
+  query: { cursor?: string; limit?: number } = {},
+  signal?: AbortSignal,
+): Promise<WorkspaceArtifactPage> {
+  const params = new URLSearchParams();
+  if (query.cursor) params.set("cursor", query.cursor);
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  const response = await client(`/api/results${suffix}`, {
+    fallback: "Не удалось загрузить результаты.",
+    signal,
+  });
+  const payload = (await response
+    .json()
+    .catch(() => ({}))) as WorkspaceAttachmentListResponse | null;
+  if (!payload || !Array.isArray(payload.attachments)) {
+    throw new Error("Сервер вернул некорректный список результатов.");
+  }
+  if (
+    payload.nextCursor !== null &&
+    payload.nextCursor !== undefined &&
+    typeof payload.nextCursor !== "string"
+  ) {
+    throw new Error("Сервер вернул некорректную страницу результатов.");
+  }
+  return {
+    artifacts: payload.attachments.flatMap((value) => {
+      const artifact = workspaceArtifactFromList(value);
+      return artifact ? [artifact] : [];
+    }),
+    nextCursor: payload.nextCursor ?? null,
+  };
+}
+
+export function workspaceArtifactsQueryOptions() {
+  return infiniteQueryOptions({
+    queryKey: artifactKeys.workspace(),
+    initialPageParam: "",
+    queryFn: ({ pageParam, signal }): Promise<WorkspaceArtifactPage> =>
+      listWorkspaceArtifacts(
+        pageParam ? { cursor: pageParam as string } : {},
+        signal,
+      ),
+    getNextPageParam: (page: WorkspaceArtifactPage) =>
+      page.nextCursor ?? undefined,
+  });
 }
 
 /**

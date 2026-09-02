@@ -3,6 +3,7 @@ import {
   artifactDownloadUrl,
   artifactPreviewUrl,
   listChannelArtifacts,
+  listWorkspaceArtifacts,
   readArtifactMetadata,
   readArtifactTextPreview,
 } from "./api";
@@ -172,5 +173,79 @@ describe("artifact API", () => {
     expect(
       (await readArtifactTextPreview("channel-a", attachmentId)).length,
     ).toBe(100_000);
+  });
+
+  test("lists validated artifacts across channels with a bounded cursor request", async () => {
+    let request: [RequestInfo | URL, RequestInit | undefined] | undefined;
+    globalThis.fetch = (async (input, init) => {
+      request = [input, init];
+      return Response.json({
+        attachments: [
+          {
+            id: attachmentId,
+            channelId: "channel-a",
+            name: "report.md",
+            mimeType: "text/markdown",
+            size: 91,
+            messageId: "artifact:export-1",
+            source: "agent_generated",
+            createdAt: "2026-08-30T12:00:00.000Z",
+          },
+          {
+            id: attachmentId,
+            channelId: "channel-a",
+            name: "upload.md",
+            mimeType: "text/markdown",
+            size: 91,
+            messageId: null,
+            source: "user_upload",
+            createdAt: "2026-08-30T12:00:00.000Z",
+          },
+          {
+            id: attachmentId,
+            channelId: "channel-a",
+            name: "bad.md",
+            mimeType: "text/plain",
+            size: 91,
+            messageId: "artifact:export-2",
+            source: "agent_generated",
+            createdAt: "2026-08-30T12:00:00.000Z",
+          },
+        ],
+        nextCursor: "next-page",
+      });
+    }) as typeof fetch;
+
+    await expect(
+      listWorkspaceArtifacts({ cursor: "page-one", limit: 25 }),
+    ).resolves.toEqual({
+      artifacts: [
+        {
+          id: attachmentId,
+          channelId: "channel-a",
+          filename: "report.md",
+          mimeType: "text/markdown",
+          size: 91,
+          messageId: "artifact:export-1",
+          source: "agent_generated",
+          createdAt: "2026-08-30T12:00:00.000Z",
+        },
+      ],
+      nextCursor: "next-page",
+    });
+    expect(request?.[0]).toBe("/api/results?cursor=page-one&limit=25");
+    expect(request?.[1]?.credentials).toBe("include");
+  });
+
+  test("rejects a malformed results envelope", async () => {
+    globalThis.fetch = (async () =>
+      Response.json({
+        attachments: [],
+        nextCursor: 42,
+      })) as unknown as typeof fetch;
+
+    await expect(listWorkspaceArtifacts()).rejects.toThrow(
+      "некорректную страницу",
+    );
   });
 });
