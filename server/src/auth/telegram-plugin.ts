@@ -35,6 +35,12 @@ type TelegramLoginSettings = Readonly<{
 
 export type TelegramRefusalReason =
   | "invalid_proof_or_state"
+  | "invalid_callback"
+  | "missing_browser_binding"
+  | "invalid_state"
+  | "authorization_denied"
+  | "token_exchange_failed"
+  | "id_token_verification_failed"
   | "not_allowlisted"
   | "owner_binding_required"
   | "identity_binding_unavailable"
@@ -355,7 +361,9 @@ export function telegramSessionPlugin(
               callbackParameters.has("code") || callbackParameters.has("error");
             if (oidcAttempt) {
               if (!options.telegram.oidc) unauthorized();
+              refusalReason = "invalid_callback";
               const { state, code } = splitOidcCallbackParameters(request);
+              refusalReason = "missing_browser_binding";
               const codeVerifier = await context.getSignedCookie(
                 oidcBindingCookie.name,
                 context.context.secret,
@@ -370,16 +378,21 @@ export function telegramSessionPlugin(
                 storage,
                 ttlMilliseconds: 300_000,
               });
+              refusalReason = "invalid_state";
               const returnPath = await stateStore.consume({
                 state,
                 requestOrigin: options.telegram.trustedOrigin,
                 browserBinding: codeVerifier,
               });
-              if (!code) unauthorized();
+              if (!code) {
+                refusalReason = "authorization_denied";
+                unauthorized();
+              }
               const redirectUri = new URL(
                 "/api/auth/telegram/callback",
                 options.telegram.trustedOrigin,
               ).toString();
+              refusalReason = "token_exchange_failed";
               const idToken = await (
                 options.oidc?.exchangeCode ?? exchangeTelegramOidcCode
               )({
@@ -389,6 +402,7 @@ export function telegramSessionPlugin(
                 code,
                 codeVerifier,
               });
+              refusalReason = "id_token_verification_failed";
               const login = await (
                 options.oidc?.verifyIdToken ?? verifyTelegramOidcIdToken
               )(idToken, {

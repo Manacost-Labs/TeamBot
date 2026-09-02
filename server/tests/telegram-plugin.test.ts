@@ -216,6 +216,8 @@ function createTelegramFixture(
     bindOwner?: boolean;
     bindEditor?: boolean;
     refuseSessions?: boolean;
+    failOidcExchange?: boolean;
+    failOidcVerification?: boolean;
   } = {},
 ) {
   const now = new Date();
@@ -359,20 +361,28 @@ function createTelegramFixture(
               codeVerifier: input.codeVerifier,
               redirectUri: input.redirectUri,
             });
+            if (options.failOidcExchange) {
+              throw new Error("synthetic Telegram token exchange failure");
+            }
             return `synthetic-id-token:${input.code}`;
           },
-          verifyIdToken: async (idToken, input) => ({
-            id: idToken.endsWith(OWNER_TELEGRAM_ID)
-              ? OWNER_TELEGRAM_ID
-              : idToken.endsWith(UNKNOWN_TELEGRAM_ID)
-                ? UNKNOWN_TELEGRAM_ID
-                : EDITOR_TELEGRAM_ID,
-            firstName: "OIDC",
-            lastName: "Editor",
-            username: "oidc_editor",
-            authDate: Math.floor(Date.now() / 1_000),
-            replayKey: input.expectedNonce,
-          }),
+          verifyIdToken: async (idToken, input) => {
+            if (options.failOidcVerification) {
+              throw new Error("synthetic Telegram ID token verification failure");
+            }
+            return {
+              id: idToken.endsWith(OWNER_TELEGRAM_ID)
+                ? OWNER_TELEGRAM_ID
+                : idToken.endsWith(UNKNOWN_TELEGRAM_ID)
+                  ? UNKNOWN_TELEGRAM_ID
+                  : EDITOR_TELEGRAM_ID,
+              firstName: "OIDC",
+              lastName: "Editor",
+              username: "oidc_editor",
+              authDate: Math.floor(Date.now() / 1_000),
+              replayKey: input.expectedNonce,
+            };
+          },
         },
         provisionVerifiedUser,
         recordRefusal: async (reason) => {
@@ -537,6 +547,33 @@ describe("Telegram OIDC session flow", () => {
     expect(fixture.database.user).toHaveLength(0);
     expect(fixture.database.account).toHaveLength(0);
     expect(fixture.database.session).toHaveLength(0);
+  });
+
+  test("records only bounded stage diagnostics for exchange and verification failures", async () => {
+    for (const [fixture, expectedReason] of [
+      [
+        createTelegramFixture({ failOidcExchange: true }),
+        "token_exchange_failed",
+      ],
+      [
+        createTelegramFixture({ failOidcVerification: true }),
+        "id_token_verification_failed",
+      ],
+    ] as const) {
+      const started = await fixture.startOidc("/");
+      const authorization = new URL(started.headers.get("location") ?? "");
+      const response = await fixture.oidcCallback(
+        EDITOR_TELEGRAM_ID,
+        authorization.searchParams.get("state") ?? "",
+        transientCookieFrom(started, "telegram_oidc_binding"),
+      );
+
+      expect(response.status).toBe(401);
+      expect(fixture.refusalReasons).toEqual([expectedReason]);
+      const auditPayload = JSON.stringify(fixture.refusalReasons);
+      expect(auditPayload).not.toContain(TELEGRAM_OIDC_CLIENT_SECRET);
+      expect(auditPayload).not.toContain(EDITOR_TELEGRAM_ID);
+    }
   });
 });
 
