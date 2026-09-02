@@ -165,5 +165,15 @@ export async function client<T>(
 
   if (key === undefined) return response;
 
-  return ((await response.json()) as Record<string, T>)[key];
+  const body = await response.json().catch(() => undefined);
+  if (
+    body === null ||
+    typeof body !== "object" ||
+    !(key in (body as Record<string, unknown>))
+  ) {
+    throw new Error(
+      options.fallback ?? "The server returned an invalid response.",
+    );
+  }
+  return (body as Record<string, T>)[key];
 }

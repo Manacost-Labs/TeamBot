@@ -65,4 +65,28 @@ describe("client transport deadlines", () => {
 
     expect(requestSignal).toBe(controller.signal);
   });
+
+  test("rejects a successful response that is missing its declared envelope", async () => {
+    globalThis.fetch = (async () =>
+      Response.json({ other: "value" })) as unknown as typeof fetch;
+
+    await expect(
+      client("/api/malformed", "payload", {
+        fallback: "Не удалось прочитать ответ.",
+      }),
+    ).rejects.toThrow("Не удалось прочитать ответ.");
+  });
+
+  test("turns an invalid JSON success body into the endpoint fallback", async () => {
+    globalThis.fetch = (async () =>
+      new Response("not-json", {
+        headers: { "content-type": "text/plain" },
+      })) as unknown as typeof fetch;
+
+    await expect(
+      client("/api/malformed", "payload", {
+        fallback: "Не удалось прочитать ответ.",
+      }),
+    ).rejects.toThrow("Не удалось прочитать ответ.");
+  });
 });
