@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Message } from "@ag-ui/core";
 import {
   hasAssistantOutputAfter,
+  isProgressNote,
   monitorRunEvidence,
   monitorRunEvidenceOnce,
   RECONCILIATION_DELAYS_MS,
@@ -21,6 +22,25 @@ describe("restored run reconciliation", () => {
     expect(hasAssistantOutputAfter([answer, user], user.id)).toBe(false);
     expect(hasAssistantOutputAfter([user, answer], user.id)).toBe(true);
     expect(hasAssistantOutputAfter([user], "missing-turn")).toBe(false);
+  });
+
+  test("does not treat a progress note as the completed answer", () => {
+    const progress = {
+      id: "progress",
+      role: "assistant",
+      content: "Начинаю исследование и фиксирую план.",
+    } as Message;
+
+    expect(isProgressNote(progress.content as string)).toBe(true);
+    expect(hasAssistantOutputAfter([user, progress], user.id)).toBe(false);
+    const finalAnswer = {
+      id: "final",
+      role: "assistant",
+      content: "Итоговый отчёт готов.",
+    } as Message;
+    expect(
+      hasAssistantOutputAfter([user, progress, finalAnswer], user.id),
+    ).toBe(true);
   });
 
   test("keeps a server-authoritative active lock active without waiting for history", async () => {

@@ -1,18 +1,19 @@
 import type { Message, ToolCall } from "@ag-ui/core";
 import {
+  parseArtifactToolResult,
+  REMOTE_CREATE_ARTIFACT_TOOL_NAME,
+} from "@/lib/artifacts/contract";
+import {
   type AttachmentMessageReference,
   attachmentRefsFromContent,
   textFromMessageContent,
 } from "@/lib/attachments/message-content";
+import { isProgressNote } from "@/lib/copilot/run-reconciliation";
 import {
   type AgentRunState,
   agentRunStatusLabel,
   isAgentRunActive,
 } from "@/lib/copilot/run-state";
-import {
-  parseArtifactToolResult,
-  REMOTE_CREATE_ARTIFACT_TOOL_NAME,
-} from "@/lib/artifacts/contract";
 
 /**
  * Transcript projection that pairs assistant tool calls with later tool-result messages.
@@ -116,24 +117,6 @@ function activityStepLabel(
     default:
       return "Выполнение инструментов";
   }
-}
-
-/** Progress notes are not a user-facing result, even when they are long and confidently worded. */
-function isProgressNote(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  return [
-    "начинаю исследование",
-    "план зафиксирован",
-    "первый проход",
-    "сбор углублён",
-    "сбор углублен",
-    "итоговый проход",
-    "starting research",
-    "plan locked",
-    "first pass",
-    "deepened collection",
-    "final pass",
-  ].some((marker) => normalized.includes(marker));
 }
 
 /** Project a transcript into the compact activity menu shown above every chat. */

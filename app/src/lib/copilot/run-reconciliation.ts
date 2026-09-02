@@ -9,6 +9,28 @@ export type RunReconciliationEvidence = {
   runtimeActive: boolean;
 };
 
+/**
+ * Progress notes explain what a long-running employee is doing, but they are not the result a
+ * person asked for. Keeping this classifier beside reconciliation makes the sidebar and the
+ * durable-history fallback agree about when a logical request is actually complete.
+ */
+export function isProgressNote(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return [
+    "начинаю исследование",
+    "план зафиксирован",
+    "первый проход",
+    "сбор углублён",
+    "сбор углублен",
+    "итоговый проход",
+    "starting research",
+    "plan locked",
+    "first pass",
+    "deepened collection",
+    "final pass",
+  ].some((marker) => normalized.includes(marker));
+}
+
 type ReconciliationOptions = {
   logicalRunId: string;
   readExecution: () => Promise<boolean>;
@@ -40,7 +62,9 @@ export function hasAssistantOutputAfter(
   return messages.slice(userIndex + 1).some((message) => {
     if (message.role !== "assistant") return false;
     return (
-      typeof message.content === "string" && message.content.trim().length > 0
+      typeof message.content === "string" &&
+      message.content.trim().length > 0 &&
+      !isProgressNote(message.content)
     );
   });
 }
