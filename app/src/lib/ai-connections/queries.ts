@@ -52,7 +52,7 @@ const CHATGPT_DEVICE_FLOW_PATH = "/api/ai-connections/chatgpt/device-flow";
 const CHATGPT_VERIFICATION_URL = "https://auth.openai.com/codex/device";
 const FLOW_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const USER_CODE = /^[A-Z0-9]{4}(?:-[A-Z0-9]{4})+$/;
+const USER_CODE = /^[A-Z0-9]{4}(?:-[A-Z0-9]{4,5}){1,3}$/;
 const FLOW_STATES = new Set<ChatGptDeviceFlowState>([
   "pending",
   "completed",

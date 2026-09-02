@@ -35,7 +35,8 @@ const queryClients = new Set<QueryClient>();
 const secret = "sk-or-test-plaintext-never-retain";
 const flowId = "33333333-3333-4333-8333-333333333333";
 const verificationUrl = "https://auth.openai.com/codex/device";
-const userCode = "ABCD-EFGH";
+// Codex 0.150 emits five characters in the final group of its device code.
+const userCode = "ABCD-EFGHJ";
 const settingsActorId = "settings-user";
 
 beforeAll(() =>
