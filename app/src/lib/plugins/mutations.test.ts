@@ -11,7 +11,10 @@ afterEach(() => {
 describe("disconnect account mutation", () => {
   test("calls the actor-scoped endpoint and validates the result", async () => {
     const calls: { input: string; init?: RequestInit }[] = [];
-    globalThis.fetch = (async (input, init) => {
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
       calls.push({ input: String(input), init });
       return new Response(
         JSON.stringify({ disconnected: true, vendorRevoked: false }),
@@ -20,7 +23,8 @@ describe("disconnect account mutation", () => {
     }) as unknown as typeof fetch;
 
     const mutation = disconnectAccountMutationOptions(new QueryClient());
-    await expect(mutation.mutationFn?.("google drive")).resolves.toEqual({
+    const run = mutation.mutationFn as (serverId: string) => Promise<unknown>;
+    await expect(run("google drive")).resolves.toEqual({
       disconnected: true,
       vendorRevoked: false,
     });
@@ -36,7 +40,8 @@ describe("disconnect account mutation", () => {
       })) as unknown as typeof fetch;
 
     const mutation = disconnectAccountMutationOptions(new QueryClient());
-    await expect(mutation.mutationFn?.("google-drive")).rejects.toThrow(
+    const run = mutation.mutationFn as (serverId: string) => Promise<unknown>;
+    await expect(run("google-drive")).rejects.toThrow(
       "неполный результат отключения",
     );
   });
