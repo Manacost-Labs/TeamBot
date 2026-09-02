@@ -43,6 +43,26 @@ describe("restored run reconciliation", () => {
     ).toBe(true);
   });
 
+  test("recognises natural-language research progress and keeps result prose valid", () => {
+    const progress = {
+      id: "progress-natural",
+      role: "assistant",
+      content:
+        "Продолжаю с финальной проверкой: осталось оформить доказательства и проверить источники.",
+    } as Message;
+    expect(isProgressNote(progress.content as string)).toBe(true);
+    expect(hasAssistantOutputAfter([user, progress], user.id)).toBe(false);
+
+    const result = {
+      id: "result-with-caveat",
+      role: "assistant",
+      content:
+        "## Результат\n\nПроверяю ограничения источника отдельно.\n\n## Источники",
+    } as Message;
+    expect(isProgressNote(result.content as string)).toBe(false);
+    expect(hasAssistantOutputAfter([user, result], user.id)).toBe(true);
+  });
+
   test("keeps a server-authoritative active lock active without waiting for history", async () => {
     const waits: number[] = [];
     await expect(

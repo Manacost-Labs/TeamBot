@@ -16,6 +16,18 @@ export type RunReconciliationEvidence = {
  */
 export function isProgressNote(text: string): boolean {
   const normalized = text.trim().toLowerCase();
+  if (!normalized) return false;
+
+  // A progress update is often written as a natural sentence rather than one of the short
+  // protocol markers below. Keep these checks deliberately explicit: broad verbs such as
+  // "проверяю" also appear in a finished report, while the combinations here describe unfinished
+  // work and do not contain a result heading.
+  const hasResultSignal =
+    /(^|\n)\s*##\s*(результат|источники)\b|\/research-runs\/[^\s`]+\/report\.md\b|(?:отч[её]т|файл|результат)\s+(?:готов|создан|сохранён|сохранен)/iu.test(
+      normalized,
+    );
+  if (hasResultSignal) return false;
+
   return [
     "начинаю исследование",
     "план зафиксирован",
@@ -23,11 +35,35 @@ export function isProgressNote(text: string): boolean {
     "сбор углублён",
     "сбор углублен",
     "итоговый проход",
+    "продолжаю с",
+    "продолжаю сбор",
+    "переход к сбору",
+    "теперь проверяю",
+    "осталось проверить",
+    "осталось оформить",
+    "параллельно проверяю",
+    "источники ещё проверяются",
+    "источники еще проверяются",
+    "сначала проверю",
+    "затем проверю",
+    "собираю данные",
+    "проверяю конкретные",
     "starting research",
     "plan locked",
     "first pass",
     "deepened collection",
     "final pass",
+    "continuing with",
+    "continuing collection",
+    "moving to collection",
+    "now checking",
+    "still checking",
+    "remaining work",
+    "in parallel i am checking",
+    "sources are still being checked",
+    "first i will check",
+    "then i will check",
+    "collecting data",
   ].some((marker) => normalized.includes(marker));
 }
 
