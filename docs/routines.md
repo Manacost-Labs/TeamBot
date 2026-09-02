@@ -30,6 +30,10 @@ A routine may fire at most every 15 minutes. The floor exists because a model ca
 anything a sentence can describe, including "every minute", and the floor is what a sentence cannot
 talk its way past.
 
+The schedule editor also offers a six-hour preset (`0 */6 * * *`) for low-noise
+maintenance checks. It is only a convenient cadence choice; the 15-minute
+floor remains the server-side validation rule for every routine.
+
 A person may have at most 20 routines switched on at once. The cap exists for the same reason as the
 floor: a conversation is an easy place to accumulate standing work without noticing, and 20 is where a
 person's own list stops being something they can hold in their head. Switching one off frees a slot;

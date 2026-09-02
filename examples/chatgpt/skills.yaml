@@ -92,6 +92,15 @@ skills:
       отсутствие новых данных у издателя от поломки нашего парсера. HTTP 200, provisional и
       lkg_served не являются подтверждением свежести: успешный итог — fresh_published.
 
+      Контрольный цикл запускается каждые шесть часов через preset `0 */6 * * *`; это не меняет
+      серверное ограничение «не чаще одного запуска в 15 минут». В каждом цикле отдельно проверяй
+      четыре однодневных HSReplay meta-среза: `hsreplay_meta_archetypes_legend_eu_1d`,
+      `hsreplay_meta_top_1000_legend_1d_firecrawl`, `hsreplay_meta_legend_1d_firecrawl` и
+      `hsreplay_meta_diamond_4to1_1d_firecrawl`. `state=ok` или HTTP 200 без доказательства
+      публикации и `upstream_freshness.status=fresh` не являются fresh-only. cached_after_failure,
+      lkg_served, provisional, отсутствующая или unknown свежесть остаются degraded и должны быть
+      явно отражены в отчёте.
+
       Для временного сетевого сбоя используй retry_sources не более чем для пяти источников за раз.
       Для каждого проблемного источника обязательно следуй diagnose_source.triage. retry_transient
       требует одного bounded retry и повторной диагностики. inspect_adapter и
@@ -138,6 +147,15 @@ skills:
       стратегиями в D без метрик является invalid и не может быть принят за успешный. Если
       публичный API вернул 401/403, это состояние access_protected: не трактуй гостевой отказ
       доступа как поломку данных или UI, но явно укажи защищённую границу в отчёте.
+
+      Контрольный цикл запускается каждые шесть часов через preset `0 */6 * * *`; это не меняет
+      серверное ограничение «не чаще одного запуска в 15 минут». Для связки API → HearthPulse
+      проверяй по точным id четыре однодневных HSReplay meta-среза: `hsreplay_meta_archetypes_legend_eu_1d`,
+      `hsreplay_meta_top_1000_legend_1d_firecrawl`, `hsreplay_meta_legend_1d_firecrawl` и
+      `hsreplay_meta_diamond_4to1_1d_firecrawl`. Срез можно назвать fresh-only только при наличии
+      доказательства публикации и `upstream_freshness.status=fresh`; state=ok, HTTP 200, cached/LKG
+      или отсутствующая/unknown свежесть должны оставаться видимым degraded-состоянием и не могут
+      маскироваться в интерфейсе как актуальные данные.
 
       Исправления выполняй только в изолированной рабочей копии HeartPulse или parser-ops через
       управляемые инструменты. Перед чтением кода прочитай AGENTS.md и вызови codegraph_explore,

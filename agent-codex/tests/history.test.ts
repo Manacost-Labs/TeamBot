@@ -45,6 +45,14 @@ describe("Codex prompt translation", () => {
     expect(instructionsFor(dataControl)).toContain(
       "Follow diagnose_source.triage",
     );
+    expect(instructionsFor(dataControl)).toContain(
+      "hsreplay_meta_archetypes_legend_eu_1d",
+    );
+    expect(instructionsFor(dataControl)).toContain(
+      "hsreplay_meta_diamond_4to1_1d_firecrawl",
+    );
+    expect(instructionsFor(dataControl)).toContain("fresh-only");
+    expect(instructionsFor(dataControl)).toContain("0 */6 * * *");
     const detectedByTool = {
       ...input,
       tools: [
@@ -70,6 +78,14 @@ describe("Codex prompt translation", () => {
     expect(instructionsFor(heartpulse)).toContain(
       "HSReplay all-D without metrics",
     );
+    expect(instructionsFor(heartpulse)).toContain(
+      "hsreplay_meta_top_1000_legend_1d_firecrawl",
+    );
+    expect(instructionsFor(heartpulse)).toContain(
+      "hsreplay_meta_legend_1d_firecrawl",
+    );
+    expect(instructionsFor(heartpulse)).toContain("fresh-only");
+    expect(instructionsFor(heartpulse)).toContain("0 */6 * * *");
   });
 
   test("gives the research agent an isolated report workspace and source workflow", () => {

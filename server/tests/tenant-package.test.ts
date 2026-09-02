@@ -362,6 +362,22 @@ describe("tenant YAML validation", () => {
     expect(youtube?.type).toBe("remote_ag_ui");
     expect(youtube?.skills).toEqual(["youtube-summary"]);
     expect(skill?.tools).toEqual(["artifacts/create_artifact"]);
+    const dataControlSkill = tenantPackage.skills.find(
+      (entry) => entry.slug === "data-control",
+    );
+    const heartpulseSkill = tenantPackage.skills.find(
+      (entry) => entry.slug === "heartpulse-control",
+    );
+    expect(dataControlSkill?.instructions).toContain(
+      "hsreplay_meta_archetypes_legend_eu_1d",
+    );
+    expect(dataControlSkill?.instructions).toContain("fresh-only");
+    expect(dataControlSkill?.instructions).toContain("0 */6 * * *");
+    expect(heartpulseSkill?.instructions).toContain(
+      "hsreplay_meta_diamond_4to1_1d_firecrawl",
+    );
+    expect(heartpulseSkill?.instructions).toContain("fresh-only");
+    expect(heartpulseSkill?.instructions).toContain("0 */6 * * *");
     expect(work?.permittedAgents).toContain("youtube-analyst");
   });
 
