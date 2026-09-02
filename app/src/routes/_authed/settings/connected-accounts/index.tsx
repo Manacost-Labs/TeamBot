@@ -3,8 +3,9 @@ import {
   IconBrandNotion,
   IconChevronRight,
   IconPlug,
+  IconRefresh,
 } from "@tabler/icons-react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import * as React from "react";
 import {
@@ -14,6 +15,7 @@ import {
   PageShell,
 } from "@/components/layout/page-shell";
 import { RowMark } from "@/components/layout/row-mark";
+import { Button } from "@/components/ui/button";
 import {
   Item,
   ItemActions,
@@ -24,6 +26,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import {
   connectionsQueryOptions,
+  pluginKeys,
   pluginsPageQueryOptions,
 } from "@/lib/plugins/queries";
 import { cn } from "@/lib/utils";
@@ -60,8 +63,17 @@ const markFor = (key: string) => MARKS[key] ?? IconPlug;
 
 function RouteComponent() {
   const { connected: outcome } = Route.useSearch();
+  const queryClient = useQueryClient();
   const plugins = useQuery(pluginsPageQueryOptions());
   const connections = useQuery(connectionsQueryOptions());
+  const refreshing = plugins.isFetching || connections.isFetching;
+
+  const refresh = () => {
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: pluginKeys.page() }),
+      queryClient.invalidateQueries({ queryKey: pluginKeys.connections() }),
+    ]);
+  };
 
   const connected = new Set(
     (connections.data?.connections ?? []).map((row) => row.serverId),
@@ -81,6 +93,19 @@ function RouteComponent() {
 
   return (
     <PageShell
+      action={
+        <Button
+          aria-label="Обновить интеграции"
+          disabled={refreshing}
+          onClick={refresh}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          <IconRefresh className={cn({ "animate-spin": refreshing })} />
+          Обновить
+        </Button>
+      }
       description="Интеграции, которые сотрудники используют от вашего имени. Они видят только те данные, к которым у вас есть доступ."
       title="Интеграции"
     >
@@ -94,10 +119,28 @@ function RouteComponent() {
           раз.
         </p>
       ) : null}
-      {plugins.isPending || connections.isPending ? null : plugins.error ? (
-        <p className="mt-12 text-destructive text-sm" role="alert">
-          Не удалось загрузить интеграции.
-        </p>
+      {plugins.isPending || connections.isPending ? (
+        <PageSection>
+          <PageEmpty>Проверяем доступные интеграции…</PageEmpty>
+        </PageSection>
+      ) : plugins.error || connections.error ? (
+        <PageSection>
+          <div className="mt-4 flex flex-col items-start gap-3 rounded-lg border border-dashed border-border p-5">
+            <p className="text-destructive text-sm" role="alert">
+              Не удалось загрузить интеграции. Повторите проверку.
+            </p>
+            <Button
+              disabled={refreshing}
+              onClick={refresh}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              <IconRefresh aria-hidden="true" />
+              Повторить
+            </Button>
+          </div>
+        </PageSection>
       ) : (
         <PageSection>
           {yours.length === 0 ? (

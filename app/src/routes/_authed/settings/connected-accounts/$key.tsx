@@ -1,5 +1,9 @@
-import { IconArrowUpRight, IconChevronDown } from "@tabler/icons-react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import {
+  IconArrowUpRight,
+  IconChevronDown,
+  IconRefresh,
+} from "@tabler/icons-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useState } from "react";
 import {
@@ -26,6 +30,7 @@ import { Separator } from "@/components/ui/separator";
 import { connectAccountMutationOptions } from "@/lib/plugins/mutations";
 import {
   connectionsQueryOptions,
+  pluginKeys,
   pluginsPageQueryOptions,
 } from "@/lib/plugins/queries";
 
@@ -45,9 +50,23 @@ function RouteComponent() {
   const { key } = useParams({
     from: "/_authed/settings/connected-accounts/$key",
   });
+  const queryClient = useQueryClient();
   const plugins = useQuery(pluginsPageQueryOptions());
   const connections = useQuery(connectionsQueryOptions());
+  const refreshing = plugins.isFetching || connections.isFetching;
   const [notice, setNotice] = useState<string | null>(null);
+
+  const back = {
+    label: "Интеграции",
+    linkProps: { to: "/settings/connected-accounts" as const },
+  };
+
+  const refresh = () => {
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: pluginKeys.page() }),
+      queryClient.invalidateQueries({ queryKey: pluginKeys.connections() }),
+    ]);
+  };
 
   const connect = useMutation({
     ...connectAccountMutationOptions(),
@@ -71,14 +90,43 @@ function RouteComponent() {
     connect.mutate(key);
   };
 
-  if (plugins.isPending) {
-    return <PageShell title="Интеграция">{null}</PageShell>;
+  if (plugins.isPending || connections.isPending) {
+    return (
+      <PageShell backButton={back} title="Интеграция">
+        <PageSection>
+          <PageEmpty>Проверяем состояние подключения…</PageEmpty>
+        </PageSection>
+      </PageShell>
+    );
   }
 
-  const back = {
-    label: "Интеграции",
-    linkProps: { to: "/settings/connected-accounts" as const },
-  };
+  if (plugins.error || connections.error) {
+    return (
+      <PageShell
+        backButton={back}
+        description="Не удалось проверить состояние этой интеграции."
+        title="Интеграция"
+      >
+        <PageSection>
+          <div className="mt-4 flex flex-col items-start gap-3 rounded-lg border border-dashed border-border p-5">
+            <p className="text-destructive text-sm" role="alert">
+              Данные подключения недоступны. Повторите проверку.
+            </p>
+            <Button
+              disabled={refreshing}
+              onClick={refresh}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              <IconRefresh aria-hidden="true" />
+              Повторить
+            </Button>
+          </div>
+        </PageSection>
+      </PageShell>
+    );
+  }
 
   /*
    * A vendor that is not reached as a person has nothing here for anybody to decide, and one an

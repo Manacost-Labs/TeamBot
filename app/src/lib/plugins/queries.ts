@@ -153,6 +153,64 @@ export type PluginConnections = {
   redirectUri: string | null;
 };
 
+function connectionRows(value: unknown): Record<string, unknown>[] | null {
+  if (!Array.isArray(value)) return null;
+  return value.every(
+    (row) => Boolean(row) && typeof row === "object" && !Array.isArray(row),
+  )
+    ? (value as Record<string, unknown>[])
+    : null;
+}
+
+function validTimestamp(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    !Number.isNaN(Date.parse(value))
+  );
+}
+
+/** Project the personal connection response before it reaches settings or admin UI state. */
+export function projectPluginConnections(value: unknown): PluginConnections {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Plugin connections returned an invalid response");
+  }
+  const source = value as Record<string, unknown>;
+  const connections = connectionRows(source.connections);
+  if (
+    !connections ||
+    (source.redirectUri !== null && typeof source.redirectUri !== "string")
+  ) {
+    throw new Error("Plugin connections returned an invalid response");
+  }
+
+  const projected = connections.map((row) => ({
+    serverId: row.serverId,
+    scope: row.scope,
+    connectedAt: row.connectedAt,
+  }));
+  if (
+    projected.some(
+      (row) =>
+        typeof row.serverId !== "string" ||
+        row.serverId.length === 0 ||
+        typeof row.scope !== "string" ||
+        !validTimestamp(row.connectedAt),
+    )
+  ) {
+    throw new Error("Plugin connections returned an invalid response");
+  }
+
+  return {
+    connections: projected.map((row) => ({
+      serverId: row.serverId as string,
+      scope: row.scope as string,
+      connectedAt: row.connectedAt as string,
+    })),
+    redirectUri: source.redirectUri as string | null,
+  };
+}
+
 export type PluginConnectionHealth = {
   available: { serverId: string; title: string }[];
   connected: { serverId: string; connectedAt: string }[];
@@ -171,8 +229,9 @@ export function connectionsQueryOptions() {
       const response = await client("/api/plugins/connections", {
         fallback: "Your connected accounts could not be loaded.",
       });
-      return response.json();
+      return projectPluginConnections(await response.json());
     },
+    staleTime: 30_000,
   });
 }
 
