@@ -1,6 +1,7 @@
 import {
   IconBolt,
   IconClock,
+  IconFileText,
   IconMessagePlus,
   IconSettings,
 } from "@tabler/icons-react";
@@ -46,6 +47,12 @@ export const HOME_QUICK_ACTIONS = [
     title: "Расписание",
     description: "Проверить автоматические задачи",
     icon: IconClock,
+  },
+  {
+    to: "/results",
+    title: "Результаты",
+    description: "Найти созданные файлы",
+    icon: IconFileText,
   },
   {
     to: "/settings",

@@ -8,6 +8,7 @@ describe("ManacostTeam home navigation", () => {
       { to: "/channel/new", title: "Новый диалог" },
       { to: "/agents", title: "Сотрудники" },
       { to: "/routines", title: "Расписание" },
+      { to: "/results", title: "Результаты" },
       { to: "/settings", title: "Настройки" },
     ]);
   });

@@ -2,6 +2,7 @@ import {
   IconBolt,
   IconBox,
   IconClock,
+  IconFileText,
   IconLogout,
   IconPlus,
   IconSearch,
@@ -470,6 +471,25 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 <IconClock />
               </div>
               <span className="text-sm trackint-tight">Расписание</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              className="hover:bg-foreground/5 h-10"
+              render={(props) => (
+                <Link
+                  {...props}
+                  to="/results"
+                  activeProps={{
+                    className: "bg-foreground/5",
+                  }}
+                />
+              )}
+            >
+              <div className="size-[28px] flex items-center justify-center">
+                <IconFileText />
+              </div>
+              <span className="text-sm trackint-tight">Результаты</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
