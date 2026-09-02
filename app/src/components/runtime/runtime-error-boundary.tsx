@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { createIncidentId, reportUiError } from "@/lib/runtime/diagnostics";
 
 type RuntimeErrorBoundaryProps = {
   children: ReactNode;
@@ -7,16 +8,6 @@ type RuntimeErrorBoundaryProps = {
 type RuntimeErrorBoundaryState = {
   incidentId: string | null;
 };
-
-function createIncidentId(): string {
-  try {
-    return crypto.randomUUID();
-  } catch {
-    return `ui-${Date.now().toString(36)}-${Math.random()
-      .toString(36)
-      .slice(2, 10)}`;
-  }
-}
 
 /**
  * Keeps one rendering failure from taking the whole workspace down.
@@ -33,17 +24,18 @@ export class RuntimeErrorBoundary extends Component<
   state: RuntimeErrorBoundaryState = { incidentId: null };
 
   static getDerivedStateFromError(): RuntimeErrorBoundaryState {
-    return { incidentId: createIncidentId() };
+    return { incidentId: createIncidentId("ui") };
   }
 
   componentDidCatch(error: unknown, info: ErrorInfo): void {
-    const errorName = error instanceof Error ? error.name : "UnknownError";
-    console.error("[runtime] ui-render-error", {
-      type: "ui-render-error",
-      incidentId: this.state.incidentId,
-      errorName,
-      componentStackPresent: Boolean(info.componentStack),
-    });
+    if (this.state.incidentId) {
+      reportUiError(
+        "ui-render-error",
+        this.state.incidentId,
+        error,
+        Boolean(info.componentStack),
+      );
+    }
   }
 
   private readonly retry = (): void => {
