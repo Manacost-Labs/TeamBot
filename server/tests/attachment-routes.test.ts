@@ -105,6 +105,10 @@ function fakeDependencies(
       calls.push(["list", actorId, channelId, query]);
       return { attachments: [attachment], nextCursor: "next-page" };
     },
+    async listGenerated(actorId, query) {
+      calls.push(["listGenerated", actorId, query]);
+      return { attachments: [attachment], nextCursor: "next-page" };
+    },
     async get(actorId, channelId, attachmentId) {
       calls.push(["get", actorId, channelId, attachmentId]);
       return attachment;

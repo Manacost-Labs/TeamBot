@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { type SQL, sql } from "drizzle-orm";
+import { type SQL, type SQLWrapper, sql } from "drizzle-orm";
 import type { Database } from "../db/client";
 import {
   attachmentBlobs,
@@ -92,6 +92,11 @@ export type AttachmentStore = {
     channelId: string,
     query?: AttachmentListQuery,
   ): Promise<AttachmentPage>;
+  /** A bounded, owner-scoped index of generated artifacts across active channels. */
+  listGenerated(
+    actorUserId: string,
+    query?: AttachmentListQuery,
+  ): Promise<AttachmentPage>;
   get(
     actorUserId: string,
     channelId: string,
@@ -129,7 +134,10 @@ const attachmentProjection = sql`
   "attachments"."created_at" as "createdAt"
 `;
 
-function authorizedChannel(actorUserId: string, channelId: string): SQL {
+function authorizedChannel(
+  actorUserId: string,
+  channelId: string | SQLWrapper,
+): SQL {
   return sql`exists (
     select 1
     from ${channelMemberships}
@@ -354,6 +362,39 @@ export function createAttachmentStore(database: Database): AttachmentStore {
           and ${attachments.channelId} = ${channelId}
           and ${authorizedChannel(actorUserId, channelId)}
           ${messageCondition}
+          ${cursorCondition}
+        order by ${attachments.createdAt} desc, ${attachments.id} desc
+        limit ${limit + 1}
+      `)) as unknown as AttachmentSqlRow[];
+      const records = rows.map(attachmentRecord);
+      const page = records.slice(0, limit);
+      const last = page.at(-1);
+      return {
+        attachments: page,
+        nextCursor: records.length > limit && last ? encodeCursor(last) : null,
+      };
+    },
+
+    async listGenerated(actorUserId, query = {}) {
+      const limit = pageSize(query.limit);
+      const cursor = decodeCursor(query.cursor);
+      const cursorCondition = cursor
+        ? sql`and (
+            ${attachments.createdAt} < ${cursor.createdAt}::timestamptz
+            or (${attachments.createdAt} = ${cursor.createdAt}::timestamptz
+              and ${attachments.id} < ${cursor.id}::uuid)
+          )`
+        : sql``;
+      const rows = (await database.execute(sql`
+        select ${attachmentProjection}
+        from ${attachments}
+        inner join ${attachmentBlobs}
+          on ${attachmentBlobs.storageKey} = ${attachments.storageKey}
+          and ${attachmentBlobs.state} = 'live'
+        where ${attachments.ownerUserId} = ${actorUserId}
+          and ${attachments.source} = 'agent_generated'::attachment_source
+          and ${attachments.messageId} like 'artifact:%'
+          and ${authorizedChannel(actorUserId, attachments.channelId)}
           ${cursorCondition}
         order by ${attachments.createdAt} desc, ${attachments.id} desc
         limit ${limit + 1}

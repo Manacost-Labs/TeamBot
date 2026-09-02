@@ -1,0 +1,1 @@
+CREATE INDEX "attachments_owner_source_created_idx" ON "attachments" USING btree ("owner_user_id","source","created_at","id");

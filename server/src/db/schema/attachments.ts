@@ -145,5 +145,11 @@ export const attachments = pgTable(
       table.channelId,
       table.messageId,
     ),
+    index("attachments_owner_source_created_idx").on(
+      table.ownerUserId,
+      table.source,
+      table.createdAt,
+      table.id,
+    ),
   ],
 );

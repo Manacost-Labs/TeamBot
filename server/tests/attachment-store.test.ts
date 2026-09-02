@@ -66,6 +66,11 @@ const third: AttachmentRecord = {
   storageKey: "20000000-0000-4000-8000-000000000003",
   createdAt: new Date("2026-08-30T08:00:00.000Z"),
 };
+const generated: AttachmentRecord = {
+  ...first,
+  messageId: "artifact:run-1",
+  source: "agent_generated",
+};
 
 function fakeStore() {
   const database = new FakeDatabase();
@@ -95,6 +100,7 @@ describe("reserved attachment metadata protocol", () => {
       "delete",
       "get",
       "list",
+      "listGenerated",
       "reserve",
       "withUploadingLease",
     ]);
@@ -139,6 +145,38 @@ describe("reserved attachment metadata protocol", () => {
 
     database.results.push([]);
     expect(await store.reserve("user-b", "channel-a")).toBeNull();
+  });
+
+  test("lists only live generated artifacts in channels the actor can still access", async () => {
+    const { database, store } = fakeStore();
+    database.results.push([
+      generated,
+      {
+        ...generated,
+        id: second.id,
+        storageKey: second.storageKey,
+        createdAt: second.createdAt,
+      },
+    ]);
+
+    expect(await store.listGenerated("user-a", { limit: 1 })).toEqual({
+      attachments: [generated],
+      nextCursor: expect.any(String),
+    });
+    const query = database.captured[0];
+    expect(query?.sql).toContain(
+      "\"source\" = 'agent_generated'::attachment_source",
+    );
+    expect(query?.sql).toContain('"message_id" like');
+    expect(query?.sql).toContain("\"state\" = 'live'");
+    if (query) {
+      expect(query.sql).toContain("channel_memberships");
+      expect(query.sql).toContain("channels");
+      expect(query.sql).toMatch(/deleted_at[^)]*is null/);
+      expect(query.params).toContain("user-a");
+    }
+    expect(query?.sql).toContain('"attachments"."channel_id"');
+    expect(query?.sql).toContain("limit $");
   });
 
   test("locks and revalidates the exact uploading lease before exposing finalization", async () => {
