@@ -1,3 +1,5 @@
+import { infiniteQueryOptions } from "@tanstack/react-query";
+import { client } from "@/lib/client";
 import {
   ARTIFACT_MIME_TYPES,
   ARTIFACT_RESULT_SCHEMA,
@@ -5,8 +7,6 @@ import {
   artifactFilenameMatchesMimeType,
   parseArtifactResult,
 } from "./contract";
-import { infiniteQueryOptions } from "@tanstack/react-query";
-import { client } from "@/lib/client";
 
 export type ArtifactMetadata = Readonly<{
   id: string;
