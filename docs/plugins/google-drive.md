@@ -134,6 +134,13 @@ People who connected before `drive.file` was added must choose **Reconnect or up
 connected-account page before using upload, folder creation or move tools. Existing read-only grants
 are not silently widened.
 
+To stop using Google Workspace, open the same page and choose **Отключить аккаунт Google Workspace**.
+The application immediately retires the encrypted refresh token and removes the personal connection;
+it also asks Google to revoke the grant. The result says explicitly whether Google confirmed that
+revocation. If it did not (for example, during a temporary outage), the local connection is still
+gone and the account can be revoked manually in Google's third-party access settings. Repeating the
+action is safe.
+
 ## Tool groups
 
 Drive tools search by filename, content keywords, MIME type, modification time and folder, then read
@@ -182,6 +189,12 @@ that the four requested scopes are present under **Data Access**.
 
 Reconnect the person's account. OpenBot requests offline access and requires a refresh token; a
 revoked or expired grant is never replaced by an administrator's credential.
+
+### Отключение не подтверждено Google
+
+The app removes its local credential even when Google's revoke endpoint is unavailable, and shows a
+warning instead of claiming both sides succeeded. Open the Google Account third-party access page,
+remove the ManacostTeam/OpenBot entry there, then connect again only when access is needed.
 
 ### `403` or insufficient scopes
 

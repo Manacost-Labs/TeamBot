@@ -70,6 +70,13 @@ Nothing is cached. OpenBot stores the refresh token and mints a short-lived acce
 call, so withdrawing access at Notion takes effect on the next call rather than whenever a cache
 expires.
 
+To stop using Notion, open the connected-account page and choose **Отключить аккаунт Notion**. The
+application first asks Notion's pinned OAuth endpoint to revoke the grant, then retires the encrypted
+refresh token and removes the local connection. The result distinguishes a confirmed vendor revoke
+from a temporary failure; in either case the local credential is no longer usable. A second click is
+safe. If Notion does not confirm the revoke, remove the ManacostTeam/OpenBot connection from Notion's
+connected applications before reconnecting later.
+
 ## See also
 
 - [Architecture](../architecture.md) — where plugins, grants, policy and audit sit.

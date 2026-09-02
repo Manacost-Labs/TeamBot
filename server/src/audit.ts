@@ -179,10 +179,10 @@ export const auditEventTypes = [
    * their access". `reason` distinguishes somebody disconnecting their own account from an
    * administrator removing them, because those are the same effect and very different events.
    *
-   * `vendorRevoked` says whether the grant at the vendor was withdrawn as well, and is currently
-   * false: removing somebody stops this deployment holding a usable secret, and the grant at Google
-   * outlives it until it is revoked there. Recorded rather than glossed, because a row that implied
-   * otherwise would be worse than no row.
+   * `vendorRevoked` says whether the grant at the vendor was withdrawn as well. A local disconnect
+   * attempts that withdrawal and records a false value when the vendor is unavailable; offboarding
+   * and connector removal intentionally remain local-only and also record false. Recorded rather
+   * than glossed, because a row that implied both sides changed would be worse than no row.
    */
   "mcp.account_disconnected",
   // Every action a Bot takes on its computer, allowed or refused. Both, always: a trail that records
