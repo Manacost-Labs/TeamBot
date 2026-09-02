@@ -117,6 +117,7 @@ COPY --chown=pwuser:pwuser --from=deps /src/agent-computer/node_modules agent-co
 COPY --chown=pwuser:pwuser server server
 COPY --chown=pwuser:pwuser worker worker
 COPY --chown=pwuser:pwuser shared shared
+COPY --chown=pwuser:pwuser scripts/bind-telegram-owner.ts scripts/bind-telegram-owner.ts
 COPY --chown=pwuser:pwuser examples examples
 COPY --chown=pwuser:pwuser agent-computer/src agent-computer/src
 COPY --chown=pwuser:pwuser agent-computer/package.json agent-computer/package.json
