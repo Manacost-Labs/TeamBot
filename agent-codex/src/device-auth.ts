@@ -164,11 +164,32 @@ function publicStatus(flow: FlowRecord): DeviceAuthPublicStatus {
   };
 }
 
+function stripAnsiSgr(value: string): string {
+  let plain = "";
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) !== 27 || value[index + 1] !== "[") {
+      plain += value[index];
+      continue;
+    }
+    let end = index + 2;
+    while (/[0-9;]/.test(value[end] ?? "")) end += 1;
+    if (value[end] === "m") {
+      index = end;
+      continue;
+    }
+    plain += value[index];
+  }
+  return plain;
+}
+
 function parseInstructions(prompt: string): ReadyInstructions | null {
-  const userCode = prompt.match(USER_CODE)?.[0];
+  // Codex 0.150 emits colour even when stdout is a pipe. Strip only bounded SGR styling before
+  // parsing; otherwise the reset sequence becomes part of the URL candidate and changes its path.
+  const plainPrompt = stripAnsiSgr(prompt);
+  const userCode = plainPrompt.match(USER_CODE)?.[0];
   if (!userCode) return null;
 
-  for (const candidate of prompt.match(HTTPS_URL) ?? []) {
+  for (const candidate of plainPrompt.match(HTTPS_URL) ?? []) {
     try {
       const url = new URL(candidate);
       if (

@@ -36,7 +36,7 @@ function textStream(text: string): ReadableStream<Uint8Array> {
   });
 }
 
-const DEVICE_PROMPT = `Open this URL in your browser:\nhttps://auth.openai.com/codex/device\nEnter this one-time code:\nABCD-EFGHJ\n`;
+const DEVICE_PROMPT = `Open this URL in your browser:\n\u001b[94mhttps://auth.openai.com/codex/device\u001b[0m\nEnter this one-time code:\n\u001b[94mABCD-EFGHJ\u001b[0m\n`;
 const AUTH_DOCUMENT = JSON.stringify({
   auth_mode: "chatgpt",
   tokens: { access_token: "device-auth-secret" },
