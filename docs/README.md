@@ -12,6 +12,10 @@ Start with the root [README](../README.md), then use these references:
   smoke-сценарии, стоп-условия и rollback перед public cutover.
 - [Task 32 rehearsal evidence](manacostteam-rehearsal-evidence.md): безопасный шаблон backup/restore,
   owner binding, resource counts и rollback; заполняется только после отдельного разрешения.
+- [Task 33 canary evidence](manacostteam-canary-evidence.md): шаблон изолированной проверки владельца,
+  редактора, интеграций, артефактов и rollback; фактические данные добавляются только после разрешения.
+- [Task 34 cutover evidence](manacostteam-cutover-evidence.md): шаблон public cutover, наблюдения,
+  критериев отката и sign-off; публичный трафик до отдельного разрешения не меняется.
 - [Coworkers](coworkers.md): durable Bot profiles, channels, visibility, deletion, and external AG-UI registration.
 - [Routines](routines.md): standing instructions a Bot runs on a schedule, the worker that fires them, and who they run as.
 - [Main Editor → Google Docs runbook](runbooks/editor-google-docs.md): read-only model boundary, review screen, one-time write-back, rollout and troubleshooting.
