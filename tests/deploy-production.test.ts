@@ -47,7 +47,7 @@ exit 0
         ARTIFACT_RENDERER_TOKEN: "test-renderer-token",
         TELEGRAM_LOGIN_BOT_TOKEN: "123456:synthetic-test-token",
         TELEGRAM_OIDC_CLIENT_ID: "123456789",
-        TELEGRAM_OIDC_CLIENT_SECRET: "synthetic_oidc_secret_0123456789abcdef",
+        TELEGRAM_OIDC_CLIENT_SECRET: "test-test-test-test-test-test-test-test",
         TELEGRAM_ALLOWED_USER_IDS: "123456789,987654321",
         TELEGRAM_OWNER_USER_IDS: "123456789",
         OPENROUTER_MODEL: "openai/synthetic-test-model",

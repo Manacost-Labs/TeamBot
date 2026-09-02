@@ -6,3 +6,7 @@ bbdb7f2fc83916ff54e13b6bc268e5f4ccd34a5e:server/tests/config.test.ts:generic-api
 
 # Synthetic malformed admission keys used to prove the request is rejected before execution.
 69375144cfb3ffa3ab1584c0a2943c2e6f3caa1a:agent-codex/tests/request-handler.test.ts:generic-api-key:455
+
+# Synthetic Telegram OIDC values used only by deployment/helper boundary tests.
+b19896321c68241bd68ed87ef2bbf4c39495c6e5:tests/deploy-production.test.ts:generic-api-key:50
+b19896321c68241bd68ed87ef2bbf4c39495c6e5:scripts/test-configure-manacostteam-auth.sh:generic-api-key:163
