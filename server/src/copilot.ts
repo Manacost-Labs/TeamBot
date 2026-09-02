@@ -371,6 +371,36 @@ export function adaptiveReasoningEffort(
 const TOOL_STEPS = 8;
 
 /**
+ * Deliverable tools are part of the run contract, not optional context.
+ *
+ * The selector may remove a skill's tools to keep a large catalogue accurate. Research and
+ * YouTube runs have a stronger promise: even a partial answer must leave one downloadable report.
+ * Keep that already-granted tool in the offer so a selector hiccup cannot turn a valid run into a
+ * status-only response. The grant and callback policy remain the security boundary.
+ */
+const ARTIFACT_TOOL_REF = "artifacts/create_artifact";
+
+export function deliverableToolRefsForRun(
+  agentId: string,
+  input: RunAgentInput,
+): readonly string[] {
+  const forwarded = input.forwardedProps as
+    | { openbotBotId?: unknown }
+    | undefined;
+  const botId =
+    typeof forwarded?.openbotBotId === "string"
+      ? forwarded.openbotBotId
+      : agentId;
+  const researchAgentId =
+    process.env.RESEARCH_AGENT_ID?.trim() || "research-analyst";
+  const youtubeAgentId =
+    process.env.YOUTUBE_ANALYST_AGENT_ID?.trim() || "youtube-analyst";
+  return botId === researchAgentId || botId === youtubeAgentId
+    ? [ARTIFACT_TOOL_REF]
+    : [];
+}
+
+/**
  * Build the built-in and remote AG-UI agent map the runtime serves.
  *
  * Keyed by the registry id, which is what the browser sends as the agent name, so the two cannot
@@ -482,6 +512,7 @@ async function buildAgent(
       text: latestUserText(input.messages),
       choose: narrowing.choose,
       ...(narrowing.floor === undefined ? {} : { floor: narrowing.floor }),
+      requiredRefs: deliverableToolRefsForRun(agent.id, input),
     });
     // Awaited, so the row is on record before the model is handed the tools it names. A discovery
     // written afterwards would sit in the trail after the calls it explains.

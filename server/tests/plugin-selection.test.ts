@@ -114,6 +114,28 @@ describe("what gets offered", () => {
     expect(offered).toContain("drive/tool_0");
     expect(offered).toContain("slack/tool_0");
   });
+
+  test("keeps a required deliverable tool even when its skill is not chosen", async () => {
+    const selection = await selectTools({
+      tools: [...manyTools, tool("artifacts/create_artifact")],
+      skills: [
+        ...skills,
+        {
+          slug: "youtube-summary",
+          title: "YouTube summary",
+          summary: "Create the required downloadable report.",
+          tools: ["artifacts/create_artifact"],
+        },
+      ],
+      text: "summarise the supplied video",
+      choose: answering(["drive-audit"]),
+      requiredRefs: ["artifacts/create_artifact"],
+    });
+
+    const offered = selection.offered.map((entry) => entry.ref);
+    expect(offered).toContain("artifacts/create_artifact");
+    expect(offered).not.toContain("slack/tool_0");
+  });
 });
 
 describe("a declaration is not a grant", () => {

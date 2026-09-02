@@ -7,6 +7,7 @@ import {
   buildAgents,
   builtInAgentConfiguration,
   createRequestAgents,
+  deliverableToolRefsForRun,
   disableInspectorMetadata,
   type GovernRemoteRun,
   registeredAgentFromRow,
@@ -32,6 +33,27 @@ const riskRow = {
 };
 
 describe("Copilot runtime info", () => {
+  test("keeps the report tool in research and YouTube runs", () => {
+    expect(
+      deliverableToolRefsForRun("research-analyst", {
+        agentId: "research-analyst",
+        forwardedProps: {},
+      } as never),
+    ).toEqual(["artifacts/create_artifact"]);
+    expect(
+      deliverableToolRefsForRun("youtube-analyst", {
+        agentId: "other-id",
+        forwardedProps: { openbotBotId: "youtube-analyst" },
+      } as never),
+    ).toEqual(["artifacts/create_artifact"]);
+    expect(
+      deliverableToolRefsForRun("ordinary-agent", {
+        agentId: "ordinary-agent",
+        forwardedProps: {},
+      } as never),
+    ).toEqual([]);
+  });
+
   test("does not advertise the unused Inspector metadata endpoint", async () => {
     const response = await disableInspectorMetadata(
       new Response(

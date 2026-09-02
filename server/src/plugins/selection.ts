@@ -183,9 +183,18 @@ export async function selectTools<Tool extends SelectableTool>(input: {
   ) => Promise<string | null> | (string | null) | Promise<never>;
   /** Overridable so a deployment that measured its own knee is not stuck with ours. */
   floor?: number;
+  /**
+   * Granted tools that are part of the run's completion contract.
+   *
+   * Narrowing is an accuracy optimisation, not a reason to remove a required deliverable. The
+   * caller still has to grant every ref in this list; this only keeps an already-granted tool in the
+   * offer when the selector chooses a different skill.
+   */
+  requiredRefs?: readonly string[];
 }): Promise<Selection<Tool>> {
   const { tools, skills, text } = input;
   const floor = input.floor ?? SELECTION_FLOOR;
+  const requiredRefs = new Set(input.requiredRefs ?? []);
   const everything = (reason: SelectionReason): Selection<Tool> => ({
     offered: [...tools],
     skills: [],
@@ -238,7 +247,10 @@ export async function selectTools<Tool extends SelectableTool>(input: {
      * cover the catalogue, and a deployment that has declared nothing is never punished for it.
      */
     offered: tools.filter(
-      (tool) => !declared.has(tool.ref) || wanted.has(tool.ref),
+      (tool) =>
+        !declared.has(tool.ref) ||
+        wanted.has(tool.ref) ||
+        requiredRefs.has(tool.ref),
     ),
     skills: chosen,
     reason: "selected",
