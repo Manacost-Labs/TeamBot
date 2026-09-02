@@ -40,6 +40,12 @@ ManacostTeam. Каждый этап должен быть отдельным н�
 превысил 45 мс, mobile p95 — 153 мс. Подробные числа находятся в
 [`runtime-performance-evidence.ru.md`](runtime-performance-evidence.ru.md).
 
+Ревизия `693a0fd` восстановила вертикальную прокрутку на общих страницах рабочего пространства:
+настройки, админка и разделы под основной оболочкой больше не обрезаются соседним
+`overflow-hidden`. Layout regression-тест, штатный CI и новый render gate прошли; подробности и
+ограничения наблюдения записаны в
+[`navigation-performance-evidence-2026-09-02.ru.md`](navigation-performance-evidence-2026-09-02.ru.md).
+
 Подготовлен отдельный [canary-чеклист](manacostteam-canary-checklist.ru.md): backup/restore,
 owner-binding на копии, изолированный owner/editor smoke, проверка Google/AI/artifact путей и
 условия немедленного rollback. Task 32 уже завершён на копии, а отдельное разрешение на Task 33
