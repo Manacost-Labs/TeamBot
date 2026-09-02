@@ -27,6 +27,7 @@ import {
   channelQueryOptions,
 } from "@/lib/channels/queries";
 import { onComputerActivity } from "@/lib/copilot/computer-activity";
+import { CopilotProvider } from "@/lib/copilot/provider";
 import { useAgentRunActivity } from "@/lib/copilot/run-activity-store";
 import { agentRunStatusLabel } from "@/lib/copilot/run-state";
 import { EASE_OUT, ENTRANCE_SECONDS } from "@/lib/motion";
@@ -331,11 +332,13 @@ function ChannelBody({
 
   // Remount on channel changes so CopilotKit agent/thread state cannot leak between channels.
   return (
-    <ChannelChat
-      channel={channel}
-      historyScope={historyScope}
-      key={channel.id}
-      runtimeAgentId={runtimeAgentId}
-    />
+    <CopilotProvider>
+      <ChannelChat
+        channel={channel}
+        historyScope={historyScope}
+        key={channel.id}
+        runtimeAgentId={runtimeAgentId}
+      />
+    </CopilotProvider>
   );
 }

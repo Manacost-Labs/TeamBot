@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { agentListQueryOptions } from "@/lib/agents/queries";
 import { useActiveBot } from "@/lib/copilot/active-bot";
 import { useBotThread } from "@/lib/copilot/bot-thread";
+import { CopilotProvider } from "@/lib/copilot/provider";
 import { useStoppedTurn } from "@/lib/copilot/stopped-turn";
 
 export const Route = createFileRoute("/_authed/_app/bot")({
@@ -52,7 +53,11 @@ function RouteComponent() {
    * Keyed on the Bot, so the hooks below never see it change under them. They cannot be called
    * conditionally, and the guards above return before any of them run.
    */
-  return <BotChat agentId={agentId} key={agentId} name={bot.name} />;
+  return (
+    <CopilotProvider>
+      <BotChat agentId={agentId} key={agentId} name={bot.name} />
+    </CopilotProvider>
+  );
 }
 
 function BotChat({ agentId, name }: { agentId: string; name: string }) {
@@ -144,7 +149,7 @@ function BotChat({ agentId, name }: { agentId: string; name: string }) {
   );
 }
 
-/** Packaged direct chat; the app-level provider remains mounted across routes. */
+/** Packaged direct chat; its route owns the runtime boundary so other pages stay lightweight. */
 function BotChatSurface({
   agentId,
   threadId,

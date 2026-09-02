@@ -8,7 +8,11 @@ import { HandoffTool } from "./handoff-tool";
 import { SandboxedTools } from "./sandboxed-tools";
 
 /**
- * The CopilotKit client, wrapped once for the whole authenticated app.
+ * The CopilotKit client, mounted only around a live chat surface.
+ *
+ * Lists, settings and schedules do not use the runtime. Keeping this boundary close to the two
+ * chat routes prevents their route chunks from making every authenticated screen pay for the
+ * CopilotKit client and its frontend tool registry.
  *
  * `credentials: "include"` is the load-bearing part. OpenBot authenticates with a Better Auth
  * session cookie, and the runtime endpoint sits behind the same guard as every other API route, so
