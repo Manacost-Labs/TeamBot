@@ -393,7 +393,7 @@ describe("transcript windowing", () => {
   test("recovers a generated file when history lost the tool result envelope", async () => {
     const attachmentId = "69bb8eb0-1ac8-4c67-aeca-2362e2f507cd";
     const requests: string[] = [];
-    globalThis.fetch = (async (input) => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input);
       requests.push(url);
       if (url.endsWith("/attachments?limit=50")) {
