@@ -2,9 +2,23 @@ import { describe, expect, test } from "bun:test";
 import {
   routineAgentOptions,
   routineChannelOptions,
+  routineSchedulePresets,
 } from "../src/lib/routines/options";
 
 describe("human-readable routine editor options", () => {
+  test("offers a six-hour cadence without removing the fifteen-minute option", () => {
+    expect(routineSchedulePresets).toContainEqual({
+      id: "every-6-hours",
+      label: "Каждые 6 часов",
+      cron: "0 */6 * * *",
+    });
+    expect(routineSchedulePresets).toContainEqual({
+      id: "every-15-minutes",
+      label: "Каждые 15 минут",
+      cron: "*/15 * * * *",
+    });
+  });
+
   test("labels employees by name and role instead of exposing only ids", () => {
     expect(
       routineAgentOptions([

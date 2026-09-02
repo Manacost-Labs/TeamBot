@@ -1,5 +1,21 @@
 export type RoutineSelectOption = { value: string; label: string };
 
+/**
+ * Ready-to-use cadences shown by the routine editor.
+ *
+ * The platform still enforces a 15-minute minimum interval server-side; the six-hour option is a
+ * convenience for maintenance routines that should run on a predictable, low-noise cadence.
+ */
+export const routineSchedulePresets = [
+  { id: "every-15-minutes", label: "Каждые 15 минут", cron: "*/15 * * * *" },
+  { id: "every-6-hours", label: "Каждые 6 часов", cron: "0 */6 * * *" },
+  { id: "hourly", label: "Каждый час", cron: "0 * * * *" },
+  { id: "daily", label: "Каждый день в 09:00", cron: "0 9 * * *" },
+  { id: "weekdays", label: "По будням в 09:00", cron: "0 9 * * 1-5" },
+  { id: "weekly", label: "Каждый понедельник в 09:00", cron: "0 9 * * 1" },
+  { id: "monthly", label: "Первого числа в 09:00", cron: "0 9 1 * *" },
+] as const;
+
 type AgentOptionSource = { id: string; name: string; title: string };
 type ChannelOptionSource = {
   id: string;

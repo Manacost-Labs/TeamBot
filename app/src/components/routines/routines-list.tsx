@@ -53,6 +53,7 @@ import {
 import {
   routineAgentOptions,
   routineChannelOptions,
+  routineSchedulePresets,
 } from "@/lib/routines/options";
 import {
   type RoutineRecord,
@@ -98,15 +99,6 @@ function lastRunLabel(lastRun: RoutineRecord["lastRun"]): {
   // error, but this is the runtime fallback if that ever slips through.
   return { text: `Завершено: ${when}`, className: "text-muted-foreground" };
 }
-
-const schedulePresets = [
-  { id: "every-15-minutes", label: "Каждые 15 минут", cron: "*/15 * * * *" },
-  { id: "hourly", label: "Каждый час", cron: "0 * * * *" },
-  { id: "daily", label: "Каждый день в 09:00", cron: "0 9 * * *" },
-  { id: "weekdays", label: "По будням в 09:00", cron: "0 9 * * 1-5" },
-  { id: "weekly", label: "Каждый понедельник в 09:00", cron: "0 9 * * 1" },
-  { id: "monthly", label: "Первого числа в 09:00", cron: "0 9 1 * *" },
-] as const;
 
 type EditDraft = Pick<
   RoutineRecord,
@@ -471,7 +463,7 @@ export function RoutinesList() {
                 <span className="font-medium">Готовый вариант</span>
                 <Select
                   onValueChange={(value) => {
-                    const preset = schedulePresets.find(
+                    const preset = routineSchedulePresets.find(
                       (item) => item.id === value,
                     );
                     if (preset) {
@@ -481,8 +473,9 @@ export function RoutinesList() {
                     }
                   }}
                   value={
-                    schedulePresets.find((item) => item.cron === editing?.cron)
-                      ?.id ?? "custom"
+                    routineSchedulePresets.find(
+                      (item) => item.cron === editing?.cron,
+                    )?.id ?? "custom"
                   }
                 >
                   <SelectTrigger className="w-full" id="routine-preset">
@@ -490,7 +483,7 @@ export function RoutinesList() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
-                      {schedulePresets.map((preset) => (
+                      {routineSchedulePresets.map((preset) => (
                         <SelectItem key={preset.id} value={preset.id}>
                           {preset.label}
                         </SelectItem>
