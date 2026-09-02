@@ -1237,6 +1237,7 @@ const app = createApp(
       }
     : undefined,
   personalAiDeviceFlows,
+  { store: attachmentStore },
 );
 
 /**

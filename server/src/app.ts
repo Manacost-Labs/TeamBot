@@ -19,6 +19,10 @@ import {
   createAttachmentRoutes,
 } from "./attachments/routes";
 import {
+  type ArtifactRouteDependencies,
+  createArtifactRoutes,
+} from "./artifacts/routes";
+import {
   type AuditReader,
   type AuditStore,
   auditQueryFromUrl,
@@ -247,6 +251,8 @@ export function createApp(
   personalAiCredentialRedemption?: PersonalAiCredentialInternalRoutesOptions,
   /** Actor-owned ChatGPT device login; appended to preserve positional call sites. */
   personalAiDeviceFlows?: ChatGptDeviceFlowService,
+  /** Owner-scoped generated artifact index; appended to preserve positional call sites. */
+  artifactRoutes?: ArtifactRouteDependencies,
 ) {
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -948,6 +954,13 @@ export function createApp(
     app.route(
       "/api/channels",
       createAttachmentRoutes(attachmentRoutes, requireUser),
+    );
+  }
+
+  if (artifactRoutes) {
+    app.route(
+      "/api/results",
+      createArtifactRoutes(artifactRoutes, requireUser),
     );
   }
 
