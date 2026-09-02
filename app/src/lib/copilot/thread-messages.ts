@@ -208,7 +208,17 @@ export function createThreadHistoryCache(
 }
 
 const threadHistoryCache = createThreadHistoryCache();
-const prefetches = new Map<string, Promise<StoredThread>>();
+/**
+ * One latest history read per authenticated thread.
+ *
+ * Sidebar hover/focus can start a read just before the channel mounts. Keeping that promise here
+ * lets the active view adopt it instead of opening a second request to the same remote store. The
+ * map is intentionally process-local to this tab and keyed by the authenticated scope, so a
+ * sign-in transition can never join another person's pending read.
+ */
+const pendingHistoryReads = new Map<string, Promise<StoredThread>>();
+/** Per-thread generation prevents a late speculative response from repopulating a cache after a write. */
+const threadHistoryInvalidationEpochs = new Map<string, number>();
 
 export function cachedThreadMessages(
   sessionScope: string,
@@ -224,11 +234,26 @@ export function invalidateThreadMessagesCache(
   threadId: string,
   agentId: string,
 ): void {
+  const key = historyCacheKey(sessionScope, threadId, agentId);
   threadHistoryCache.invalidate(sessionScope, threadId, agentId);
+  threadHistoryInvalidationEpochs.set(
+    key,
+    (threadHistoryInvalidationEpochs.get(key) ?? 0) + 1,
+  );
+  // The underlying fetch cannot always be cancelled (it may be shared), but a future refresh must
+  // never adopt this obsolete promise after the local write.
+  pendingHistoryReads.delete(key);
 }
 
 export function clearThreadMessagesCache(sessionScope: string): void {
   threadHistoryCache.clearScope(sessionScope);
+  const prefix = `${encodeURIComponent(sessionScope)}:`;
+  for (const key of pendingHistoryReads.keys()) {
+    if (key.startsWith(prefix)) pendingHistoryReads.delete(key);
+  }
+  for (const key of threadHistoryInvalidationEpochs.keys()) {
+    if (key.startsWith(prefix)) threadHistoryInvalidationEpochs.delete(key);
+  }
 }
 
 /** Server order wins; structurally unchanged rows retain their identity for memoized rendering. */
@@ -446,13 +471,74 @@ export async function readThreadMessages(
   }
 }
 
-/** Always asks the authenticated server; callers decide how an explicit refresh failure is shown. */
+/**
+ * Reads the authenticated server, joining a pending prefetch and reusing its just-finished snapshot
+ * when possible; callers decide how an explicit refresh failure is shown.
+ */
 export async function refreshThreadMessages(
   sessionScope: string,
   threadId: string,
   agentId: string,
   options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<StoredThread> {
+  options.signal?.throwIfAborted();
+
+  /*
+   * A prefetch that completed moments ago is already the fresh server answer the active view needs.
+   * Reusing it removes the click -> duplicate GET round trip while keeping the window deliberately
+   * tiny; writes invalidate the cache immediately, so this cannot hide a local message.
+   */
+  const recent = threadHistoryCache.peek(sessionScope, threadId, agentId);
+  if (recent && Date.now() - recent.cachedAt < PREFETCH_DEDUP_MS) {
+    options.signal?.throwIfAborted();
+    return recent;
+  }
+
+  const key = historyCacheKey(sessionScope, threadId, agentId);
+  const pending = pendingHistoryReads.get(key);
+  if (pending) {
+    try {
+      const result = await pending;
+      options.signal?.throwIfAborted();
+      return result;
+    } catch (error) {
+      /*
+       * A speculative request may be cancelled by the bounded hover scheduler. Do not make the
+       * active channel inherit that cancellation: remove the failed promise and retry it with the
+       * active caller's deadline. Explicit cancellation of the active caller still wins.
+       */
+      if (options.signal?.aborted) throw error;
+      if (pendingHistoryReads.get(key) === pending) {
+        pendingHistoryReads.delete(key);
+      }
+    }
+  }
+
+  const request = refreshThreadMessagesDirect(
+    sessionScope,
+    threadId,
+    agentId,
+    options,
+  );
+  pendingHistoryReads.set(key, request);
+  try {
+    return await request;
+  } finally {
+    if (pendingHistoryReads.get(key) === request) {
+      pendingHistoryReads.delete(key);
+    }
+  }
+}
+
+/** Perform the actual authenticated read. Callers above this boundary handle sharing/retries. */
+async function refreshThreadMessagesDirect(
+  sessionScope: string,
+  threadId: string,
+  agentId: string,
+  options: { signal?: AbortSignal; timeoutMs?: number },
+): Promise<StoredThread> {
+  const key = historyCacheKey(sessionScope, threadId, agentId);
+  const invalidationEpoch = threadHistoryInvalidationEpochs.get(key) ?? 0;
   const cacheEpoch = threadHistoryCache.epoch(sessionScope);
   const response = await client(threadHistoryPath(threadId, agentId), {
     fallback: "Не удалось обновить историю диалога",
@@ -475,13 +561,15 @@ export async function refreshThreadMessages(
   // A sign-out or scope switch can happen while response JSON is being parsed. The signal is the
   // fast cancellation path; the captured epoch also covers authoritative refreshes with no signal.
   options.signal?.throwIfAborted();
-  threadHistoryCache.setIfCurrent(
-    sessionScope,
-    threadId,
-    agentId,
-    cacheEpoch,
-    result,
-  );
+  if ((threadHistoryInvalidationEpochs.get(key) ?? 0) === invalidationEpoch) {
+    threadHistoryCache.setIfCurrent(
+      sessionScope,
+      threadId,
+      agentId,
+      cacheEpoch,
+      result,
+    );
+  }
   return result;
 }
 
@@ -521,24 +609,11 @@ export async function prefetchThreadMessages(
   options.signal?.throwIfAborted();
   const cached = threadHistoryCache.peek(sessionScope, threadId, agentId);
   if (cached && Date.now() - cached.cachedAt < PREFETCH_DEDUP_MS) return;
-  const key = historyCacheKey(sessionScope, threadId, agentId);
-  const pending = prefetches.get(key);
-  if (pending) {
-    await pending.catch(() => {});
-    return;
-  }
-  const refresh = refreshThreadMessages(
-    sessionScope,
-    threadId,
-    agentId,
-    options,
-  );
-  prefetches.set(key, refresh);
   try {
-    await refresh;
+    // `refreshThreadMessages` owns the shared in-flight registry. An active channel can therefore
+    // promote this speculative request without starting another Intelligence read.
+    await refreshThreadMessages(sessionScope, threadId, agentId, options);
   } catch {
     // The opened channel owns the explicit refresh error; hover prefetch has no surface to report it.
-  } finally {
-    prefetches.delete(key);
   }
 }

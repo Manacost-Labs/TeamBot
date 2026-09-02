@@ -5,8 +5,10 @@ import {
   clearThreadMessagesCache,
   createThreadHistoryCache,
   historyErrorMessage,
+  invalidateThreadMessagesCache,
   mergeAuthoritativeThreadMessages,
   mergeThreadMessagesById,
+  prefetchThreadMessages,
   readableHistoryPage,
   readableTurns,
   refreshThreadHistoryPage,
@@ -270,6 +272,46 @@ describe("shapes a real thread contains", () => {
 });
 
 describe("bounded stale-while-revalidate history", () => {
+  test("shares a warm history read with the active channel", async () => {
+    let fetchCalls = 0;
+    let releaseResponse = () => {};
+    const responseReleased = new Promise<void>((resolve) => {
+      releaseResponse = resolve;
+    });
+    let fetchStarted = () => {};
+    const requestStarted = new Promise<void>((resolve) => {
+      fetchStarted = resolve;
+    });
+
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      fetchStarted();
+      return {
+        ok: true,
+        json: async () => {
+          await responseReleased;
+          return {
+            messages: [
+              { id: "history-1", role: "assistant", content: "Ready" },
+            ],
+          };
+        },
+      } as Response;
+    }) as typeof fetch;
+
+    const warming = prefetchThreadMessages("user-a", "thread", "agent");
+    await requestStarted;
+    const active = refreshThreadMessages("user-a", "thread", "agent");
+    releaseResponse();
+
+    await Promise.all([warming, active]);
+    expect(fetchCalls).toBe(1);
+
+    // A click immediately after the warm request has completed uses that fresh snapshot too.
+    await refreshThreadMessages("user-a", "thread", "agent");
+    expect(fetchCalls).toBe(1);
+  });
+
   test("turns transport timeout details into a retryable user message", () => {
     expect(historyErrorMessage(new ClientTimeoutError(12_000))).toBe(
       "Сервер истории не ответил вовремя. Повторите загрузку.",
@@ -445,6 +487,36 @@ describe("bounded stale-while-revalidate history", () => {
     await refreshing;
 
     expect(cachedThreadMessages("user-a", "late", "agent")).toBeNull();
+  });
+
+  test("does not cache a speculative snapshot after a local write invalidates it", async () => {
+    let releaseJson = () => {};
+    const jsonReleased = new Promise<void>((resolve) => {
+      releaseJson = resolve;
+    });
+    let jsonStarted = () => {};
+    const started = new Promise<void>((resolve) => {
+      jsonStarted = resolve;
+    });
+    globalThis.fetch = (async () =>
+      ({
+        ok: true,
+        json: async () => {
+          jsonStarted();
+          await jsonReleased;
+          return {
+            messages: [{ id: "old", role: "assistant", content: "Old" }],
+          };
+        },
+      }) as Response) as typeof fetch;
+
+    const refreshing = refreshThreadMessages("user-a", "write", "agent");
+    await started;
+    invalidateThreadMessagesCache("user-a", "write", "agent");
+    releaseJson();
+    await refreshing;
+
+    expect(cachedThreadMessages("user-a", "write", "agent")).toBeNull();
   });
 
   test("merges refreshed history in server order while retaining equal row identity", () => {

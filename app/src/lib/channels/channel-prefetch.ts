@@ -11,10 +11,17 @@ type ChannelPrefetchSchedulerOptions = {
 const DEFAULT_MAX_CONCURRENT = 2;
 const DEFAULT_MAX_QUEUED = 4;
 const DEFAULT_TASK_TIMEOUT_MS = 5_000;
+/**
+ * History is allowed to use the same bounded window as its active request. A five-second hover
+ * deadline was shorter than the remote Intelligence read, so the click discarded the warm request
+ * just before it could be adopted and started the expensive read again.
+ */
+const HISTORY_PREFETCH_TASK_TIMEOUT_MS = 13_000;
 
 type QueuedTask = {
   generation: number;
   task: PrefetchTask;
+  timeoutMs?: number;
 };
 
 type RunningTask = {
@@ -89,7 +96,12 @@ export class ChannelPrefetchScheduler {
     this.resolveIdle();
   }
 
-  schedule(sessionScope: string, key: string, task: PrefetchTask): void {
+  schedule(
+    sessionScope: string,
+    key: string,
+    task: PrefetchTask,
+    options: { timeoutMs?: number } = {},
+  ): void {
     this.activateScope(sessionScope);
     const generation = this.generation;
     if (this.inFlight.has(key)) return;
@@ -97,16 +109,16 @@ export class ChannelPrefetchScheduler {
     if (this.queued.has(key)) {
       // A second focus/hover carries the newest closures and makes this channel newest in the queue.
       this.queued.delete(key);
-      this.queued.set(key, { generation, task });
+      this.queued.set(key, { generation, task, ...options });
       return;
     }
 
     if (this.inFlight.size < this.maxConcurrent) {
-      this.start(key, { generation, task });
+      this.start(key, { generation, task, ...options });
       return;
     }
 
-    this.queued.set(key, { generation, task });
+    this.queued.set(key, { generation, task, ...options });
     while (this.queued.size > this.maxQueued) {
       const oldest = this.queued.keys().next().value;
       if (oldest === undefined) break;
@@ -136,7 +148,7 @@ export class ChannelPrefetchScheduler {
     deadline = setTimeout(() => {
       controller.abort(new Error("Channel prefetch deadline exceeded"));
       finish();
-    }, this.taskTimeoutMs);
+    }, queued.timeoutMs ?? this.taskTimeoutMs);
     const settled = Promise.resolve()
       .then(() => queued.task(controller.signal))
       .then(
@@ -257,6 +269,9 @@ export function scheduleChannelPrefetch(
         jobs.map((job) => Promise.resolve().then(() => job(signal))),
       );
     },
+    request.prefetchHistory
+      ? { timeoutMs: HISTORY_PREFETCH_TASK_TIMEOUT_MS }
+      : undefined,
   );
 }
 

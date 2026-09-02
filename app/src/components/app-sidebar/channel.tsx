@@ -173,6 +173,9 @@ export const Channel = memo(function Channel({
             }}
             onFocus={prefetchChannel}
             onMouseEnter={prefetchChannel}
+            onPointerDown={(event) => {
+              if (event.button === 0) prefetchChannel();
+            }}
             onClick={(event) => {
               if (!shouldBeginChannelTiming(isOpen, event)) return;
               beginChannelTiming(channelId);
