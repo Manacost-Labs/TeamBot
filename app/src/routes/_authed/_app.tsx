@@ -3,6 +3,10 @@ import { createFileRoute, Outlet } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { AppSidebar } from "@/components/app-sidebar/app-sidebar";
 import { MobileSidebarHeader } from "@/components/layout/mobile-sidebar-header";
+import {
+  WORKSPACE_MAIN_CLASS,
+  WORKSPACE_PROVIDER_CLASS,
+} from "@/components/layout/workspace-layout";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { currentUserQueryOptions } from "@/lib/auth/queries";
 import { setAgentRunSessionScope } from "@/lib/copilot/run-activity-store";
@@ -21,7 +25,7 @@ function RouteComponent() {
 
   return (
     <SidebarProvider
-      className="h-svh overflow-hidden"
+      className={WORKSPACE_PROVIDER_CLASS}
       style={
         {
           "--sidebar-width": "304px",
@@ -30,7 +34,7 @@ function RouteComponent() {
       }
     >
       <AppSidebar />
-      <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <main className={WORKSPACE_MAIN_CLASS}>
         <MobileSidebarHeader title={appConfig.brand.productName} />
         <Outlet />
       </main>
