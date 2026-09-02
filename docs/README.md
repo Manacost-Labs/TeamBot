@@ -7,6 +7,8 @@ Start with the root [README](../README.md), then use these references:
 - [Development](development.md): local setup, migrations, ports, and quality checks.
 - [AI-friendly development (RU)](ai-development.ru.md): module boundaries, invariants, change workflow,
   runtime stability and the macOS/Windows desktop decision.
+- [Stability verification (2026-09-02, RU)](stability-verification-2026-09-02.ru.md): full checks,
+  performance gate and explicitly tracked baseline debt.
 - [Production workspace](production-workspace.md): milestone architecture, Google OAuth values, rollout checklist, smoke tests, and troubleshooting.
 - [Production workspace verification (2026-08-31, RU)](production-workspace-verification-2026-08-31.ru.md): release evidence, Definition of Done matrix, production smoke, and the remaining Google OAuth operator step.
 - [Переход к ManacostTeam](manacostteam-progress.ru.md): поэтапная карта перехода, критерии выхода и текущая точка.
