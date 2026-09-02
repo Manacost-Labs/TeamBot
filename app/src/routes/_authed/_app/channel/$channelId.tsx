@@ -7,7 +7,7 @@ import {
 } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { motion, useReducedMotion } from "motion/react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { AgentProfile } from "@/components/agents/agent-profile";
 import { hasUnseenActivity } from "@/components/app-sidebar/app-sidebar";
@@ -20,6 +20,7 @@ import { DetailPanel } from "@/components/layout/detail-panel";
 import { PageLoading } from "@/components/layout/page-loading";
 import { Button } from "@/components/ui/button";
 import { currentUserQueryOptions } from "@/lib/auth/queries";
+import { nextDisplayedChannel } from "@/lib/channels/displayed-channel";
 import { markChannelReadMutationOptions } from "@/lib/channels/mutations";
 import {
   type AgentChannel,
@@ -30,7 +31,11 @@ import { onComputerActivity } from "@/lib/copilot/computer-activity";
 import { CopilotProvider } from "@/lib/copilot/provider";
 import { useAgentRunActivity } from "@/lib/copilot/run-activity-store";
 import { agentRunStatusLabel } from "@/lib/copilot/run-state";
-import { EASE_OUT, ENTRANCE_SECONDS } from "@/lib/motion";
+import {
+  CHANNEL_SWITCH_SECONDS,
+  EASE_OUT,
+  ENTRANCE_SECONDS,
+} from "@/lib/motion";
 
 const chatSearchSchema = z.object({
   settings: z.boolean().optional(),
@@ -82,13 +87,29 @@ function RouteComponent() {
   const { channelId } = Route.useParams();
   const { settings, watch } = Route.useSearch();
   const channel = useQuery(channelQueryOptions(channelId));
+  /**
+   * Keep the previous conversation mounted while a new route's detail query is in flight. The
+   * query can briefly have no data on every click; showing PageLoading there was the hard flash
+   * people saw between otherwise instant sidebar selections.
+   */
+  const resolvedChannel =
+    channel.data?.id === channelId ? channel.data : undefined;
+  const [displayedChannel, setDisplayedChannel] = useState<
+    AgentChannel | undefined
+  >(() => resolvedChannel);
+  useEffect(() => {
+    setDisplayedChannel((current) =>
+      nextDisplayedChannel(current, resolvedChannel, channelId),
+    );
+  }, [channelId, resolvedChannel]);
   const { data: currentUser } = useQuery(currentUserQueryOptions());
   const navigate = Route.useNavigate();
   const isSettingsOpen = settings === true;
   const prefersReducedMotion = useReducedMotion();
   const isWatching = watch === true;
   /** Channel routing currently supports one coworker. */
-  const agentId = channel.data?.agentIds[0];
+  const agentId = displayedChannel?.agentIds[0];
+  const isSwitching = displayedChannel?.id !== channelId;
   /** Only polled while the screen is closed; the screen panel polls control itself. */
   const needsYou = useNeedsYou(agentId, !isWatching);
 
@@ -185,14 +206,14 @@ function RouteComponent() {
               animate={{ opacity: 1 }}
               className="shrink-0"
               initial={{ opacity: 0 }}
-              key={`avatar:${channel.data?.name ?? channelId}`}
+              key={`avatar:${displayedChannel?.name ?? channelId}`}
               transition={{
                 duration: ENTRANCE_SECONDS,
                 ease: EASE_OUT,
               }}
             >
               <ChannelAvatar
-                participantIds={channel.data?.agentIds ?? []}
+                participantIds={displayedChannel?.agentIds ?? []}
                 size={22}
               />
             </motion.div>
@@ -209,19 +230,20 @@ function RouteComponent() {
                     ? { opacity: 0 }
                     : { opacity: 0, transform: HEADING_ENTRANCE_OFFSET }
                 }
-                key={`name:${channel.data?.name ?? channelId}`}
+                key={`name:${displayedChannel?.name ?? channelId}`}
                 transition={{
                   duration: ENTRANCE_SECONDS,
                   ease: EASE_OUT,
                 }}
               >
-                {channel.data?.name ?? "Диалог"}
+                {displayedChannel?.name ?? "Диалог"}
               </motion.span>
               {agentId ? (
                 <ChannelHeaderStatus
                   agentId={agentId}
-                  channelAvailable={channel.data?.active ?? null}
-                  channelId={channelId}
+                  channelAvailable={displayedChannel?.active ?? null}
+                  channelId={displayedChannel?.id ?? channelId}
+                  switching={isSwitching}
                 />
               ) : null}
             </div>
@@ -260,12 +282,28 @@ function RouteComponent() {
           </div>
         </div>
       </div>
-      <ChannelBody
-        channel={channel.data}
-        hasError={Boolean(channel.error)}
-        historyScope={currentUser?.id}
-        isPending={channel.isPending}
-      />
+      <motion.div
+        animate={{ opacity: 1, transform: "translateY(0px)" }}
+        className="flex min-h-0 flex-1 flex-col"
+        data-testid="channel-content-transition"
+        initial={
+          prefersReducedMotion
+            ? false
+            : { opacity: 0.82, transform: "translateY(4px)" }
+        }
+        key={displayedChannel?.id ?? `pending:${channelId}`}
+        transition={{
+          duration: prefersReducedMotion ? 0 : CHANNEL_SWITCH_SECONDS,
+          ease: EASE_OUT,
+        }}
+      >
+        <ChannelBody
+          channel={displayedChannel}
+          hasError={Boolean(channel.error && displayedChannel === undefined)}
+          historyScope={currentUser?.id}
+          isPending={channel.isPending && displayedChannel === undefined}
+        />
+      </motion.div>
     </DetailPanel>
   );
 }
@@ -274,12 +312,24 @@ function ChannelHeaderStatus({
   agentId,
   channelAvailable,
   channelId,
+  switching,
 }: {
   agentId: string;
   channelAvailable: boolean | null;
   channelId: string;
+  switching?: boolean;
 }) {
   const record = useAgentRunActivity({ channelId, agentId });
+  if (switching) {
+    return (
+      <span
+        className="text-[11px] leading-3 text-muted-foreground"
+        role="status"
+      >
+        Открываем…
+      </span>
+    );
+  }
   if (!record || record.state.startedAt === null) {
     return channelAvailable === false ? (
       <span className="text-[11px] leading-3 text-muted-foreground">

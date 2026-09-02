@@ -16,3 +16,6 @@ export const EASE_OUT = [0.23, 1, 0.32, 1] as const;
  * as the interface thinking rather than responding.
  */
 export const ENTRANCE_SECONDS = 0.2;
+
+/** A channel swap should be felt, not watched; this is short enough to stay out of the way. */
+export const CHANNEL_SWITCH_SECONDS = 0.16;
