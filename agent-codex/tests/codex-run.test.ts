@@ -5,10 +5,12 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import type { RunAgentInput } from "@ag-ui/core";
+import { ARTIFACT_RESULT_SCHEMA } from "../../shared/artifact-contract";
 import {
   codexEnvironmentFor,
   codexProcessEnvironment,
   codexToolName,
+  isValidMarkdownArtifactResult,
   modelFor,
   reasoningEffortFor,
   researchFinalisationIssue,
@@ -171,6 +173,43 @@ describe("Codex dynamic tool names", () => {
         false,
       ),
     ).toContain("artifact");
+  });
+
+  it("accepts only the canonical Markdown artifact result", () => {
+    const result = JSON.stringify({
+      schema: ARTIFACT_RESULT_SCHEMA,
+      artifact: {
+        attachmentId: "69bb8eb0-1ac8-4c67-aeca-2362e2f507cd",
+        filename: "report.md",
+        mimeType: "text/markdown",
+        size: 42,
+        title: "Report",
+      },
+    });
+    expect(
+      isValidMarkdownArtifactResult("mcp__artifacts__create_artifact", result),
+    ).toBe(true);
+    expect(
+      isValidMarkdownArtifactResult(
+        "mcp__artifacts__create_artifact",
+        JSON.stringify({ ok: true }),
+      ),
+    ).toBe(false);
+    expect(
+      isValidMarkdownArtifactResult(
+        "mcp__artifacts__create_artifact",
+        JSON.stringify({
+          schema: ARTIFACT_RESULT_SCHEMA,
+          artifact: {
+            attachmentId: "69bb8eb0-1ac8-4c67-aeca-2362e2f507cd",
+            filename: "report.txt",
+            mimeType: "text/plain",
+            size: 42,
+            title: "Report",
+          },
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("does not accept an HSReplay/HSGuru access failure without the first-party API", () => {
@@ -896,6 +935,45 @@ describe("Codex process timing", () => {
     expect(turnInputs[1]).toContain("Finalise the research now");
   });
 
+  it("does not finish research when the artifact gateway returns an unverified success", async () => {
+    const turnInputs: string[] = [];
+
+    await expect(
+      runCodex(researchProcessInput(), emptyCallbacks, {
+        spawn: () => researchFinalisationProcess(turnInputs),
+        deploymentToolCaller: async () => ({
+          text: JSON.stringify({ ok: true }),
+          isError: false,
+        }),
+      }),
+    ).rejects.toThrow("artifact");
+
+    expect(turnInputs).toHaveLength(2);
+  });
+
+  it("does not finish research for a non-Markdown artifact", async () => {
+    const turnInputs: string[] = [];
+
+    await expect(
+      runCodex(researchProcessInput(), emptyCallbacks, {
+        spawn: () => researchFinalisationProcess(turnInputs),
+        deploymentToolCaller: async () => ({
+          text: JSON.stringify({
+            ...VALID_MARKDOWN_ARTIFACT,
+            artifact: {
+              ...VALID_MARKDOWN_ARTIFACT.artifact,
+              filename: "report.txt",
+              mimeType: "text/plain",
+            },
+          }),
+          isError: false,
+        }),
+      }),
+    ).rejects.toThrow("artifact");
+
+    expect(turnInputs).toHaveLength(2);
+  });
+
   it("steers an overlong collection pass before forcing a bounded final report", async () => {
     const methods: string[] = [];
     const turnInputs: string[] = [];
@@ -1060,8 +1138,19 @@ function toolProcessInput(): RunAgentInput {
   } as unknown as RunAgentInput;
 }
 
+const VALID_MARKDOWN_ARTIFACT = {
+  schema: ARTIFACT_RESULT_SCHEMA,
+  artifact: {
+    attachmentId: "69bb8eb0-1ac8-4c67-aeca-2362e2f507cd",
+    filename: "report.md",
+    mimeType: "text/markdown",
+    size: 42,
+    title: "Research report",
+  },
+};
+
 async function successfulArtifactCall() {
-  return { text: '{"ok":true}', isError: false };
+  return { text: JSON.stringify(VALID_MARKDOWN_ARTIFACT), isError: false };
 }
 
 function fakeCodexProcess(

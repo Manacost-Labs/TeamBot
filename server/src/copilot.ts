@@ -380,22 +380,27 @@ const TOOL_STEPS = 8;
  */
 const ARTIFACT_TOOL_REF = "artifacts/create_artifact";
 
+type DeliverableAgentIds = Readonly<{
+  researchAgentId?: string;
+  youtubeAgentId?: string;
+}>;
+
 export function deliverableToolRefsForRun(
   agentId: string,
-  input: RunAgentInput,
+  _input: RunAgentInput,
+  ids: DeliverableAgentIds = {},
 ): readonly string[] {
-  const forwarded = input.forwardedProps as
-    | { openbotBotId?: unknown }
-    | undefined;
-  const botId =
-    typeof forwarded?.openbotBotId === "string"
-      ? forwarded.openbotBotId
-      : agentId;
+  // `agentId` comes from the registered agent closure. Forwarded properties are model/request
+  // context and may be stale, so they must never decide whether a mandatory tool is offered.
   const researchAgentId =
-    process.env.RESEARCH_AGENT_ID?.trim() || "research-analyst";
+    ids.researchAgentId?.trim() ||
+    process.env.RESEARCH_AGENT_ID?.trim() ||
+    "research-analyst";
   const youtubeAgentId =
-    process.env.YOUTUBE_ANALYST_AGENT_ID?.trim() || "youtube-analyst";
-  return botId === researchAgentId || botId === youtubeAgentId
+    ids.youtubeAgentId?.trim() ||
+    process.env.YOUTUBE_ANALYST_AGENT_ID?.trim() ||
+    "youtube-analyst";
+  return agentId === researchAgentId || agentId === youtubeAgentId
     ? [ARTIFACT_TOOL_REF]
     : [];
 }

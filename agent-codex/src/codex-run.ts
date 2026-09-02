@@ -1,6 +1,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import readline from "node:readline";
 import type { RunAgentInput } from "@ag-ui/core";
+import { parseArtifactToolResult } from "../../shared/artifact-contract";
 import {
   ChatGptProfileUnavailableError,
   type ChatGptRuntimeProfile,
@@ -190,6 +191,19 @@ export function youtubeArtifactFinalisationIssue(
   return artifactCreated
     ? null
     : "The YouTube run ended without the required Markdown artifact.";
+}
+
+/**
+ * A successful tool transport response is not proof that a deliverable exists. The built-in
+ * artifact service returns the versioned result below; anything else must leave the run incomplete
+ * so the bounded finalisation turn can retry (and eventually fail visibly).
+ */
+export function isValidMarkdownArtifactResult(
+  toolName: string,
+  result: string | undefined,
+): boolean {
+  const parsed = parseArtifactToolResult(toolName, result);
+  return parsed?.artifact.mimeType === "text/markdown";
 }
 
 const HEARTPULSE_WORKSPACE = "/workspace-heartpulse";
@@ -1146,18 +1160,14 @@ class CodexProcess {
       ...result,
       text: redactSecrets(result.text, this.secrets),
     };
-    if (
-      isResearchRun(this.input) &&
+    const createdMarkdownArtifact =
       deploymentName === "mcp__artifacts__create_artifact" &&
-      !safeResult.isError
-    ) {
+      safeResult.isError === false &&
+      isValidMarkdownArtifactResult(deploymentName, safeResult.text);
+    if (isResearchRun(this.input) && createdMarkdownArtifact) {
       this.researchArtifactCreated = true;
     }
-    if (
-      isYoutubeAnalystRun(this.input) &&
-      deploymentName === "mcp__artifacts__create_artifact" &&
-      !safeResult.isError
-    ) {
+    if (isYoutubeAnalystRun(this.input) && createdMarkdownArtifact) {
       this.youtubeArtifactCreated = true;
     }
     this.dataControlWorkflow?.recordToolResult(

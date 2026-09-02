@@ -35,22 +35,43 @@ const riskRow = {
 describe("Copilot runtime info", () => {
   test("keeps the report tool in research and YouTube runs", () => {
     expect(
-      deliverableToolRefsForRun("research-analyst", {
-        agentId: "research-analyst",
-        forwardedProps: {},
-      } as never),
+      deliverableToolRefsForRun(
+        "research-analyst",
+        {
+          agentId: "research-analyst",
+          forwardedProps: {},
+        } as never,
+        {
+          researchAgentId: "research-analyst",
+          youtubeAgentId: "youtube-analyst",
+        },
+      ),
     ).toEqual(["artifacts/create_artifact"]);
     expect(
-      deliverableToolRefsForRun("youtube-analyst", {
-        agentId: "other-id",
-        forwardedProps: { openbotBotId: "youtube-analyst" },
-      } as never),
+      deliverableToolRefsForRun(
+        "youtube-analyst",
+        {
+          agentId: "other-id",
+          forwardedProps: { openbotBotId: "other-id" },
+        } as never,
+        {
+          researchAgentId: "research-analyst",
+          youtubeAgentId: "youtube-analyst",
+        },
+      ),
     ).toEqual(["artifacts/create_artifact"]);
     expect(
-      deliverableToolRefsForRun("ordinary-agent", {
-        agentId: "ordinary-agent",
-        forwardedProps: {},
-      } as never),
+      deliverableToolRefsForRun(
+        "ordinary-agent",
+        {
+          agentId: "ordinary-agent",
+          forwardedProps: { openbotBotId: "youtube-analyst" },
+        } as never,
+        {
+          researchAgentId: "research-analyst",
+          youtubeAgentId: "youtube-analyst",
+        },
+      ),
     ).toEqual([]);
   });
 
