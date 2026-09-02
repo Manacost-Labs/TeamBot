@@ -10,7 +10,9 @@ type DeployTestOptions = {
   expectedExitCode?: number;
   failInspect?: boolean;
   failPs?: boolean;
+  failReplacement?: boolean;
   failResume?: boolean;
+  failWorkerRestore?: boolean;
   agentDisappearsAfterDrain?: boolean;
 };
 
@@ -58,6 +60,20 @@ if [ "$1" = "compose" ] && [ "$is_ps" = "true" ]; then
   exit 0
 fi
 if [ "$1" = "inspect" ] && [ "\${DEPLOY_TEST_FAIL_INSPECT:-0}" = "1" ]; then exit 18; fi
+is_up=false
+has_routine_worker=false
+for arg in "$@"; do
+  if [ "$arg" = "up" ]; then is_up=true; fi
+  if [ "$arg" = "routine-worker" ]; then has_routine_worker=true; fi
+done
+if [ "$1" = "compose" ] && [ "$is_up" = "true" ]; then
+  if [ "\${DEPLOY_TEST_FAIL_REPLACEMENT:-0}" = "1" ] && [ "$has_routine_worker" = "false" ]; then
+    exit 20
+  fi
+  if [ "\${DEPLOY_TEST_FAIL_WORKER_RESTORE:-0}" = "1" ] && [ "$has_routine_worker" = "true" ]; then
+    exit 21
+  fi
+fi
 if [ "$1" = "exec" ]; then
   case "$*" in
     *"/admin/resume"*)
@@ -92,7 +108,9 @@ exit 0
         DEPLOY_TEST_AGENT_RUNNING: options.agentRunning ? "1" : "0",
         DEPLOY_TEST_FAIL_INSPECT: options.failInspect ? "1" : "0",
         DEPLOY_TEST_FAIL_PS: options.failPs ? "1" : "0",
+        DEPLOY_TEST_FAIL_REPLACEMENT: options.failReplacement ? "1" : "0",
         DEPLOY_TEST_FAIL_RESUME: options.failResume ? "1" : "0",
+        DEPLOY_TEST_FAIL_WORKER_RESTORE: options.failWorkerRestore ? "1" : "0",
         DEPLOY_TEST_AGENT_DISAPPEARS_AFTER_DRAIN:
           options.agentDisappearsAfterDrain ? "1" : "0",
       },
@@ -193,6 +211,14 @@ test("returns a failure when the drained managed runtime cannot be resumed", asy
   ).toBeGreaterThanOrEqual(2);
 });
 
+test("drains and resumes an already running managed runtime on a successful replacement", async () => {
+  const result = await runDeploy({ agentRunning: true }, "agent-codex");
+
+  expect(result.stderr).toBe("");
+  expect(result.log).toContain("/admin/drain");
+  expect(result.log).toContain("/admin/resume");
+});
+
 test("returns a failure when the drained managed runtime disappears", async () => {
   const result = await runDeploy(
     {
@@ -207,4 +233,18 @@ test("returns a failure when the drained managed runtime disappears", async () =
     "Deployment failed: managed runtime disappeared while the deployment was draining.",
   );
   expect(result.log).not.toContain("/admin/resume");
+});
+
+test("returns a failure when cleanup cannot restore routine-worker", async () => {
+  const result = await runDeploy({
+    agentRunning: true,
+    expectedExitCode: 1,
+    failReplacement: true,
+    failWorkerRestore: true,
+  });
+
+  expect(result.stderr).toContain(
+    "Deployment failed: routine-worker could not be restored during cleanup.",
+  );
+  expect(result.log).toContain("up -d --no-build routine-worker");
 });
