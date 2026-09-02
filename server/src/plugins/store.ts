@@ -2945,10 +2945,11 @@ export function createPluginStore(options: PluginStoreOptions) {
      * The join rows go too, so the account pages stop claiming a connection this deployment can no
      * longer use.
      *
-     * NOT vendor-side revocation. That needs the OAuth client and the vendor's revoke endpoint, and
-     * it belongs with disconnect. This is the half that stops us holding the secret; the grant at
-     * Google outlives it until somebody revokes it there. Said plainly rather than implied, because
-     * the difference matters to whoever has to answer for it.
+     * NOT vendor-side revocation. Offboarding is deliberately a local cleanup path: it does not
+     * hold a person's OAuth token while making a network request on behalf of an administrator. The
+     * person's own disconnect path performs the pinned vendor revocation and records whether it was
+     * confirmed. Said plainly rather than implied, because the difference matters to whoever has to
+     * answer for it.
      */
     async retireConnectionsFor(
       userId: string,
