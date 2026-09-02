@@ -9,6 +9,7 @@ import {
 import { RoutineWorkerHealthIndicator } from "@/components/routines/routine-worker-health";
 import { ChatGptConnectionCard } from "@/components/settings/chatgpt-connection-card";
 import { WorkspaceDiagnostics } from "@/components/settings/workspace-diagnostics";
+import { WorkspaceProfile } from "@/components/settings/workspace-profile";
 import { useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -52,6 +53,7 @@ function RouteComponent() {
       title="Настройки рабочего пространства"
     >
       <WorkspaceDiagnostics />
+      <WorkspaceProfile />
       <PageSection title="Внешний вид">
         <PageRows>
           <Item size="sm">
