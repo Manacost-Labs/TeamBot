@@ -280,9 +280,10 @@ Google grant. Если canary требует новый Google consent, это �
   canary, logout/revoke, оба personal providers и полный rollback set; TTL/proxy control, точный
   внешний public gateway target и текущие BotFather Allowed URLs записаны. Подтвердите доступ
   к официальному `@BotFather` и точный существующий bot по username, не по display name. В
-  репозитории есть rollback-конфигурация
-  `ops/nginx/work-origin.kolodahearthstone.com.conf`; конфигурация внешнего public gateway здесь не
-  хранится, поэтому его точный control plane должен быть назван в change ticket.
+  репозитории есть rollback-конфигурация `ops/nginx/work-origin.kolodahearthstone.com.conf`,
+  HTTP bootstrap `ops/nginx/work.kolodahearthstone.com.bootstrap-http.conf` и полный public vhost
+  `ops/nginx/work.kolodahearthstone.com.conf`. DNS control plane — Cloudflare zone
+  `kolodahearthstone.com`; перед изменением запишите тип, target, proxy и TTL существующей записи.
 - **Exact target:** public host `work.kolodahearthstone.com`, его proxy/DNS route, согласованный live
   server+agent+editor release и заранее добавленные origin/callback в Web Login Allowed URLs
   выбранного Telegram bot.
@@ -293,15 +294,18 @@ Google grant. Если canary требует новый Google consent, это �
   `https://work.kolodahearthstone.com/api/plugins/oauth/callback`. Сверьте callback, показанный на
   `/admin/plugins/google-drive`. Старый origin/redirect пока не удаляйте.
 - **Переключение:** установите live `OPENBOT_PUBLIC_URL` в public HTTPS origin, примените полный
-  согласованный release через drain-aware procedure. Затем уберите public `auth_request`/ChatGPT
-  gateway dependency и направьте public proxy/DNS на проверенный ManacostTeam origin. Не возвращайте
-  global `auth.json` mount рядом с новым multi-user server.
+  согласованный release через drain-aware procedure. Установите HTTP bootstrap, проверьте Nginx и
+  направьте Cloudflare A/AAAA на проверенный ManacostTeam origin. Выпустите origin-сертификат, затем
+  атомарно замените bootstrap полным public vhost и повторно проверьте Nginx. Только после прямого
+  HTTPS smoke включите Cloudflare proxy; итоговые zone settings должны оставаться `SSL=strict` и
+  `Always Use HTTPS=on`. Так public route лишается `auth_request`/ChatGPT gateway dependency. Не
+  возвращайте global `auth.json` mount рядом с новым multi-user server.
 - **Проверка:** BotFather содержит точные public origin/callback, OIDC redirect открывается,
   owner входит до и после switch, editor — после; cookie имеет `HttpOnly`, `Secure` и `SameSite=Lax`
   или строже; callback не содержит открытого redirect; каждый пользователь видит только свои
   данные/provider/Google grant; repeat smoke охватывает Docs, handoff, research, YouTube,
   logout/revoke и audit attribution без prompt/secret content.
-- **Rollback:** одним change верните прежний public proxy/DNS route, старый полный
+- **Rollback:** отключите новые A/AAAA и одним change верните прежний CNAME public route, старый полный
   server+agent+edge-auth set, его прежний origin configuration и записанный pre-cutover BotFather
   Allowed URLs. Повторите old edge login, history, AG-UI и Google callback checks; если canary остаётся
   доступен, повторите его Telegram OIDC check. Additive rows и ciphertext не удаляйте; не
