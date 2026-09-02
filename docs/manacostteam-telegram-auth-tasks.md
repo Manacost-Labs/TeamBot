@@ -918,6 +918,13 @@ fix only findings caused by this feature.
   exception has a reason and a 2026-12-01 review deadline; no rule-wide or path-wide vulnerability
   suppression was introduced.
 
+**Post-release verification (2026-09-02):** `bun run test:ci` completed 3,252 tests across 292 files
+with 3,229 passes, 23 environment-dependent skips and zero failures; the PDF extractor and artifact
+renderer suites also passed. `bun run build` and the security check passed. The live read-only smoke
+returned `/=200`, `/health=200` and the protected `/api/results=401`; all ten project containers were
+healthy. These checks validate the ordinary compatible runtime only and do not substitute for Tasks
+32–34.
+
 **Dependencies:** Tasks 1–30.
 
 **Files likely touched:**
@@ -926,7 +933,7 @@ fix only findings caused by this feature.
 
 **Estimated scope:** Small gate, variable runtime.
 
-## Checkpoint K — Implementation complete, production untouched
+## Checkpoint K — Implementation complete, copied data and public traffic untouched
 
 - [x] Tasks 1–31 and the standing definition of done are complete.
 - [x] Approved spec, plan, task list, code, migrations and runbooks are committed on `main`.
@@ -935,8 +942,9 @@ fix only findings caused by this feature.
 
 **Release handoff:** The source release implements Telegram allowlisted sessions, per-user ChatGPT
 or OpenRouter connections, actor-isolated Codex runtime profiles, ManacostTeam branding and the
-documented operator workflow. Production, copied production data and public traffic remain
-untouched.
+documented operator workflow. The compatible runtime has already been updated through the ordinary
+production deploy path; copied production data, the public route and canary/cutover traffic gates
+remain untouched.
 
 **Known limits:** Tasks 32–34 have not started. The 15 exact OSV exceptions and two rootful-container
 architecture exceptions must be reviewed by 2026-12-01. Trivy skips the Helm chart until its pinned
