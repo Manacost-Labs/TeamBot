@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   artifactDownloadUrl,
   artifactPreviewUrl,
+  listChannelArtifacts,
   readArtifactMetadata,
   readArtifactTextPreview,
 } from "./api";
@@ -109,6 +110,55 @@ describe("artifact API", () => {
     await expect(
       readArtifactMetadata("channel-a", attachmentId),
     ).rejects.toThrow("некорректные данные");
+  });
+
+  test("lists only validated generated artifacts for history recovery", async () => {
+    let request: [RequestInfo | URL, RequestInit | undefined] | undefined;
+    globalThis.fetch = (async (input, init) => {
+      request = [input, init];
+      return Response.json({
+        attachments: [
+          {
+            id: attachmentId,
+            name: "report.md",
+            mimeType: "text/markdown",
+            size: 91,
+            messageId: "artifact:export-1",
+            source: "agent_generated",
+          },
+          {
+            id: "69bb8eb0-1ac8-4c67-aeca-2362e2f507ce",
+            name: "private.md",
+            mimeType: "text/markdown",
+            size: 12,
+            messageId: null,
+            source: "user_upload",
+          },
+          {
+            id: attachmentId,
+            name: "spoofed.md",
+            mimeType: "text/plain",
+            size: 91,
+            messageId: "artifact:export-2",
+            source: "agent_generated",
+          },
+        ],
+        nextCursor: null,
+      });
+    }) as typeof fetch;
+
+    await expect(listChannelArtifacts("channel-a")).resolves.toEqual([
+      {
+        id: attachmentId,
+        filename: "report.md",
+        mimeType: "text/markdown",
+        size: 91,
+        messageId: "artifact:export-1",
+        source: "agent_generated",
+      },
+    ]);
+    expect(request?.[0]).toBe("/api/channels/channel-a/attachments?limit=50");
+    expect(request?.[1]?.credentials).toBe("include");
   });
 
   test("reads inert text previews with credentials and a display cap", async () => {

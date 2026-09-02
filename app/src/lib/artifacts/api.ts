@@ -1,7 +1,9 @@
 import {
-  artifactFilenameMatchesMimeType,
   ARTIFACT_MIME_TYPES,
+  ARTIFACT_RESULT_SCHEMA,
   type ArtifactMimeType,
+  artifactFilenameMatchesMimeType,
+  parseArtifactResult,
 } from "./contract";
 
 export type ArtifactMetadata = Readonly<{
@@ -26,10 +28,96 @@ type AttachmentResponse = {
   error?: unknown;
 };
 
+type AttachmentListResponse = {
+  attachments?: unknown;
+  error?: unknown;
+};
+
 const ARTIFACT_MIME_TYPE_SET = new Set<string>(ARTIFACT_MIME_TYPES);
 
 function attachmentEndpoint(channelId: string, attachmentId: string): string {
   return `/api/channels/${encodeURIComponent(channelId)}/attachments/${encodeURIComponent(attachmentId)}`;
+}
+
+function artifactCollectionEndpoint(channelId: string): string {
+  return `/api/channels/${encodeURIComponent(channelId)}/attachments`;
+}
+
+const ARTIFACT_INDEX_LIMIT = 50;
+
+function artifactFromList(value: unknown): ArtifactMetadata | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const id = record.id;
+  const filename = record.name ?? record.filename;
+  const mimeType = record.mimeType;
+  const size = record.size;
+  const messageId = record.messageId;
+  if (
+    typeof id !== "string" ||
+    typeof filename !== "string" ||
+    typeof mimeType !== "string" ||
+    typeof size !== "number" ||
+    typeof messageId !== "string" ||
+    record.source !== "agent_generated" ||
+    !messageId.startsWith("artifact:")
+  ) {
+    return null;
+  }
+  const parsed = parseArtifactResult({
+    schema: ARTIFACT_RESULT_SCHEMA,
+    artifact: {
+      attachmentId: id,
+      filename,
+      mimeType,
+      size,
+      title: filename,
+    },
+  });
+  if (!parsed) return null;
+  return {
+    id: parsed.artifact.attachmentId,
+    filename: parsed.artifact.filename,
+    mimeType: parsed.artifact.mimeType,
+    size: parsed.artifact.size,
+    messageId,
+    source: "agent_generated",
+  };
+}
+
+/**
+ * Read the recent generated files for a channel.
+ *
+ * Intelligence history can retain the attachment while losing the AG-UI tool-result envelope. The
+ * index is only a recovery hint; `ArtifactCard` still fetches each item through the authenticated
+ * metadata endpoint before showing a download or preview.
+ */
+export async function listChannelArtifacts(
+  channelId: string,
+  signal?: AbortSignal,
+): Promise<readonly ArtifactMetadata[]> {
+  signal?.throwIfAborted();
+  const response = await fetch(
+    `${artifactCollectionEndpoint(channelId)}?limit=${ARTIFACT_INDEX_LIMIT}`,
+    { credentials: "include", signal },
+  );
+  const payload = (await response
+    .json()
+    .catch(() => ({}))) as AttachmentListResponse;
+  if (!response.ok) {
+    throw new Error(
+      typeof payload.error === "string"
+        ? payload.error
+        : "Не удалось получить файлы переписки.",
+    );
+  }
+  if (!Array.isArray(payload.attachments)) return [];
+  return payload.attachments.flatMap((value) => {
+    const artifact = artifactFromList(value);
+    return artifact ? [artifact] : [];
+  });
 }
 
 /** Read authoritative public metadata through the same session and channel boundary as downloads. */

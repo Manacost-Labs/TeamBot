@@ -983,6 +983,7 @@ export function ChannelChat({
         // The `/` menu exposes only skills granted to this Bot.
         commands={skillCommands}
         conversationKey={channel.id}
+        recoverArtifacts
         // Readiness is handled by `say`; deletion is the only disabled-chat state.
         disabled={!channel.active}
         messages={visibleMessages}

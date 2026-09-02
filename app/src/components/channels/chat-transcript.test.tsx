@@ -390,6 +390,63 @@ describe("transcript windowing", () => {
     expect(view.getByTestId("artifact-card")).toBeTruthy();
   });
 
+  test("recovers a generated file when history lost the tool result envelope", async () => {
+    const attachmentId = "69bb8eb0-1ac8-4c67-aeca-2362e2f507cd";
+    const requests: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.endsWith("/attachments?limit=50")) {
+        return Response.json({
+          attachments: [
+            {
+              id: attachmentId,
+              name: "youtube-summary.md",
+              mimeType: "text/markdown",
+              size: 8782,
+              messageId: "artifact:export-1",
+              source: "agent_generated",
+            },
+          ],
+          nextCursor: null,
+        });
+      }
+      return Response.json({
+        attachment: {
+          id: attachmentId,
+          name: "youtube-summary.md",
+          mimeType: "text/markdown",
+          size: 8782,
+          messageId: "artifact:export-1",
+          source: "agent_generated",
+        },
+      });
+    }) as unknown as typeof fetch;
+
+    const view = render(
+      <ChatTranscript
+        conversationKey="youtube-channel"
+        recoverArtifacts
+        messages={[
+          {
+            id: "answer",
+            role: "assistant",
+            content: "Успешных ссылок: 1. Недоступных: 0.",
+          },
+        ]}
+      />,
+    );
+
+    await view.findByText("youtube-summary.md · Markdown · 8.6 КБ");
+    expect(view.getByText("Файлы этой переписки")).toBeTruthy();
+    expect(requests[0]).toBe(
+      "/api/channels/youtube-channel/attachments?limit=50",
+    );
+    expect(requests).toContain(
+      "/api/channels/youtube-channel/attachments/69bb8eb0-1ac8-4c67-aeca-2362e2f507cd",
+    );
+  });
+
   test("keeps matching JSON from another tool and malformed artifact results as ordinary output", () => {
     let fetches = 0;
     globalThis.fetch = (async () => {

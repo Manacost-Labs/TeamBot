@@ -30,6 +30,10 @@ import {
 } from "@/components/ui/message-scroller";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  type ArtifactMetadata,
+  listChannelArtifacts,
+} from "@/lib/artifacts/api";
+import {
   isCreateArtifactToolName,
   parseArtifactToolResult,
 } from "@/lib/artifacts/contract";
@@ -86,6 +90,8 @@ type ChatTranscriptProps = {
   run?: AgentRunState;
   /** Bounded in-memory UI state key for draft-adjacent transcript position and history window. */
   conversationKey?: string;
+  /** Query generated files when history omitted the AG-UI artifact result envelope. */
+  recoverArtifacts?: boolean;
   /** Channel used for authenticated artifact metadata and bytes. Falls back to conversationKey. */
   channelId?: string;
   /** Deterministic render-count seam used by transcript performance regression tests. */
@@ -768,12 +774,31 @@ export function ChatTranscript({
   onRowRender,
   onRemoveQueued,
   queued = EMPTY_QUEUE,
+  recoverArtifacts = false,
   restoring = false,
   run,
   stopped,
   onRetry,
 }: ChatTranscriptProps) {
   const artifactChannelId = channelId ?? conversationKey;
+  const [artifactIndex, setArtifactIndex] = useState<{
+    channelId: string;
+    items: readonly ArtifactMetadata[];
+  }>({ channelId: "", items: [] });
+  useEffect(() => {
+    if (!recoverArtifacts || !artifactChannelId || restoring || busy) return;
+    const controller = new AbortController();
+    void listChannelArtifacts(artifactChannelId, controller.signal)
+      .then((items) => {
+        setArtifactIndex({ channelId: artifactChannelId, items });
+      })
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          setArtifactIndex({ channelId: artifactChannelId, items: [] });
+        }
+      });
+    return () => controller.abort();
+  }, [artifactChannelId, busy, recoverArtifacts, restoring]);
   const [historyWindow, setHistoryWindow] = useState<HistoryWindowState>(() => {
     const saved = conversationKey
       ? conversationStateCache.get(conversationKey)
@@ -822,6 +847,21 @@ export function ChatTranscript({
     () => activitySnapshotFor(visible.items, busy, stopped, run),
     [busy, run, stopped, visible.items],
   );
+  const visibleArtifactIds = new Set(
+    visible.items.flatMap((item) => {
+      if (item.kind !== "tool") return [];
+      const artifact = parseArtifactToolResult(
+        item.toolCall.function.name,
+        item.result,
+      );
+      return artifact ? [artifact.artifact.attachmentId] : [];
+    }),
+  );
+  const recoveredArtifacts =
+    historyWindow.startId === null &&
+    artifactIndex.channelId === artifactChannelId
+      ? artifactIndex.items.filter((item) => !visibleArtifactIds.has(item.id))
+      : [];
   const viewportRef = useRef<HTMLDivElement>(null);
   const restoredScroll = useRef(false);
   const revealAnchor = useRef<{
@@ -1164,6 +1204,34 @@ export function ChatTranscript({
                   </MessageScrollerItem>
                 ),
               )}
+              {recoveredArtifacts.length > 0 ? (
+                <>
+                  <p className="pt-1 text-muted-foreground text-xs">
+                    Файлы этой переписки
+                  </p>
+                  {recoveredArtifacts.map((artifact) => (
+                    <MessageScrollerItem
+                      data-transcript-window-row=""
+                      key={`recovered-artifact:${artifact.id}`}
+                      messageId={`recovered-artifact:${artifact.id}`}
+                    >
+                      <MessageLayout>
+                        <ArtifactCard
+                          artifact={{
+                            attachmentId: artifact.id,
+                            filename: artifact.filename,
+                            mimeType: artifact.mimeType,
+                            size: artifact.size,
+                            title: artifact.filename,
+                          }}
+                          channelId={artifactIndex.channelId}
+                          toolCallId={`recovered-artifact:${artifact.id}`}
+                        />
+                      </MessageLayout>
+                    </MessageScrollerItem>
+                  ))}
+                </>
+              ) : null}
               {visible.hiddenAfter > 0 ? (
                 <div className="flex justify-center py-2">
                   <button

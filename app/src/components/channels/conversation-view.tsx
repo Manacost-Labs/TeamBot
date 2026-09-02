@@ -31,6 +31,7 @@ export function ConversationView({
   agents = [],
   commands,
   conversationKey,
+  recoverArtifacts = false,
   disabled = false,
   pending = false,
   autoFocus = false,
@@ -58,6 +59,8 @@ export function ConversationView({
   commands?: readonly CommandOption[];
   /** Channel id used for bounded draft, scroll and transcript-window restoration. */
   conversationKey?: string;
+  /** Recover generated files when the durable history omitted its tool-result envelope. */
+  recoverArtifacts?: boolean;
   disabled?: boolean;
   /**
    * A turn is in flight: the Bot has been asked something and has not come back yet.
@@ -255,6 +258,7 @@ export function ConversationView({
           loadingOlder={loadingOlder}
           {...(onLoadOlder ? { onLoadOlder } : {})}
           {...(conversationKey ? { conversationKey } : {})}
+          {...(recoverArtifacts ? { recoverArtifacts: true } : {})}
           onRemoveQueued={(id) => {
             apply({ id, type: "remove" });
           }}
