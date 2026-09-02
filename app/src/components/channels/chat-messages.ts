@@ -236,6 +236,10 @@ export function activitySnapshotFor(
 
   const active = busy || isAgentRunActive(run.status);
   const explicitLabel = agentRunStatusLabel(run.status);
+  // `busy` is the logical turn and can briefly outlive (or precede) a protocol run. A terminal
+  // protocol snapshot must not leak its "Ответ готов" label into that gap while the turn is still
+  // doing work, especially around a browser-tool handoff.
+  const activeLabel = isAgentRunActive(run.status) ? explicitLabel : base.label;
   const explicitStatus = active
     ? "working"
     : run.status === "failed" || run.status === "cancelled"
@@ -255,13 +259,13 @@ export function activitySnapshotFor(
   const explicitSteps = active
     ? [
         ...base.steps.filter((step) => step.state !== "active"),
-        { id: "run-phase", label: explicitLabel, state: "active" as const },
+        { id: "run-phase", label: activeLabel, state: "active" as const },
       ]
     : base.steps;
 
   return {
     ...base,
-    label: active ? explicitLabel : base.label,
+    label: active ? activeLabel : base.label,
     status: explicitStatus,
     statusLabel: explicitStatusLabel,
     steps: explicitSteps.slice(-5),

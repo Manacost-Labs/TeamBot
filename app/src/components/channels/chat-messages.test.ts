@@ -150,6 +150,38 @@ describe("activitySnapshotFor", () => {
     expect(snapshot.elapsedMs).toBe(800);
   });
 
+  test("does not show a terminal run label while the logical turn is still busy", () => {
+    const snapshot = activitySnapshotFor(
+      [
+        { kind: "text", id: "user", role: "user", text: "Собери отчёт" },
+        {
+          kind: "text",
+          id: "progress",
+          role: "assistant",
+          text: "Начинаю исследование и фиксирую план.",
+        },
+      ],
+      true,
+      undefined,
+      {
+        status: "completed",
+        runId: "run-1",
+        startedAt: 100,
+        updatedAt: 900,
+        finishedAt: 900,
+        elapsedMs: 800,
+        reconnectCount: 0,
+        toolName: null,
+        hasAssistantOutput: true,
+        error: null,
+      },
+    );
+
+    expect(snapshot.status).toBe("working");
+    expect(snapshot.label).toBe("Анализирует найденные данные");
+    expect(snapshot.label).not.toBe("Ответ готов");
+  });
+
   test("does not call a progress-only research transcript a completed result", () => {
     const snapshot = activitySnapshotFor(
       [
