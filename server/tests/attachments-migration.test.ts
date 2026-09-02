@@ -4,6 +4,30 @@ import { readFile } from "node:fs/promises";
 type JournalEntry = { idx: number; tag: string; when: number };
 
 describe("attachment metadata migration", () => {
+  test("adds the generated-artifact index after the attachment schema", async () => {
+    const journal = JSON.parse(
+      await readFile(
+        new URL("../drizzle/meta/_journal.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { entries: JournalEntry[] };
+    const entry = journal.entries.find((candidate) => candidate.idx === 33);
+    const previous = journal.entries.find((candidate) => candidate.idx === 32);
+
+    expect(entry?.idx).toBe(33);
+    expect(entry?.tag).toMatch(/^0033_/);
+    expect(entry?.when).toBeGreaterThan(previous?.when ?? 0);
+    if (!entry) throw new Error("Expected generated-artifact index migration");
+
+    const migration = await readFile(
+      new URL(`../drizzle/${entry.tag}.sql`, import.meta.url),
+      "utf8",
+    );
+    expect(migration.replace(/\s+/g, " ").trim()).toContain(
+      `CREATE INDEX "attachments_owner_source_created_idx" ON "attachments" USING btree ("owner_user_id","source","created_at","id")`,
+    );
+  });
+
   test("is the ordered 0024 journal entry and contains no inline payload column", async () => {
     const journal = JSON.parse(
       await readFile(
