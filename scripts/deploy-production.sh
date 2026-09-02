@@ -15,7 +15,8 @@ fi
 
 # The protected file, not an inherited interactive shell, is authoritative for these values. This
 # also keeps them out of every Docker, sudo and helper process the deployment starts.
-unset TELEGRAM_LOGIN_BOT_TOKEN TELEGRAM_ALLOWED_USER_IDS TELEGRAM_OWNER_USER_IDS OPENROUTER_MODEL
+unset TELEGRAM_LOGIN_BOT_TOKEN TELEGRAM_OIDC_CLIENT_ID TELEGRAM_OIDC_CLIENT_SECRET
+unset TELEGRAM_ALLOWED_USER_IDS TELEGRAM_OWNER_USER_IDS OPENROUTER_MODEL
 
 docker_cmd=(docker)
 if ! docker info >/dev/null 2>&1; then
@@ -25,11 +26,13 @@ fi
 # `--env-file` feeds Compose interpolation only. Services still receive only the explicit variables
 # in the Compose file, so the combined Telegram/OpenRouter operator file is never injected wholesale
 # into the model-facing agent container. Values stay out of arguments; only protected file paths are
-# passed to Compose. Removing these four inherited variables also makes the protected file the only
-# source at Compose's highest interpolation precedence.
+# passed to Compose. Removing these inherited variables also makes the protected file the only source
+# at Compose's highest interpolation precedence.
 compose_cmd=(
 	env
 	-u TELEGRAM_LOGIN_BOT_TOKEN
+	-u TELEGRAM_OIDC_CLIENT_ID
+	-u TELEGRAM_OIDC_CLIENT_SECRET
 	-u TELEGRAM_ALLOWED_USER_IDS
 	-u TELEGRAM_OWNER_USER_IDS
 	-u OPENROUTER_MODEL

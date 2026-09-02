@@ -44,22 +44,18 @@ Tasks 1–31 меняют только source release. Пока не выпол�
 
 ## 1. Подготовка Telegram bot и базовой конфигурации
 
-### BotFather domain
+### BotFather Web Login Allowed URLs
 
-Legacy Login Widget принимает callback только для домена, зарегистрированного у существующего bot.
-Изменение BotFather domain влияет на вход и поэтому выполняется только для заранее названного HTTPS
-canary/public target.
+В официальном `@BotFather` откройте существующий bot → **Bot Settings** → **Web Login** и добавьте
+оба точных значения для каждого canary/public target:
 
-- **Preflight:** зафиксируйте текущий BotFather domain, выбранный bot username без `@`, точный
-  `OPENBOT_PUBLIC_URL` и рабочий rollback-доступ к прежнему gateway. Не публикуйте bot token.
-- **Exact target:** команда `/setdomain` в официальном `@BotFather`, выбранный существующий bot и
-  hostname из одобренного `OPENBOT_PUBLIC_URL`; не выбирайте bot по похожему display name.
-- **Изменение:** установите только hostname без scheme/path. В `.env` задайте тот же non-secret
-  `TELEGRAM_LOGIN_BOT_USERNAME` без `@` и точный HTTPS `OPENBOT_PUBLIC_URL` без path/query.
-- **Проверка:** BotFather показывает ожидаемый domain; source configuration проходит quiet-проверку
-  ниже; неизвестный Telegram ID не создаёт сессию.
-- **Rollback:** верните записанный прежний BotFather domain и прежний public/proxy target. Не
-  меняйте bot token как способ rollback.
+- HTTPS origin без завершающего `/`, например `https://work.kolodahearthstone.com`;
+- callback `https://work.kolodahearthstone.com/api/auth/telegram/callback`.
+
+Allowed URLs поддерживает несколько адресов, поэтому URL HearthPulse не заменяйте: добавляйте
+ManacostTeam рядом с ним. В `.env` задайте тот же `OPENBOT_PUBLIC_URL`, а OIDC client ID/secret
+возьмите из настроек этого bot. Проверка считается успешной только когда `/telegram/start`
+перенаправляет на `https://oauth.telegram.org/auth` без ошибки domain/redirect URI.
 
 ### Какие значения где хранятся
 
@@ -75,6 +71,8 @@ canary/public target.
 Игнорируемый Git файл `.env.manacostteam-auth` с режимом `0600` содержит только:
 
 - `TELEGRAM_LOGIN_BOT_TOKEN`;
+- `TELEGRAM_OIDC_CLIENT_ID`;
+- `TELEGRAM_OIDC_CLIENT_SECRET`;
 - полный `TELEGRAM_ALLOWED_USER_IDS`;
 - непустое подмножество `TELEGRAM_OWNER_USER_IDS`;
 - server-selected `OPENROUTER_MODEL`.
@@ -254,7 +252,7 @@ canary сам. Нельзя запускать его второй раз на l
 
 - **Preflight:** Task 32 завершён на восстановленной копии; в change ticket названы точные canary
   host/listener, Compose project, database copy, volumes, commit/image IDs, HTTPS hostname,
-  BotFather domain и полный предыдущий rollback set. Canary не имеет production writer connection.
+  BotFather Allowed URLs и полный предыдущий rollback set. Canary не имеет production writer connection.
 - **Exact target:** только перечисленный canary project/host и copied database. Public
   `work.kolodahearthstone.com`, live proxy, live volumes и live database исключены.
 - **Deployment:** используйте одобренную для этого конкретного target команду. Если target не
@@ -280,14 +278,14 @@ Google grant. Если canary требует новый Google consent, это �
 
 - **Preflight:** проверены backup/restore, immutable previous images, owner binding, owner/editor
   canary, logout/revoke, оба personal providers и полный rollback set; TTL/proxy control, точный
-  внешний public gateway target и текущий pre-cutover BotFather domain записаны. Подтвердите доступ
+  внешний public gateway target и текущие BotFather Allowed URLs записаны. Подтвердите доступ
   к официальному `@BotFather` и точный существующий bot по username, не по display name. В
-  репозитории есть только legacy
+  репозитории есть rollback-конфигурация
   `ops/nginx/work-origin.kolodahearthstone.com.conf`; конфигурация внешнего public gateway здесь не
   хранится, поэтому его точный control plane должен быть назван в change ticket.
 - **Exact target:** public host `work.kolodahearthstone.com`, его proxy/DNS route, согласованный live
-  server+agent+editor release и `/setdomain` только для заранее записанного Telegram bot. BotFather
-  target — hostname `work.kolodahearthstone.com` без scheme/path.
+  server+agent+editor release и заранее добавленные origin/callback в Web Login Allowed URLs
+  выбранного Telegram bot.
   `work-origin.kolodahearthstone.com` и `edge-auth` остаются rollback targets до конца observation
   window.
 - **Google OAuth на этой границе:** только теперь добавьте в Google Cloud Web client точные значения
@@ -295,19 +293,18 @@ Google grant. Если canary требует новый Google consent, это �
   `https://work.kolodahearthstone.com/api/plugins/oauth/callback`. Сверьте callback, показанный на
   `/admin/plugins/google-drive`. Старый origin/redirect пока не удаляйте.
 - **Переключение:** установите live `OPENBOT_PUBLIC_URL` в public HTTPS origin, примените полный
-  согласованный release через drain-aware procedure и непосредственно перед public route switch
-  задайте через `/setdomain` тот же public hostname. Затем уберите public `auth_request`/ChatGPT
+  согласованный release через drain-aware procedure. Затем уберите public `auth_request`/ChatGPT
   gateway dependency и направьте public proxy/DNS на проверенный ManacostTeam origin. Не возвращайте
   global `auth.json` mount рядом с новым multi-user server.
-- **Проверка:** BotFather показывает public hostname, Telegram widget загружается с public origin,
+- **Проверка:** BotFather содержит точные public origin/callback, OIDC redirect открывается,
   owner входит до и после switch, editor — после; cookie имеет `HttpOnly`, `Secure` и `SameSite=Lax`
   или строже; callback не содержит открытого redirect; каждый пользователь видит только свои
   данные/provider/Google grant; repeat smoke охватывает Docs, handoff, research, YouTube,
   logout/revoke и audit attribution без prompt/secret content.
 - **Rollback:** одним change верните прежний public proxy/DNS route, старый полный
   server+agent+edge-auth set, его прежний origin configuration и записанный pre-cutover BotFather
-  domain. Повторите old edge login, history, AG-UI и Google callback checks; если canary остаётся
-  доступен, повторите его Telegram widget check. Additive rows и ciphertext не удаляйте; не
+  Allowed URLs. Повторите old edge login, history, AG-UI и Google callback checks; если canary остаётся
+  доступен, повторите его Telegram OIDC check. Additive rows и ciphertext не удаляйте; не
   смешивайте старый global profile с новым server. Оба Google redirect URI держите
   зарегистрированными до успешного rollback/observation завершения.
 
@@ -315,8 +312,8 @@ Google grant. Если canary требует новый Google consent, это �
 
 | Симптом                                      | Проверить                                                                                             |
 | -------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Telegram widget не появляется                | `TELEGRAM_LOGIN_BOT_USERNAME`, HTTPS `OPENBOT_PUBLIC_URL`, BotFather domain; не bot token в browser   |
-| Telegram login возвращает общий отказ        | ID входит в allowlist, payload свежий, owner binding существует, access не revoked                    |
+| Telegram-кнопка не появляется                | Telegram mode и `/api/capabilities`; внешний widget/script больше не используется                     |
+| Telegram login возвращает общий отказ        | Allowed URLs, OIDC client, ID в allowlist, owner binding, access not revoked                           |
 | После удаления ID старая вкладка ещё открыта | Любой защищённый API должен уже отказать; статичный экран не доказывает живую сессию                  |
 | `AI недоступен`                              | У текущего пользователя нет active personal provider; подключить его в `/settings`                    |
 | ChatGPT code истёк                           | Запустить новый flow; старый code/profile не восстанавливать                                          |

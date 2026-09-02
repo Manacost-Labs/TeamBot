@@ -159,6 +159,8 @@ assert_process_redacted() {
 token_id='123456789'
 token_suffix='AA_task29_synthetic_token_0123456789'
 token="${token_id}:${token_suffix}"
+oidc_client_id='123456789'
+oidc_client_secret='synthetic_oidc_secret_0123456789abcdef'
 allowed_ids='123456789,987654321'
 owner_ids='123456789'
 model='openai/task29-test-model'
@@ -175,35 +177,37 @@ helper_pid=$!
 mapfile -d '' -t observed_arguments <"/proc/$helper_pid/cmdline"
 mapfile -d '' -t observed_environment <"/proc/$helper_pid/environ"
 for observed in "${observed_arguments[@]}" "${observed_environment[@]}"; do
-	assert_redacted "$observed" "$token" "$allowed_ids" "$owner_ids" "$model"
+	assert_redacted "$observed" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 done
-printf '%s\n' "$token" "$allowed_ids" "$owner_ids" "$model" >&"$private_fd"
+printf '%s\n' "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model" >&"$private_fd"
 wait "$helper_pid" || fail 'private descriptor process-boundary fixture failed'
 exec {private_fd}>&-
-assert_redacted "$(<"$argv_root/helper-output")" "$token" "$allowed_ids" "$owner_ids" "$model"
+assert_redacted "$(<"$argv_root/helper-output")" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 pass 'keeps synthetic values out of child arguments, environment and output'
 
 case_root="$(make_case initial-write)"
 input_file="$case_root/input"
-write_input "$input_file" "$token" "$allowed_ids" "$owner_ids" "$model"
+write_input "$input_file" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 run_with_input "$case_root" "$input_file"
 [[ "$last_status" -eq 0 ]] || fail 'initial configuration failed'
-assert_redacted "$last_output" "$token" "$allowed_ids" "$owner_ids" "$model"
+assert_redacted "$last_output" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 config_file="$case_root/.env.manacostteam-auth"
 [[ -f "$config_file" ]] || fail 'configuration file was not created'
 [[ "$(stat -c '%a' "$config_file")" == 600 ]] || fail 'configuration mode is not 0600'
 [[ "$(<"$config_file")" == "TELEGRAM_LOGIN_BOT_TOKEN=$token
+TELEGRAM_OIDC_CLIENT_ID=$oidc_client_id
+TELEGRAM_OIDC_CLIENT_SECRET=$oidc_client_secret
 TELEGRAM_ALLOWED_USER_IDS=$allowed_ids
 TELEGRAM_OWNER_USER_IDS=$owner_ids
 OPENROUTER_MODEL=$model" ]] || fail 'configuration contents are not canonical'
 [[ -f "$case_root/mv-process-boundary" ]] || fail 'post-secret child process was not observed'
-assert_redacted "$(<"$case_root/mv-process-boundary")" "$token" "$allowed_ids" "$owner_ids" "$model"
+assert_redacted "$(<"$case_root/mv-process-boundary")" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 [[ "$(<"$case_root/mv-process-boundary")" == *'ARG -T'* ]] || fail 'atomic rename did not use no-target-directory semantics'
 pass 'writes a redacted mode-0600 operator configuration from a private input descriptor'
 
 old_inode="$(stat -c '%i' "$config_file")"
 blank_update="$case_root/blank-update"
-write_input "$blank_update" '' '' '' ''
+write_input "$blank_update" '' '' '' '' '' ''
 run_with_input "$case_root" "$blank_update"
 [[ "$last_status" -eq 0 ]] || fail 'blank-preserving update failed'
 [[ "$(stat -c '%i' "$config_file")" != "$old_inode" ]] || fail 'configuration was not replaced atomically'
@@ -214,20 +218,20 @@ pass 'replaces the configuration atomically and removes its temporary file'
 
 before_refusal="$(<"$config_file")"
 refuse_input="$case_root/refuse-input"
-write_input "$refuse_input" '' "$allowed_ids" '-' ''
+write_input "$refuse_input" '' '' '' "$allowed_ids" '-' ''
 run_with_input "$case_root" "$refuse_input"
 [[ "$last_status" -ne 0 ]] || fail 'last-owner removal was accepted'
 [[ "$last_output" == *'REFUSED TELEGRAM_OWNER_USER_IDS non-empty'* ]] || fail 'last-owner refusal was not explicit'
-assert_redacted "$last_output" "$token" "$allowed_ids" "$owner_ids" "$model"
+assert_redacted "$last_output" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 [[ "$(<"$config_file")" == "$before_refusal" ]] || fail 'refused owner update changed the configuration'
 pass 'refuses removal of the last owner without changing the file'
 
 subset_input="$case_root/subset-input"
-write_input "$subset_input" '' '987654321' "$owner_ids" ''
+write_input "$subset_input" '' '' '' '987654321' "$owner_ids" ''
 run_with_input "$case_root" "$subset_input"
 [[ "$last_status" -ne 0 ]] || fail 'owner outside the allowlist was accepted'
 [[ "$last_output" == *'RELATION TELEGRAM_OWNER_USER_IDS subset-of TELEGRAM_ALLOWED_USER_IDS: failed'* ]] || fail 'subset failure was not reported safely'
-assert_redacted "$last_output" "$token" "$allowed_ids" "$owner_ids" "$model"
+assert_redacted "$last_output" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 [[ "$(<"$config_file")" == "$before_refusal" ]] || fail 'invalid subset update changed the configuration'
 pass 'rejects an owner set outside the allowlist without printing IDs'
 
@@ -240,6 +244,8 @@ printf '%s\n' \
 chmod 0600 "$dry_config"
 run_without_input "$dry_root" --dry-run
 [[ "$last_status" -ne 0 ]] || fail 'incomplete dry-run succeeded'
+[[ "$last_output" == *'MISSING TELEGRAM_OIDC_CLIENT_ID'* ]] || fail 'dry-run did not name the missing OIDC client ID'
+[[ "$last_output" == *'MISSING TELEGRAM_OIDC_CLIENT_SECRET'* ]] || fail 'dry-run did not name the missing OIDC client secret'
 [[ "$last_output" == *'MISSING OPENROUTER_MODEL'* ]] || fail 'dry-run did not name the missing variable'
 [[ "$last_output" == *'RELATION TELEGRAM_OWNER_USER_IDS non-empty: ok'* ]] || fail 'dry-run omitted the owner non-empty relation'
 [[ "$last_output" == *'RELATION TELEGRAM_OWNER_USER_IDS subset-of TELEGRAM_ALLOWED_USER_IDS: failed'* ]] || fail 'dry-run omitted the subset relation'
@@ -250,6 +256,8 @@ valid_dry_root="$(make_case valid-dry-run)"
 valid_dry_config="$valid_dry_root/.env.manacostteam-auth"
 printf '%s\n' \
 	"TELEGRAM_LOGIN_BOT_TOKEN=$token" \
+	"TELEGRAM_OIDC_CLIENT_ID=$oidc_client_id" \
+	"TELEGRAM_OIDC_CLIENT_SECRET=$oidc_client_secret" \
 	"TELEGRAM_ALLOWED_USER_IDS=$allowed_ids" \
 	"TELEGRAM_OWNER_USER_IDS=$owner_ids" \
 	"OPENROUTER_MODEL=$model" >"$valid_dry_config"
@@ -258,29 +266,33 @@ run_without_input "$valid_dry_root" --dry-run
 [[ "$last_status" -eq 0 ]] || fail 'complete dry-run failed'
 [[ "$last_output" == *'RELATION TELEGRAM_OWNER_USER_IDS non-empty: ok'* ]] || fail 'complete dry-run omitted owner relation'
 [[ "$last_output" == *'RELATION TELEGRAM_OWNER_USER_IDS subset-of TELEGRAM_ALLOWED_USER_IDS: ok'* ]] || fail 'complete dry-run omitted subset relation'
-assert_redacted "$last_output" "$token" "$allowed_ids" "$owner_ids" "$model"
+assert_redacted "$last_output" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 pass 'accepts a complete protected configuration without echoing it'
 
 permissive_root="$(make_case permissive-file)"
 permissive_config="$permissive_root/.env.manacostteam-auth"
 printf '%s\n' \
 	"TELEGRAM_LOGIN_BOT_TOKEN=$token" \
+	"TELEGRAM_OIDC_CLIENT_ID=$oidc_client_id" \
+	"TELEGRAM_OIDC_CLIENT_SECRET=$oidc_client_secret" \
 	"TELEGRAM_ALLOWED_USER_IDS=$allowed_ids" \
 	"TELEGRAM_OWNER_USER_IDS=$owner_ids" \
 	"OPENROUTER_MODEL=$model" >"$permissive_config"
 chmod 0644 "$permissive_config"
 permissive_input="$permissive_root/input"
-write_input "$permissive_input" '' '' '' ''
+write_input "$permissive_input" '' '' '' '' '' ''
 run_with_input "$permissive_root" "$permissive_input"
 [[ "$last_status" -ne 0 ]] || fail 'permissive operator configuration was accepted'
 [[ "$(stat -c '%a' "$permissive_config")" == 644 ]] || fail 'refused operation mutated existing permissions'
-assert_redacted "$last_output" "$token" "$allowed_ids" "$owner_ids" "$model"
+assert_redacted "$last_output" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 pass 'refuses an existing operator configuration that is not mode 0600'
 
 hardlink_root="$(make_case hard-linked-file)"
 hardlink_config="$hardlink_root/.env.manacostteam-auth"
 printf '%s\n' \
 	"TELEGRAM_LOGIN_BOT_TOKEN=$token" \
+	"TELEGRAM_OIDC_CLIENT_ID=$oidc_client_id" \
+	"TELEGRAM_OIDC_CLIENT_SECRET=$oidc_client_secret" \
 	"TELEGRAM_ALLOWED_USER_IDS=$allowed_ids" \
 	"TELEGRAM_OWNER_USER_IDS=$owner_ids" \
 	"OPENROUTER_MODEL=$model" >"$hardlink_config"
@@ -288,28 +300,32 @@ chmod 0600 "$hardlink_config"
 ln -- "$hardlink_config" "$hardlink_root/second-name"
 hardlink_before="$(<"$hardlink_config")"
 hardlink_input="$hardlink_root/input"
-write_input "$hardlink_input" '' '' '' ''
+write_input "$hardlink_input" '' '' '' '' '' ''
 run_with_input "$hardlink_root" "$hardlink_input"
 [[ "$last_status" -ne 0 ]] || fail 'hard-linked operator configuration was accepted'
 [[ "$(<"$hardlink_config")" == "$hardlink_before" ]] || fail 'hard-linked configuration was changed'
 [[ "$(<"$hardlink_root/second-name")" == "$hardlink_before" ]] || fail 'second hard link was changed'
-assert_redacted "$last_output" "$token" "$allowed_ids" "$owner_ids" "$model"
+assert_redacted "$last_output" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 pass 'refuses a hard-linked existing operator configuration without mutation'
 
 invalid_root="$(make_case invalid-input)"
 invalid_input="$invalid_root/input"
-write_input "$invalid_input" "$token" '0123,123' '123' 'model with spaces'
+write_input "$invalid_input" "$token" '012345' 'secret with spaces' '0123,123' '123' 'model with spaces'
 run_with_input "$invalid_root" "$invalid_input"
 [[ "$last_status" -ne 0 ]] || fail 'dotenv-unsafe input was accepted'
 [[ ! -e "$invalid_root/.env.manacostteam-auth" ]] || fail 'invalid input created a configuration file'
-assert_redacted "$last_output" "$token" '0123,123' '123' 'model with spaces'
-pass 'rejects non-canonical IDs and dotenv-unsafe model input before writing'
+assert_redacted "$last_output" "$token" '012345' 'secret with spaces' '0123,123' '123' 'model with spaces'
+[[ "$last_output" == *'INVALID TELEGRAM_OIDC_CLIENT_ID'* ]] || fail 'invalid OIDC client ID was not reported safely'
+[[ "$last_output" == *'INVALID TELEGRAM_OIDC_CLIENT_SECRET'* ]] || fail 'invalid OIDC client secret was not reported safely'
+pass 'rejects non-canonical IDs and dotenv-unsafe secret/model input before writing'
 
 unknown_root="$(make_case unknown-entry)"
 unknown_config="$unknown_root/.env.manacostteam-auth"
 unknown_value='synthetic-unknown-value'
 printf '%s\n' \
 	"TELEGRAM_LOGIN_BOT_TOKEN=$token" \
+	"TELEGRAM_OIDC_CLIENT_ID=$oidc_client_id" \
+	"TELEGRAM_OIDC_CLIENT_SECRET=$oidc_client_secret" \
 	"TELEGRAM_ALLOWED_USER_IDS=$allowed_ids" \
 	"TELEGRAM_OWNER_USER_IDS=$owner_ids" \
 	"OPENROUTER_MODEL=$model" \
@@ -317,11 +333,11 @@ printf '%s\n' \
 chmod 0600 "$unknown_config"
 unknown_before="$(<"$unknown_config")"
 unknown_input="$unknown_root/input"
-write_input "$unknown_input" '' '' '' ''
+write_input "$unknown_input" '' '' '' '' '' ''
 run_with_input "$unknown_root" "$unknown_input"
 [[ "$last_status" -ne 0 ]] || fail 'unsupported configuration entry was overwritten'
 [[ "$(<"$unknown_config")" == "$unknown_before" ]] || fail 'unsupported configuration file was changed'
-assert_redacted "$last_output" "$token" "$allowed_ids" "$owner_ids" "$model" "$unknown_value"
+assert_redacted "$last_output" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model" "$unknown_value"
 pass 'refuses to overwrite an operator file containing unsupported entries'
 
 canonical_root="$(make_case canonical-helper-path)"
@@ -330,6 +346,8 @@ ln -s -- "$helper" "$canonical_link"
 if [[ ! -e "$project_root/.env.manacostteam-auth" ]]; then
 	printf '%s\n' \
 		"TELEGRAM_LOGIN_BOT_TOKEN=$token" \
+		"TELEGRAM_OIDC_CLIENT_ID=$oidc_client_id" \
+		"TELEGRAM_OIDC_CLIENT_SECRET=$oidc_client_secret" \
 		"TELEGRAM_ALLOWED_USER_IDS=$allowed_ids" \
 		"TELEGRAM_OWNER_USER_IDS=$owner_ids" \
 		"OPENROUTER_MODEL=$model" >"$canonical_root/.env.manacostteam-auth"
@@ -340,7 +358,7 @@ if [[ ! -e "$project_root/.env.manacostteam-auth" ]]; then
 	set -e
 	[[ "$last_status" -eq 1 ]] || fail 'symlink invocation used the symlink directory as source root'
 	[[ "$(<"$canonical_root/helper-output")" == *'MISSING TELEGRAM_LOGIN_BOT_TOKEN'* ]] || fail 'symlink invocation did not resolve the real project root'
-	assert_redacted "$(<"$canonical_root/helper-output")" "$token" "$allowed_ids" "$owner_ids" "$model"
+	assert_redacted "$(<"$canonical_root/helper-output")" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 else
 	set +e
 	MANACOSTTEAM_AUTH_TEST_MODE=1 \
@@ -356,9 +374,9 @@ pass 'derives the source root from the real helper path when invoked through a s
 race_recheck_root="$(make_case race-before-recheck)"
 race_recheck_external="$(make_case race-before-recheck-external)"
 race_recheck_input="$race_recheck_root/input"
-write_input "$race_recheck_input" "$token" "$allowed_ids" "$owner_ids" "$model"
+write_input "$race_recheck_input" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 start_paused_helper "$race_recheck_root" "$race_recheck_input" before-recheck
-assert_process_redacted "$helper_pid" "$token" "$allowed_ids" "$owner_ids" "$model"
+assert_process_redacted "$helper_pid" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 ln -s -- "$race_recheck_external" "$race_recheck_root/.env.manacostteam-auth"
 finish_paused_helper "$race_recheck_root"
 [[ "$last_status" -ne 0 ]] || fail 'target replacement before the repeated check was accepted'
@@ -366,15 +384,15 @@ finish_paused_helper "$race_recheck_root"
 if [[ -n "$(find "$race_recheck_external" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
 	fail 'target race wrote into the external directory before recheck'
 fi
-assert_redacted "$last_output" "$token" "$allowed_ids" "$owner_ids" "$model"
+assert_redacted "$last_output" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 pass 'rechecks a target replaced after private input and performs no external write'
 
 race_rename_root="$(make_case race-before-rename)"
 race_rename_external="$(make_case race-before-rename-external)"
 race_rename_input="$race_rename_root/input"
-write_input "$race_rename_input" "$token" "$allowed_ids" "$owner_ids" "$model"
+write_input "$race_rename_input" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 start_paused_helper "$race_rename_root" "$race_rename_input" before-rename
-assert_process_redacted "$helper_pid" "$token" "$allowed_ids" "$owner_ids" "$model"
+assert_process_redacted "$helper_pid" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 ln -s -- "$race_rename_external" "$race_rename_root/.env.manacostteam-auth"
 finish_paused_helper "$race_rename_root"
 [[ "$last_status" -eq 0 ]] || fail 'safe no-target-directory rename failed during a target race'
@@ -383,8 +401,8 @@ finish_paused_helper "$race_rename_root"
 if [[ -n "$(find "$race_rename_external" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
 	fail 'no-target-directory rename wrote into the external directory'
 fi
-assert_redacted "$last_output" "$token" "$allowed_ids" "$owner_ids" "$model"
-assert_redacted "$(<"$race_rename_root/mv-process-boundary")" "$token" "$allowed_ids" "$owner_ids" "$model"
+assert_redacted "$last_output" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
+assert_redacted "$(<"$race_rename_root/mv-process-boundary")" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 [[ "$(<"$race_rename_root/mv-process-boundary")" == *'ARG -T'* ]] || fail 'raced rename omitted no-target-directory semantics'
 pass 'uses no-target-directory rename when the target changes after recheck'
 
@@ -393,11 +411,11 @@ protected_file="$symlink_root/protected"
 printf '%s\n' 'must-not-change' >"$protected_file"
 ln -s -- "$protected_file" "$symlink_root/.env.manacostteam-auth"
 symlink_input="$symlink_root/input"
-write_input "$symlink_input" "$token" "$allowed_ids" "$owner_ids" "$model"
+write_input "$symlink_input" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 run_with_input "$symlink_root" "$symlink_input"
 [[ "$last_status" -ne 0 ]] || fail 'symlinked configuration target was accepted'
 [[ "$(<"$protected_file")" == 'must-not-change' ]] || fail 'symlink target was modified'
-assert_redacted "$last_output" "$token" "$allowed_ids" "$owner_ids" "$model"
+assert_redacted "$last_output" "$token" "$oidc_client_id" "$oidc_client_secret" "$allowed_ids" "$owner_ids" "$model"
 pass 'refuses a symlinked configuration target'
 
 override_root="$(make_case unguarded-override)"

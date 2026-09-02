@@ -23,7 +23,7 @@ async function runDeploy(...services: string[]) {
     docker,
     `#!/bin/sh
 printf '%s\\n' "$*" >> "$DEPLOY_TEST_LOG"
-for name in TELEGRAM_LOGIN_BOT_TOKEN TELEGRAM_ALLOWED_USER_IDS TELEGRAM_OWNER_USER_IDS OPENROUTER_MODEL; do
+for name in TELEGRAM_LOGIN_BOT_TOKEN TELEGRAM_OIDC_CLIENT_ID TELEGRAM_OIDC_CLIENT_SECRET TELEGRAM_ALLOWED_USER_IDS TELEGRAM_OWNER_USER_IDS OPENROUTER_MODEL; do
   if printenv "$name" >/dev/null 2>&1; then printf 'ENV_PRESENT %s\\n' "$name" >> "$DEPLOY_TEST_LOG"; fi
 done
 if [ "$1" = "info" ]; then exit 0; fi
@@ -46,6 +46,8 @@ exit 0
         DEPLOY_TEST_LOG: log,
         ARTIFACT_RENDERER_TOKEN: "test-renderer-token",
         TELEGRAM_LOGIN_BOT_TOKEN: "123456:synthetic-test-token",
+        TELEGRAM_OIDC_CLIENT_ID: "123456789",
+        TELEGRAM_OIDC_CLIENT_SECRET: "synthetic_oidc_secret_0123456789abcdef",
         TELEGRAM_ALLOWED_USER_IDS: "123456789,987654321",
         TELEGRAM_OWNER_USER_IDS: "123456789",
         OPENROUTER_MODEL: "openai/synthetic-test-model",
@@ -100,6 +102,8 @@ test("uses the base and protected environment files only as Compose interpolatio
     `compose --env-file ${join(repository, ".env")} --env-file ${join(repository, ".env.manacostteam-auth")} -f ${join(repository, "docker-compose.production.yml")} config --quiet\n`,
   );
   expect(log).not.toContain("TELEGRAM_LOGIN_BOT_TOKEN=");
+  expect(log).not.toContain("TELEGRAM_OIDC_CLIENT_ID=");
+  expect(log).not.toContain("TELEGRAM_OIDC_CLIENT_SECRET=");
   expect(log).not.toContain("TELEGRAM_ALLOWED_USER_IDS=");
   expect(log).not.toContain("TELEGRAM_OWNER_USER_IDS=");
   expect(log).not.toContain("OPENROUTER_MODEL=");

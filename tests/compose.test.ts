@@ -344,6 +344,11 @@ test("keeps Telegram and personal provider credentials on their narrow productio
       "{TELEGRAM_LOGIN_BOT_USERNAME:?TELEGRAM_LOGIN_BOT_USERNAME is required}",
     TELEGRAM_LOGIN_BOT_TOKEN:
       "$" + "{TELEGRAM_LOGIN_BOT_TOKEN:?TELEGRAM_LOGIN_BOT_TOKEN is required}",
+    TELEGRAM_OIDC_CLIENT_ID:
+      "$" + "{TELEGRAM_OIDC_CLIENT_ID:?TELEGRAM_OIDC_CLIENT_ID is required}",
+    TELEGRAM_OIDC_CLIENT_SECRET:
+      "$" +
+      "{TELEGRAM_OIDC_CLIENT_SECRET:?TELEGRAM_OIDC_CLIENT_SECRET is required}",
     TELEGRAM_ALLOWED_USER_IDS:
       "$" +
       "{TELEGRAM_ALLOWED_USER_IDS:?TELEGRAM_ALLOWED_USER_IDS is required}",
@@ -364,6 +369,8 @@ test("keeps Telegram and personal provider credentials on their narrow productio
     "BETTER_AUTH_SECRET",
     "TELEGRAM_LOGIN_BOT_USERNAME",
     "TELEGRAM_LOGIN_BOT_TOKEN",
+    "TELEGRAM_OIDC_CLIENT_ID",
+    "TELEGRAM_OIDC_CLIENT_SECRET",
     "TELEGRAM_ALLOWED_USER_IDS",
     "TELEGRAM_OWNER_USER_IDS",
     "OPENAI_API_KEY",

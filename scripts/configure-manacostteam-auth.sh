@@ -81,10 +81,14 @@ if [[ "$test_mode" == 1 ]]; then
 fi
 
 bot_token=''
+oidc_client_id=''
+oidc_client_secret=''
 allowed_ids=''
 owner_ids=''
 openrouter_model=''
 seen_bot_token=false
+seen_oidc_client_id=false
+seen_oidc_client_secret=false
 seen_allowed_ids=false
 seen_owner_ids=false
 seen_openrouter_model=false
@@ -92,9 +96,9 @@ config_invalid=false
 temporary_file=''
 
 wipe_sensitive() {
-	unset bot_token allowed_ids owner_ids openrouter_model
-	unset new_bot_token new_allowed_ids new_owner_ids new_openrouter_model
-	unset candidate_bot_token candidate_allowed_ids candidate_owner_ids candidate_openrouter_model
+	unset bot_token oidc_client_id oidc_client_secret allowed_ids owner_ids openrouter_model
+	unset new_bot_token new_oidc_client_id new_oidc_client_secret new_allowed_ids new_owner_ids new_openrouter_model
+	unset candidate_bot_token candidate_oidc_client_id candidate_oidc_client_secret candidate_allowed_ids candidate_owner_ids candidate_openrouter_model
 	unset candidate_owner_ids_trimmed
 }
 
@@ -122,6 +126,22 @@ load_config() {
 			else
 				seen_bot_token=true
 				bot_token="${line#*=}"
+			fi
+			;;
+		TELEGRAM_OIDC_CLIENT_ID=*)
+			if [[ "$seen_oidc_client_id" == true ]]; then
+				config_invalid=true
+			else
+				seen_oidc_client_id=true
+				oidc_client_id="${line#*=}"
+			fi
+			;;
+		TELEGRAM_OIDC_CLIENT_SECRET=*)
+			if [[ "$seen_oidc_client_secret" == true ]]; then
+				config_invalid=true
+			else
+				seen_oidc_client_secret=true
+				oidc_client_secret="${line#*=}"
 			fi
 			;;
 		TELEGRAM_ALLOWED_USER_IDS=*)
@@ -237,6 +257,18 @@ bot_token_is_valid() {
 	[[ ${#value} -le 256 && "$value" =~ ^[1-9][0-9]{4,15}:[A-Za-z0-9_-]{20,}$ ]]
 }
 
+oidc_client_id_is_valid() {
+	local value=$1
+
+	[[ "$value" =~ ^[1-9][0-9]{4,15}$ ]]
+}
+
+oidc_client_secret_is_valid() {
+	local value=$1
+
+	[[ "$value" =~ ^[A-Za-z0-9._~-]{20,256}$ ]]
+}
+
 model_is_valid() {
 	local value=$1
 
@@ -266,10 +298,12 @@ test_pause() {
 
 validate_and_report() {
 	local token=$1
-	local allowed=$2
-	local owners=$3
-	local model=$4
-	local report=$5
+	local oidc_id=$2
+	local oidc_secret=$3
+	local allowed=$4
+	local owners=$5
+	local model=$6
+	local report=$7
 	local valid=true
 	local normalized_allowed=''
 	local normalized_owners=''
@@ -281,6 +315,22 @@ validate_and_report() {
 		valid=false
 	elif ! bot_token_is_valid "$token"; then
 		[[ "$report" == true ]] && printf 'INVALID TELEGRAM_LOGIN_BOT_TOKEN\n'
+		valid=false
+	fi
+
+	if [[ -z "$oidc_id" ]]; then
+		[[ "$report" == true ]] && printf 'MISSING TELEGRAM_OIDC_CLIENT_ID\n'
+		valid=false
+	elif ! oidc_client_id_is_valid "$oidc_id"; then
+		[[ "$report" == true ]] && printf 'INVALID TELEGRAM_OIDC_CLIENT_ID\n'
+		valid=false
+	fi
+
+	if [[ -z "$oidc_secret" ]]; then
+		[[ "$report" == true ]] && printf 'MISSING TELEGRAM_OIDC_CLIENT_SECRET\n'
+		valid=false
+	elif ! oidc_client_secret_is_valid "$oidc_secret"; then
+		[[ "$report" == true ]] && printf 'INVALID TELEGRAM_OIDC_CLIENT_SECRET\n'
 		valid=false
 	fi
 
@@ -347,7 +397,14 @@ if [[ "$mode" == dry-run ]]; then
 		printf 'INVALID OPERATOR_CONFIG\n'
 		status=1
 	fi
-	if ! validate_and_report "$bot_token" "$allowed_ids" "$owner_ids" "$openrouter_model" true; then
+	if ! validate_and_report \
+		"$bot_token" \
+		"$oidc_client_id" \
+		"$oidc_client_secret" \
+		"$allowed_ids" \
+		"$owner_ids" \
+		"$openrouter_model" \
+		true; then
 		status=1
 	fi
 	exit "$status"
@@ -386,19 +443,25 @@ read_private() {
 }
 
 new_bot_token=''
+new_oidc_client_id=''
+new_oidc_client_secret=''
 new_allowed_ids=''
 new_owner_ids=''
 new_openrouter_model=''
 read_private TELEGRAM_LOGIN_BOT_TOKEN new_bot_token
+read_private TELEGRAM_OIDC_CLIENT_ID new_oidc_client_id
+read_private TELEGRAM_OIDC_CLIENT_SECRET new_oidc_client_secret
 read_private TELEGRAM_ALLOWED_USER_IDS new_allowed_ids
 read_private TELEGRAM_OWNER_USER_IDS new_owner_ids
 read_private OPENROUTER_MODEL new_openrouter_model
 
 candidate_bot_token="${new_bot_token:-$bot_token}"
+candidate_oidc_client_id="${new_oidc_client_id:-$oidc_client_id}"
+candidate_oidc_client_secret="${new_oidc_client_secret:-$oidc_client_secret}"
 candidate_allowed_ids="${new_allowed_ids:-$allowed_ids}"
 candidate_owner_ids="${new_owner_ids:-$owner_ids}"
 candidate_openrouter_model="${new_openrouter_model:-$openrouter_model}"
-unset new_bot_token new_allowed_ids new_owner_ids new_openrouter_model
+unset new_bot_token new_oidc_client_id new_oidc_client_secret new_allowed_ids new_owner_ids new_openrouter_model
 
 trim_value "$candidate_owner_ids" candidate_owner_ids_trimmed
 if [[ -z "$candidate_owner_ids_trimmed" || "$candidate_owner_ids_trimmed" == - ]]; then
@@ -408,6 +471,8 @@ fi
 unset candidate_owner_ids_trimmed
 if ! validate_and_report \
 	"$candidate_bot_token" \
+	"$candidate_oidc_client_id" \
+	"$candidate_oidc_client_secret" \
 	"$candidate_allowed_ids" \
 	"$candidate_owner_ids" \
 	"$candidate_openrouter_model" \
@@ -420,6 +485,8 @@ normalize_id_list "$candidate_owner_ids" candidate_owner_ids
 
 {
 	printf 'TELEGRAM_LOGIN_BOT_TOKEN=%s\n' "$candidate_bot_token"
+	printf 'TELEGRAM_OIDC_CLIENT_ID=%s\n' "$candidate_oidc_client_id"
+	printf 'TELEGRAM_OIDC_CLIENT_SECRET=%s\n' "$candidate_oidc_client_secret"
 	printf 'TELEGRAM_ALLOWED_USER_IDS=%s\n' "$candidate_allowed_ids"
 	printf 'TELEGRAM_OWNER_USER_IDS=%s\n' "$candidate_owner_ids"
 	printf 'OPENROUTER_MODEL=%s\n' "$candidate_openrouter_model"

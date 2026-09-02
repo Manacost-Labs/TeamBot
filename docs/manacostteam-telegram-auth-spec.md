@@ -67,32 +67,29 @@ renaming them would break stored data or agent contracts. Those can be migrated 
 
 ## Authentication design
 
-### Telegram callback
+### Telegram OIDC callback
 
-The login screen embeds Telegram's official Login Widget for the configured bot. Telegram returns
-only the documented login fields. The server:
+The login screen submits an ordinary same-origin POST to the server. The server starts Telegram's
+Authorization Code flow with PKCE S256, then:
 
-1. parses a strict field allowlist and rejects duplicate/unknown scalar shapes;
-2. validates `id` as a positive decimal integer represented canonically as a string;
-3. reconstructs Telegram's sorted data-check string;
-4. validates the HMAC-SHA-256 signature using a constant-time comparison;
-5. rejects missing, future or older-than-five-minutes `auth_date` values;
-6. checks the ID against the server allowlist before creating or updating a user;
-7. consumes a one-time, short-lived, server-bound login state to prevent login CSRF;
-8. creates a secure server session and redirects only to an allowlisted local path.
+1. creates one opaque, five-minute state and binds it to a signed `HttpOnly` browser cookie;
+2. sends only a derived PKCE challenge and nonce to Telegram;
+3. accepts only the fixed HTTPS issuer, authorization, token and JWKS endpoints;
+4. consumes state before exchanging the authorization code and refuses replay;
+5. verifies the RS256 signature, issuer, audience, expiry, nonce and bounded claim shapes;
+6. takes the stable account identity from Telegram's signed numeric `id` claim, not mutable profile
+   fields and not the distinct OIDC `sub` value;
+7. applies the existing allowlist, owner binding and revocation rules before creating a session;
+8. redirects only to an allowlisted local path.
 
-The Telegram bot token is read only by the authentication service. It is never returned, logged,
-stored in a browser or copied into the tenant package.
+The OIDC client secret is read only by the authentication service. It is never returned, logged,
+stored in a browser, copied into the tenant package or passed to an AI agent. Callback responses use
+`no-store` and `Referrer-Policy: no-referrer`; the reverse proxy disables callback access logging
+because the authorization code is carried in the query string.
 
-> Compatibility note (2026-09-01): Telegram now recommends its OIDC authorization-code flow with
-> PKCE and archives the iframe widget documentation. This approved first release deliberately keeps
-> the legacy bot-token HMAC callback for the existing bot. The state uses a separate HttpOnly browser
-> binding and every accepted Telegram proof is reserved once, but the legacy payload still does not
-> cryptographically bind that state and can be raced if a valid callback query leaks before first
-> use. Callback responses therefore use `no-store` and `Referrer-Policy: no-referrer`, callback query
-> values must be redacted from access logs, and moving to OIDC requires a separately approved design
-> and migration. References: [current Telegram Login](https://core.telegram.org/bots/telegram-login)
-> and [archived widget verification](https://core.telegram.org/widgets/login/#checking-authorization).
+One release retains the old HMAC callback route and bot token for already-open browser bundles.
+The current sign-in screen never loads the archived Telegram widget. Remove the fallback after the
+observation window. Protocol reference: [Telegram Login](https://core.telegram.org/bots/telegram-login).
 
 ### Internal identity
 
@@ -108,14 +105,14 @@ verified Telegram login.
 
 The protected configuration contains:
 
-- `TELEGRAM_LOGIN_BOT_USERNAME` — public widget name;
-- `TELEGRAM_LOGIN_BOT_TOKEN` — secret used only for signature validation;
+- `TELEGRAM_OIDC_CLIENT_ID` and `TELEGRAM_OIDC_CLIENT_SECRET` — confidential OIDC client;
+- `TELEGRAM_LOGIN_BOT_USERNAME` and `TELEGRAM_LOGIN_BOT_TOKEN` — one-release legacy fallback;
 - `TELEGRAM_ALLOWED_USER_IDS` — comma-separated positive numeric IDs;
 - `TELEGRAM_OWNER_USER_IDS` — non-empty subset of the allowlist;
 - `BETTER_AUTH_SECRET`, public URL and trusted origin values already required for secure sessions.
 
-Boot fails closed when Telegram login is selected but the bot token, owner set, session secret,
-public HTTPS URL or consistent allowlist is missing.
+Boot fails closed when Telegram login is selected but either OIDC credential, the compatibility
+credential, owner set, session secret, public HTTPS URL or consistent allowlist is missing.
 
 ### Roles and revocation
 
@@ -191,7 +188,7 @@ deployment-wide model key.
 
 ### Assets
 
-- Telegram bot token and signed login payload;
+- Telegram OIDC client secret, authorization code and signed ID token;
 - ManacostTeam session cookies and role assignments;
 - Codex/ChatGPT credentials, OpenRouter API keys and model capacity;
 - conversations, attachments, artifacts and Google OAuth tokens;
@@ -201,7 +198,7 @@ deployment-wide model key.
 
 | Boundary | Abuse case | Required control |
 | --- | --- | --- |
-| Browser → Telegram callback | forged ID/hash, replay, login CSRF | HMAC verification, freshness window, one-time state, rate limit |
+| Browser → Telegram callback | forged token, replay, login CSRF | RS256/JWKS verification, PKCE, nonce and one-time browser-bound state |
 | Telegram profile → authorization | attacker takes an allowed username | authorize only immutable numeric ID |
 | Browser → application API | editor calls admin route directly | server-side role guard on every route |
 | User A → shared storage | guessed thread/artifact ID exposes user B | actor-scoped queries and negative cross-user tests |
@@ -218,7 +215,7 @@ deployment-wide model key.
 - Hono server and PostgreSQL/Drizzle persistence;
 - React/TanStack Router client;
 - Better Auth session storage and existing authorization guards;
-- Telegram Login Widget with server-side signature validation;
+- Telegram OIDC Authorization Code flow with PKCE and server-side JWT verification;
 - existing `agent-codex` AG-UI runtime and Codex CLI process;
 - Codex device-code login and Codex custom `responses` provider support;
 - OpenRouter Responses API and current-key validation endpoint.
@@ -361,7 +358,7 @@ never included in logs.
 4. Two Telegram users have different internal IDs, sessions, threads, artifacts and audit actors.
 5. Editor-to-owner data and administrator access tests return 403/404 without revealing existence.
 6. Removing/revoking an ID blocks login and invalidates active sessions.
-7. Telegram callback replay, tampering, stale payload and login-CSRF tests pass.
+7. Telegram callback replay, signature/claim tampering, PKCE and login-CSRF tests pass.
 8. Codex CLI remains the execution engine for both ChatGPT and OpenRouter modes.
 9. A user can connect ChatGPT by device code or save a valid OpenRouter key without either secret
    being displayed, logged or exposed to tools.

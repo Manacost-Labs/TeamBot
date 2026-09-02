@@ -79,7 +79,8 @@ Attachment bytes, workspace, browser profiles и research reports не вход�
 
 ### ManacostTeam authentication configuration
 
-`TELEGRAM_LOGIN_BOT_TOKEN`, полный allowlist/owner set и `OPENROUTER_MODEL` готовятся только через
+OIDC client ID/secret, `TELEGRAM_LOGIN_BOT_TOKEN`, полный allowlist/owner set и
+`OPENROUTER_MODEL` готовятся только через
 скрытые prompts. Helper пишет игнорируемый `.env.manacostteam-auth` с mode `0600`; dry-run сообщает
 только имена полей и результат отношений, а не значения:
 
@@ -100,9 +101,8 @@ interpolation. Protected auth file не становится общим containe
 research-provider credentials и внутренние service credentials остаются ограниченными runtime
 inputs и не являются personal-provider fallback.
 
-Build и deployment не меняют BotFather domain, Google OAuth JavaScript origin или callback. Эти
-external changes относятся только к отдельно одобренному Task 34 public cutover, не к Task 33
-canary.
+Build и deployment не меняют BotFather Allowed URLs, Google OAuth JavaScript origin или callback.
+Эти external changes выполняются заранее для одобренных canary/public targets.
 
 ### Ключи источников главного аналитика
 
