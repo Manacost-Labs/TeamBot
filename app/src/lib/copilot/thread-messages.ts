@@ -1,5 +1,5 @@
 import { type Message, MessageSchema } from "@ag-ui/core";
-import { client } from "@/lib/client";
+import { ClientTimeoutError, client } from "@/lib/client";
 import type { HistoryPage } from "./conversation-store";
 
 export type { HistoryPage } from "./conversation-store";
@@ -57,6 +57,29 @@ export type StoredHistoryPage = HistoryPage & {
 };
 
 const NOTHING: StoredThread = { messages: [], unreadable: 0 };
+
+/**
+ * History is a remote, durable read rather than a short UI request. Keep one deadline for the
+ * initial read, reconciliation and older-page pagination so a slow Intelligence response cannot
+ * leave a channel (or the composer) waiting forever.
+ */
+export const THREAD_HISTORY_REQUEST_TIMEOUT_MS = 12_000;
+
+/** Turn transport-specific timeout text into a useful message for a person. */
+export function historyErrorMessage(
+  error: unknown,
+  fallback = "Не удалось обновить историю диалога.",
+): string {
+  if (error instanceof ClientTimeoutError) {
+    return "Сервер истории не ответил вовремя. Повторите загрузку.";
+  }
+  const message =
+    error instanceof Error ? error.message.trim() : String(error).trim();
+  if (/timed out|timeout|signal timed out/i.test(message)) {
+    return "Сервер истории не ответил вовремя. Повторите загрузку.";
+  }
+  return message || fallback;
+}
 
 export type CachedStoredThread = StoredThread & {
   /** Cache is a paint-first snapshot; every channel open revalidates it against the server. */
@@ -428,11 +451,17 @@ export async function refreshThreadMessages(
   sessionScope: string,
   threadId: string,
   agentId: string,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<StoredThread> {
   const cacheEpoch = threadHistoryCache.epoch(sessionScope);
   const response = await client(threadHistoryPath(threadId, agentId), {
     fallback: "Не удалось обновить историю диалога",
+    // Preserve a caller-owned cancellation signal when no deadline was requested explicitly. The
+    // channel supplies the shared deadline; low-level callers that only cancel on sign-out should
+    // keep receiving that exact signal and reason.
+    ...(options.timeoutMs !== undefined || options.signal === undefined
+      ? { timeoutMs: options.timeoutMs ?? THREAD_HISTORY_REQUEST_TIMEOUT_MS }
+      : {}),
     ...(options.signal ? { signal: options.signal } : {}),
   });
   const page = readableHistoryPage(await response.json());
@@ -461,12 +490,19 @@ export async function refreshThreadHistoryPage(
   _sessionScope: string,
   threadId: string,
   agentId: string,
-  options: { olderCursor?: string | null; signal?: AbortSignal } = {},
+  options: {
+    olderCursor?: string | null;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  } = {},
 ): Promise<StoredHistoryPage> {
   const response = await client(
     threadHistoryPath(threadId, agentId, options.olderCursor),
     {
       fallback: "Не удалось обновить историю диалога",
+      ...(options.timeoutMs !== undefined || options.signal === undefined
+        ? { timeoutMs: options.timeoutMs ?? THREAD_HISTORY_REQUEST_TIMEOUT_MS }
+        : {}),
       ...(options.signal ? { signal: options.signal } : {}),
     },
   );
@@ -480,7 +516,7 @@ export async function prefetchThreadMessages(
   sessionScope: string,
   threadId: string,
   agentId: string,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<void> {
   options.signal?.throwIfAborted();
   const cached = threadHistoryCache.peek(sessionScope, threadId, agentId);

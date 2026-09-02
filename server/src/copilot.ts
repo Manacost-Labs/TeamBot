@@ -1,6 +1,9 @@
 import type { BaseEvent, RunAgentInput } from "@ag-ui/client";
 import { AbstractAgent, HttpAgent, RunAgentInputSchema } from "@ag-ui/client";
-import type { BuiltInAgentConfiguration } from "@copilotkit/runtime/v2";
+import type {
+  BuiltInAgentConfiguration,
+  CopilotKitIntelligenceConfig,
+} from "@copilotkit/runtime/v2";
 import {
   BuiltInAgent,
   CopilotKitIntelligence,
@@ -1200,6 +1203,111 @@ export async function historyOrEmpty<T>(
   }
 }
 
+type ThreadMessagesRequest = Parameters<
+  CopilotKitIntelligence["getThreadMessages"]
+>[0];
+type ThreadMessagesResponse = Awaited<
+  ReturnType<CopilotKitIntelligence["getThreadMessages"]>
+>;
+
+const MANAGED_INTELLIGENCE_API_URL = "https://api.intelligence.copilotkit.ai";
+
+/** A history read is remote I/O and must not keep a request open indefinitely. */
+export const INTELLIGENCE_HISTORY_TIMEOUT_MS = 10_000;
+
+export class IntelligenceHistoryTimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`Intelligence history request timed out after ${timeoutMs} ms.`);
+    this.name = "IntelligenceHistoryTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+function boundedHistoryTimeout(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return INTELLIGENCE_HISTORY_TIMEOUT_MS;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+function intelligencePlatformError(status: number, detail: string): Error {
+  const error = new Error(
+    `Intelligence platform error ${status}: ${detail || "request failed"}`,
+  );
+  error.name = "PlatformRequestError";
+  Object.assign(error, { status });
+  return error;
+}
+
+/**
+ * Read a thread with a real abortable deadline.
+ *
+ * CopilotKit 1.69's public client does not accept an AbortSignal for
+ * `getThreadMessages`; wrapping that method in `Promise.race` would stop waiting while leaving an
+ * unbounded fetch running in the server. This small transport keeps the SDK response/error shape,
+ * while allowing a disconnected browser and the deadline to cancel the actual request.
+ */
+export async function readIntelligenceThreadMessages(
+  config: Pick<CopilotKitIntelligenceConfig, "apiKey" | "apiUrl">,
+  params: ThreadMessagesRequest,
+  options: {
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    fetcher?: typeof fetch;
+  } = {},
+): Promise<ThreadMessagesResponse> {
+  const timeoutMs = boundedHistoryTimeout(options.timeoutMs);
+  const timeoutController = new AbortController();
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, timeoutController.signal])
+    : timeoutController.signal;
+  const timeoutError = new IntelligenceHistoryTimeoutError(timeoutMs);
+  const timeout = setTimeout(
+    () => timeoutController.abort(timeoutError),
+    timeoutMs,
+  );
+  timeout.unref?.();
+
+  const apiUrl = (config.apiUrl ?? MANAGED_INTELLIGENCE_API_URL).replace(
+    /\/$/,
+    "",
+  );
+  const query = new URLSearchParams({ userId: params.userId });
+  const path = `/api/threads/${encodeURIComponent(params.threadId)}/messages?${query.toString()}`;
+
+  try {
+    const response = await (options.fetcher ?? fetch)(`${apiUrl}${path}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+        ...(params.channelDeliveryId
+          ? { "X-Cpki-Channel-Delivery-Id": params.channelDeliveryId }
+          : {}),
+      },
+      signal,
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      throw intelligencePlatformError(response.status, detail.slice(0, 500));
+    }
+    const body = await response.text();
+    if (!body) {
+      throw new Error("Intelligence history response was empty.");
+    }
+    return JSON.parse(body) as ThreadMessagesResponse;
+  } catch (error) {
+    if (timeoutController.signal.aborted && !options.signal?.aborted) {
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /**
  * The platform client, with one answer corrected.
  *
@@ -1213,12 +1321,42 @@ export async function historyOrEmpty<T>(
  * the browser expects and a 200 instead of a 500.
  */
 class IntelligenceKnowingANewThread extends CopilotKitIntelligence {
+  private readonly historyConfig: Pick<
+    CopilotKitIntelligenceConfig,
+    "apiKey" | "apiUrl"
+  >;
+
+  constructor(config: CopilotKitIntelligenceConfig) {
+    super(config);
+    this.historyConfig = {
+      apiKey: config.apiKey,
+      ...(config.apiUrl ? { apiUrl: config.apiUrl } : {}),
+    };
+  }
+
   override getThreadMessages(
-    params: Parameters<CopilotKitIntelligence["getThreadMessages"]>[0],
-  ) {
-    return historyOrEmpty(() => super.getThreadMessages(params), {
-      messages: [],
-    });
+    params: ThreadMessagesRequest,
+  ): Promise<ThreadMessagesResponse> {
+    return historyOrEmpty(
+      () => readIntelligenceThreadMessages(this.historyConfig, params),
+      {
+        messages: [],
+      },
+    );
+  }
+
+  /** Route-level reads can stop the upstream request when the browser disconnects. */
+  readThreadMessages(
+    params: ThreadMessagesRequest,
+    signal?: AbortSignal,
+  ): Promise<ThreadMessagesResponse> {
+    return historyOrEmpty(
+      () =>
+        readIntelligenceThreadMessages(this.historyConfig, params, { signal }),
+      {
+        messages: [],
+      },
+    );
   }
 }
 
@@ -1449,6 +1587,7 @@ export function mountCopilotRuntime(
   });
   const handler = new Hono();
   handler.get(`${basePath}/threads/:threadId/messages`, async (context) => {
+    const startedAt = performance.now();
     const threadId = context.req.param("threadId");
     const beforeCursor = context.req.query("before");
     try {
@@ -1459,10 +1598,13 @@ export function mountCopilotRuntime(
       >;
       const read = await historyOrEmpty<ThreadMessages>(
         () =>
-          intelligenceClient.getThreadMessages({
-            threadId,
-            userId: user.id,
-          }),
+          intelligenceClient.readThreadMessages(
+            {
+              threadId,
+              userId: user.id,
+            },
+            context.req.raw.signal,
+          ),
         { messages: [] } as ThreadMessages,
       );
       return context.json(paginateThreadMessages(read.messages, beforeCursor));
@@ -1474,11 +1616,18 @@ export function mountCopilotRuntime(
         JSON.stringify({
           type: "thread-history-page-failed",
           note: "Could not read a bounded conversation history page.",
+          elapsedMs: Math.round(performance.now() - startedAt),
+          errorType: error instanceof Error ? error.name : "unknown",
         }),
       );
+      const timedOut = error instanceof IntelligenceHistoryTimeoutError;
       return context.json(
-        { error: "Не удалось обновить историю диалога." },
-        502,
+        {
+          error: timedOut
+            ? "Сервер истории не ответил вовремя. Повторите загрузку."
+            : "Не удалось обновить историю диалога.",
+        },
+        timedOut ? 504 : 502,
       );
     }
   });

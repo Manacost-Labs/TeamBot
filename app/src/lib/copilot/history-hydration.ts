@@ -85,6 +85,11 @@ export class StableHistoryHydration<Value, Target extends object> {
     this.observedTarget = target;
   }
 
+  /** Forget the current result so a person can explicitly retry a failed or stale read. */
+  reset(): void {
+    this.gate.reset();
+  }
+
   async ensureCurrentTarget(
     currentTarget: () => Target,
     load: () => Promise<Value>,

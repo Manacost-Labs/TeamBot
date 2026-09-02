@@ -50,12 +50,14 @@ import { isAgentRunActive } from "@/lib/copilot/run-state";
 import { stoppedReason } from "@/lib/copilot/stopped-turn";
 import {
   cachedThreadMessages,
+  historyErrorMessage,
   invalidateThreadMessagesCache,
   mergeAuthoritativeThreadMessages,
   mergeThreadMessagesById,
   refreshThreadHistoryPage,
   refreshThreadMessages,
   type StoredThread,
+  THREAD_HISTORY_REQUEST_TIMEOUT_MS,
 } from "@/lib/copilot/thread-messages";
 import { useAgentRun } from "@/lib/copilot/use-agent-run";
 import {
@@ -80,9 +82,6 @@ const JOIN_DEADLINE_MS = 1500;
  * Backstop for a message typed before the runtime agent exists; it must not be discarded.
  */
 const SEND_WITHOUT_RUNTIME_AFTER_MS = 1500;
-
-/** A history request must not hold the first send gate indefinitely. */
-const HISTORY_REFRESH_DEADLINE_MS = 4_000;
 
 function historyPageFromStored(stored: StoredThread): HistoryPage {
   return {
@@ -262,6 +261,7 @@ export function ChannelChat({
     initialHistoryRef.current?.messages ?? [],
   );
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyRetryNonce, setHistoryRetryNonce] = useState(0);
   const [joined, setJoined] = useState(false);
   /**
    * How many stored turns this app could not read.
@@ -291,7 +291,11 @@ export function ChannelChat({
             historyScope,
             channel.threadId,
             runtimeAgentId,
-            { olderCursor, signal },
+            {
+              olderCursor,
+              signal,
+              timeoutMs: THREAD_HISTORY_REQUEST_TIMEOUT_MS,
+            },
           ),
         store: historyStore,
       }),
@@ -362,6 +366,10 @@ export function ChannelChat({
 
   // Paint cached history immediately. The same bounded authoritative read gates the first send.
   useEffect(() => {
+    if (historyRetryNonce > 0) {
+      // An explicit retry must invalidate a successful stale read as well as a failed one.
+      historyHydration.reset();
+    }
     const attempt = historyAttempt.current + 1;
     historyAttempt.current = attempt;
     let current = true;
@@ -376,7 +384,7 @@ export function ChannelChat({
             channel.threadId,
             runtimeAgentId,
             {
-              signal: AbortSignal.timeout(HISTORY_REFRESH_DEADLINE_MS),
+              timeoutMs: THREAD_HISTORY_REQUEST_TIMEOUT_MS,
             },
           ),
       );
@@ -384,11 +392,7 @@ export function ChannelChat({
       if (outcome.status === "ready") {
         presentAuthoritativeHistory(outcome.value, "initial");
       } else {
-        setHistoryError(
-          outcome.error instanceof Error
-            ? outcome.error.message
-            : "Не удалось обновить историю диалога.",
-        );
+        setHistoryError(historyErrorMessage(outcome.error));
       }
       if (attempt === historyAttempt.current) {
         setRestoring(false);
@@ -404,6 +408,7 @@ export function ChannelChat({
     historyScope,
     presentAuthoritativeHistory,
     runtimeAgentId,
+    historyRetryNonce,
   ]);
 
   // Join independently. History already paints while CopilotKit is still preparing the agent.
@@ -542,7 +547,7 @@ export function ChannelChat({
           historyScope,
           channel.threadId,
           runtimeAgentId,
-          { signal: AbortSignal.timeout(HISTORY_REFRESH_DEADLINE_MS) },
+          { timeoutMs: THREAD_HISTORY_REQUEST_TIMEOUT_MS },
         );
         presentAuthoritativeHistory(stored);
         refreshFailure = null;
@@ -562,10 +567,7 @@ export function ChannelChat({
           return true;
         }
       } catch (error) {
-        refreshFailure =
-          error instanceof Error
-            ? error.message
-            : "Не удалось обновить историю диалога.";
+        refreshFailure = historyErrorMessage(error);
       }
     }
     if (refreshFailure && mounted.current) setHistoryError(refreshFailure);
@@ -644,7 +646,7 @@ export function ChannelChat({
             channel.threadId,
             runtimeAgentId,
             {
-              signal: AbortSignal.timeout(HISTORY_REFRESH_DEADLINE_MS),
+              timeoutMs: THREAD_HISTORY_REQUEST_TIMEOUT_MS,
             },
           ),
       );
@@ -932,14 +934,21 @@ export function ChannelChat({
     } catch (error) {
       if (mounted.current) {
         setHistoryError(
-          error instanceof Error
-            ? error.message
-            : "Не удалось загрузить предыдущие сообщения.",
+          historyErrorMessage(
+            error,
+            "Не удалось загрузить предыдущие сообщения.",
+          ),
         );
       }
       return null;
     }
   }, [historyPaginator]);
+
+  const retryHistory = useCallback(() => {
+    setHistoryError(null);
+    setRestoring((wasRestoring) => wasRestoring || historyPreview.length === 0);
+    setHistoryRetryNonce((nonce) => nonce + 1);
+  }, [historyPreview.length]);
 
   const currentMessages =
     agent.messages.length > 0 ? agent.messages : historyPreview;
@@ -997,8 +1006,18 @@ export function ChannelChat({
            */
           <>
             {historyError ? (
-              <p className="pb-2 text-sm text-destructive" role="alert">
-                Не удалось обновить историю диалога: {historyError}
+              <p
+                className="flex flex-wrap items-center gap-x-2 pb-2 text-sm text-destructive"
+                role="alert"
+              >
+                <span>Не удалось обновить историю диалога: {historyError}</span>
+                <button
+                  className="underline underline-offset-4 hover:no-underline"
+                  onClick={retryHistory}
+                  type="button"
+                >
+                  Повторить
+                </button>
               </p>
             ) : null}
             {unreadable > 0 ? (

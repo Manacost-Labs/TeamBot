@@ -75,6 +75,33 @@ describe("authoritative history hydration gate", () => {
 });
 
 describe("stable runtime target hydration", () => {
+  test("explicit reset permits a fresh read for the same target", async () => {
+    const target = { id: "current" };
+    const hydration = createStableHistoryHydration<string, typeof target>();
+    let loads = 0;
+
+    await expect(
+      hydration.ensureCurrentTarget(
+        () => target,
+        async () => {
+          loads += 1;
+          return `revision-${loads}`;
+        },
+      ),
+    ).resolves.toMatchObject({ status: "ready", value: "revision-1" });
+
+    hydration.reset();
+    await expect(
+      hydration.ensureCurrentTarget(
+        () => target,
+        async () => {
+          loads += 1;
+          return `revision-${loads}`;
+        },
+      ),
+    ).resolves.toMatchObject({ status: "ready", value: "revision-2" });
+  });
+
   test("rehydrates a replacement target and releases concurrent sends only to it", async () => {
     type Target = { messages: string[]; runs: number };
     const oldTarget: Target = { messages: [], runs: 0 };

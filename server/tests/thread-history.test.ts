@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { historyOrEmpty, isMissingThread } from "../src/copilot";
+import {
+  historyOrEmpty,
+  IntelligenceHistoryTimeoutError,
+  isMissingThread,
+  readIntelligenceThreadMessages,
+} from "../src/copilot";
 
 /**
  * Reading history on a thread the platform has never seen.
@@ -95,5 +100,62 @@ describe("reading a history that may not exist yet", () => {
         throw new Error("the network went away");
       }, empty),
     ).rejects.toThrow("the network went away");
+  });
+});
+
+describe("bounded Intelligence history transport", () => {
+  test("cancels a stalled fetch at the configured deadline", async () => {
+    let aborted = false;
+    const fetcher = (async (_input, init) => {
+      await new Promise<never>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            aborted = true;
+            reject(init.signal?.reason);
+          },
+          { once: true },
+        );
+      });
+      throw new Error("unreachable");
+    }) as typeof fetch;
+
+    await expect(
+      readIntelligenceThreadMessages(
+        { apiKey: "test-key", apiUrl: "https://intelligence.test/" },
+        { threadId: "thread-1", userId: "user-1" },
+        { fetcher, timeoutMs: 10 },
+      ),
+    ).rejects.toBeInstanceOf(IntelligenceHistoryTimeoutError);
+    expect(aborted).toBe(true);
+  });
+
+  test("preserves the platform response shape and request identity", async () => {
+    let requestUrl = "";
+    let requestInit: RequestInit | undefined;
+    const fetcher = (async (input, init) => {
+      requestUrl = String(input);
+      requestInit = init;
+      return Response.json({ messages: [{ id: "m1" }] });
+    }) as typeof fetch;
+
+    await expect(
+      readIntelligenceThreadMessages(
+        { apiKey: "test-key", apiUrl: "https://intelligence.test/" },
+        {
+          channelDeliveryId: "delivery-1",
+          threadId: "thread with spaces",
+          userId: "user-1",
+        },
+        { fetcher, timeoutMs: 100 },
+      ),
+    ).resolves.toEqual({ messages: [{ id: "m1" }] });
+    expect(requestUrl).toBe(
+      "https://intelligence.test/api/threads/thread%20with%20spaces/messages?userId=user-1",
+    );
+    expect(requestInit?.headers).toMatchObject({
+      Authorization: "Bearer test-key",
+      "X-Cpki-Channel-Delivery-Id": "delivery-1",
+    });
   });
 });

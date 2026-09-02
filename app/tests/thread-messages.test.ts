@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { ClientTimeoutError } from "../src/lib/client";
 import {
   cachedThreadMessages,
   clearThreadMessagesCache,
   createThreadHistoryCache,
+  historyErrorMessage,
   mergeAuthoritativeThreadMessages,
   mergeThreadMessagesById,
   readableHistoryPage,
@@ -268,6 +270,18 @@ describe("shapes a real thread contains", () => {
 });
 
 describe("bounded stale-while-revalidate history", () => {
+  test("turns transport timeout details into a retryable user message", () => {
+    expect(historyErrorMessage(new ClientTimeoutError(12_000))).toBe(
+      "Сервер истории не ответил вовремя. Повторите загрузку.",
+    );
+    expect(historyErrorMessage(new Error("signal timed out"))).toBe(
+      "Сервер истории не ответил вовремя. Повторите загрузку.",
+    );
+    expect(historyErrorMessage(new Error("permission denied"))).toBe(
+      "permission denied",
+    );
+  });
+
   test("reads a cursor page without exposing the cursor as a message field", () => {
     const page = readableHistoryPage({
       messages: [{ id: "one", role: "assistant", content: "One" }],
