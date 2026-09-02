@@ -1120,6 +1120,13 @@ export function createRequestAgents(
 ) {
   return async ({ request }: { request: Request }) => {
     const actor = await identifyActor(request);
+    // `/info` and the roster are intentionally readable before sign-in. Do not construct the
+    // personal-provider governor for that anonymous projection: its HMAC admission key is only
+    // meaningful for a real actor and would otherwise turn the public info request into a 500.
+    const governRemoteRun =
+      actor.id && governRemoteRunForActor
+        ? governRemoteRunForActor(actor.id)
+        : undefined;
     return resolveRuntimeAgents(
       () => loadAgents(actor),
       model,
@@ -1134,7 +1141,7 @@ export function createRequestAgents(
       handoffForActor?.(actor.id),
       undefined,
       prepareRunInputForActor?.(actor.id),
-      governRemoteRunForActor?.(actor.id),
+      governRemoteRun,
     );
   };
 }
@@ -1307,6 +1314,10 @@ export function mountCopilotRuntime(
     botId: string;
   }): Promise<AbstractAgent | null> => {
     const { actor } = input;
+    const governRemoteRun =
+      actor.id && governRemoteRunForActor
+        ? governRemoteRunForActor(actor.id)
+        : undefined;
     const agents = await resolveRuntimeAgents(
       () => loadAgents(actor),
       model,
@@ -1324,7 +1335,7 @@ export function mountCopilotRuntime(
       // what each of them was granted, on every delivery and again on every retry.
       input.botId,
       prepareRunInputForActor?.(actor.id),
-      governRemoteRunForActor?.(actor.id),
+      governRemoteRun,
     );
     return agents[input.botId] ?? null;
   };

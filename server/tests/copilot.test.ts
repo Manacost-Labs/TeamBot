@@ -852,6 +852,36 @@ describe("standing agent roles", () => {
     expect(resolved.agent_expense).toBeInstanceOf(HttpAgent);
   });
 
+  test("keeps anonymous runtime info free of personal-provider setup", async () => {
+    let governorBuilt = false;
+    const factory = createRequestAgents(
+      async () => ({ id: "", role: "user" as const }),
+      async () => [remoteAgent("http://coworker.internal/ag-ui")],
+      { provider: "openai", defaultModel: "gpt-5.6-terra" },
+      async () => null,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => {
+        governorBuilt = true;
+        throw new Error("anonymous actors must not build a personal governor");
+      },
+    );
+
+    const resolved = await factory({
+      request: new Request("http://openbot.test/api/copilotkit/info"),
+    });
+
+    expect(resolved.agent_expense).toBeInstanceOf(HttpAgent);
+    expect(governorBuilt).toBe(false);
+  });
+
   test("rebuilds each agent from the loader so an edited role applies to the next run", async () => {
     let roleDescription = "Review receipts.";
     const factory = createRequestAgents(
