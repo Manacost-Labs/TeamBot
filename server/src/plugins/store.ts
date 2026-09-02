@@ -176,6 +176,12 @@ export type SkillRecord = {
  */
 export type SkillActor = { id: string; isAdmin: boolean };
 
+/** The small, user-scoped projection used by settings diagnostics. */
+export type PluginConnectionHealth = {
+  available: { serverId: string; title: string }[];
+  connected: { serverId: string; connectedAt: string }[];
+};
+
 /** What one Bot holds. Everything the runtime needs to offer it, and nothing it does not. */
 export type GrantedPlugins = {
   tools: {
@@ -2748,6 +2754,47 @@ export function createPluginStore(options: PluginStoreOptions) {
         scope: row.scope,
         connectedAt: iso(row.connectedAt) ?? "",
       }));
+    },
+
+    /**
+     * The deliberately small projection for the settings health panel.
+     *
+     * `listServers` also loads every tool, grant and skill for the administrator's Plugins screen.
+     * A person checking whether their own Google account is connected needs none of that. Keeping
+     * this query separate prevents a diagnostic read from growing with the deployment's catalogue
+     * and avoids putting tool schemas into a page that only needs two counts.
+     */
+    async connectionHealthFor(userId: string): Promise<PluginConnectionHealth> {
+      const rows = await database
+        .select({ id: mcpServers.id, title: mcpServers.title })
+        .from(mcpServers)
+        .orderBy(asc(mcpServers.title));
+      const available = rows
+        .filter((row) => catalogueEntry(row.id)?.auth.kind === "user-oauth")
+        .map((row) => ({ serverId: row.id, title: row.title }));
+      if (available.length === 0 || !userId) {
+        return { available, connected: [] };
+      }
+
+      const availableIds = new Set(available.map((row) => row.serverId));
+      const connections = await database
+        .select({
+          serverId: mcpUserCredentials.serverId,
+          connectedAt: mcpUserCredentials.connectedAt,
+        })
+        .from(mcpUserCredentials)
+        .where(eq(mcpUserCredentials.userId, userId))
+        .orderBy(asc(mcpUserCredentials.serverId));
+
+      return {
+        available,
+        connected: connections
+          .filter((row) => availableIds.has(row.serverId))
+          .map((row) => ({
+            serverId: row.serverId,
+            connectedAt: iso(row.connectedAt) ?? "",
+          })),
+      };
     },
 
     /**

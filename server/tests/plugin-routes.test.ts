@@ -56,6 +56,87 @@ function appWith(
     });
 }
 
+function healthApp(
+  connectionHealthFor: (actorId: string) => Promise<unknown>,
+  role: "admin" | "user" = "user",
+) {
+  const store = {
+    connectionHealthFor,
+    listServers: async () => [],
+    listSkills: async () => [],
+    listGrants: async () => [],
+  };
+  return createApp(
+    loadConfig(testEnvironment()),
+    {
+      handler: () => new Response(null, { status: 204 }),
+      api: { getSession: async () => ({ user: ADMIN }) },
+    } as never,
+    { rolesForUser: async () => [role] },
+    ...(Array.from({ length: 11 }) as never[]),
+    store as never,
+  );
+}
+
+describe("plugin connection health", () => {
+  test("returns only the small actor-scoped projection", async () => {
+    let seenActorId = "";
+    const app = healthApp(async (actorId) => {
+      seenActorId = actorId;
+      return {
+        available: [{ serverId: "google-drive", title: "Google Drive" }],
+        connected: [
+          {
+            serverId: "google-drive",
+            connectedAt: "2026-09-01T10:00:00.000Z",
+          },
+        ],
+      };
+    });
+
+    const response = await app.request(
+      "http://openbot.test/api/plugins/health",
+    );
+
+    expect(response.status).toBe(200);
+    expect(seenActorId).toBe(ADMIN.id);
+    expect(await response.json()).toEqual({
+      available: [{ serverId: "google-drive", title: "Google Drive" }],
+      connected: [
+        {
+          serverId: "google-drive",
+          connectedAt: "2026-09-01T10:00:00.000Z",
+        },
+      ],
+    });
+  });
+
+  test("still requires a signed-in actor", async () => {
+    const unauthenticated = createApp(
+      loadConfig(testEnvironment()),
+      {
+        handler: () => new Response(null, { status: 204 }),
+        api: { getSession: async () => null },
+      } as never,
+      { rolesForUser: async () => [] },
+      ...(Array.from({ length: 11 }) as never[]),
+      {
+        connectionHealthFor: async () => {
+          throw new Error("the store must not be reached");
+        },
+        listServers: async () => [],
+        listSkills: async () => [],
+        listGrants: async () => [],
+      } as never,
+    );
+
+    expect(
+      (await unauthenticated.request("http://openbot.test/api/plugins/health"))
+        .status,
+    ).toBe(401);
+  });
+});
+
 describe("adding a curated server", () => {
   test("a refused credential comes back as a refusal with its reason", async () => {
     const request = appWith(async () => {

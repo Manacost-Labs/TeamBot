@@ -353,6 +353,15 @@ export function createPluginRoutes(
   });
 
   /**
+   * The settings health panel needs availability and connection counts, not the full Plugins page.
+   * Keep this read projection small so a growing tool catalogue cannot slow an ordinary settings
+   * visit or place schemas in a diagnostics response.
+   */
+  routes.get("/health", requireUser, async (context) => {
+    return context.json(await store.connectionHealthFor(context.var.actor.id));
+  });
+
+  /**
    * Begin connecting one person's own account.
    *
    * Answers with a URL rather than redirecting, so the browser decides when to leave the page. The

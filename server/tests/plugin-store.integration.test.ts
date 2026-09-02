@@ -1114,6 +1114,17 @@ describe("refresh token rotation", () => {
     expect(drive?.dynamicClient).toBe(false);
   });
 
+  test("connection health stays small and actor-scoped", async () => {
+    const health = await store.connectionHealthFor(`unknown-user-${suite}`);
+
+    expect(health.available).toContainEqual({
+      serverId: serverId,
+      title: "Google Drive",
+    });
+    expect(health.connected).toEqual([]);
+    expect(JSON.stringify(health)).not.toContain(toolName);
+  });
+
   test("the token the vendor rotated to is the one the next call presents", async () => {
     await connect();
     const before = await connectionCredential();

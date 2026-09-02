@@ -8,6 +8,7 @@ import {
 } from "@/components/layout/page-shell";
 import { RoutineWorkerHealthIndicator } from "@/components/routines/routine-worker-health";
 import { ChatGptConnectionCard } from "@/components/settings/chatgpt-connection-card";
+import { WorkspaceDiagnostics } from "@/components/settings/workspace-diagnostics";
 import { useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,6 +51,7 @@ function RouteComponent() {
       description={`Внешний вид, доступ к ИИ и интеграции ${appConfig.brand.productName} для вашей учётной записи.`}
       title="Настройки рабочего пространства"
     >
+      <WorkspaceDiagnostics />
       <PageSection title="Внешний вид">
         <PageRows>
           <Item size="sm">

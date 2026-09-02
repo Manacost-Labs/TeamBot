@@ -137,6 +137,7 @@ export const pluginKeys = {
   page: () => ["plugins", "page"] as const,
   forAgent: (agentId: string) => ["plugins", "for-agent", agentId] as const,
   connections: () => ["plugins", "connections"] as const,
+  connectionHealth: () => ["plugins", "connection-health"] as const,
 };
 
 /** One account this person has connected, from their own point of view. */
@@ -150,6 +151,11 @@ export type PluginConnection = {
 export type PluginConnections = {
   connections: PluginConnection[];
   redirectUri: string | null;
+};
+
+export type PluginConnectionHealth = {
+  available: { serverId: string; title: string }[];
+  connected: { serverId: string; connectedAt: string }[];
 };
 
 /**
@@ -167,6 +173,68 @@ export function connectionsQueryOptions() {
       });
       return response.json();
     },
+  });
+}
+
+export function projectPluginConnectionHealth(
+  value: unknown,
+): PluginConnectionHealth {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Plugin connection health returned an invalid response");
+  }
+  const source = value as Record<string, unknown>;
+  const rows = (candidate: unknown): Record<string, unknown>[] | null => {
+    if (!Array.isArray(candidate)) return null;
+    return candidate.every(
+      (row) => Boolean(row) && typeof row === "object" && !Array.isArray(row),
+    )
+      ? (candidate as Record<string, unknown>[])
+      : null;
+  };
+  const available = rows(source.available)?.map((row) => ({
+    serverId: row.serverId,
+    title: row.title,
+  }));
+  const connected = rows(source.connected)?.map((row) => ({
+    serverId: row.serverId,
+    connectedAt: row.connectedAt,
+  }));
+  if (
+    !available ||
+    !connected ||
+    available.some(
+      (row) =>
+        typeof row.serverId !== "string" || typeof row.title !== "string",
+    ) ||
+    connected.some(
+      (row) =>
+        typeof row.serverId !== "string" || typeof row.connectedAt !== "string",
+    )
+  ) {
+    throw new Error("Plugin connection health returned an invalid response");
+  }
+  return {
+    available: available.map((row) => ({
+      serverId: row.serverId as string,
+      title: row.title as string,
+    })),
+    connected: connected.map((row) => ({
+      serverId: row.serverId as string,
+      connectedAt: row.connectedAt as string,
+    })),
+  };
+}
+
+export function pluginConnectionHealthQueryOptions() {
+  return queryOptions({
+    queryKey: pluginKeys.connectionHealth(),
+    queryFn: async (): Promise<PluginConnectionHealth> => {
+      const response = await client("/api/plugins/health", {
+        fallback: "Plugin connection health could not be loaded.",
+      });
+      return projectPluginConnectionHealth(await response.json());
+    },
+    staleTime: 30_000,
   });
 }
 
