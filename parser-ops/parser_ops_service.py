@@ -38,6 +38,14 @@ TEST_PYTHON = os.environ.get(
     "/srv/projects/data/api-koloda-token-pr/.venv/bin/python",
 )
 EXPECTED_BRANCH = "agent/data-control"
+HSREPLAY_META_FRESH_ONLY_SOURCE_IDS = frozenset(
+    {
+        "hsreplay_meta_archetypes_legend_eu_1d",
+        "hsreplay_meta_top_1000_legend_1d_firecrawl",
+        "hsreplay_meta_legend_1d_firecrawl",
+        "hsreplay_meta_diamond_4to1_1d_firecrawl",
+    }
+)
 SOURCE_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,120}$")
 TEST_PATH = re.compile(r"^tests/test_[A-Za-z0-9_./-]+\.py$")
 SAFE_COMMIT = re.compile(r"^[a-f0-9]{40}$")
@@ -300,6 +308,12 @@ def audit_all_sources() -> dict[str, Any]:
         for source_id in health.get(field) or []:
             if isinstance(source_id, str):
                 flags.setdefault(source_id, set()).add(label)
+    for source in catalogue:
+        source_id = source.get("id")
+        if source_id not in HSREPLAY_META_FRESH_ONLY_SOURCE_IDS:
+            continue
+        if source.get("fresh_only_eligible") is not True:
+            flags.setdefault(str(source_id), set()).add("fresh_only_unverified")
     sources = [
         {
             "id": source.get("id"),
@@ -307,6 +321,8 @@ def audit_all_sources() -> dict[str, Any]:
             "category": source.get("category"),
             "hasDataset": source.get("has_dataset"),
             "datasetFetchedAt": source.get("dataset_fetched_at"),
+            "upstreamFreshness": source.get("upstream_freshness"),
+            "freshOnlyEligible": source.get("fresh_only_eligible"),
             "flags": sorted(flags.get(str(source.get("id")), set())),
         }
         for source in catalogue
@@ -408,7 +424,14 @@ def _diagnostic_triage(
             "reason": "A valid upstream candidate was preserved by the publication regression gate.",
         }
     if flags.intersection(
-        {"cached_after_failure", "hard_failed", "semantic_failed", "publication_failed", "stale"}
+        {
+            "cached_after_failure",
+            "hard_failed",
+            "semantic_failed",
+            "publication_failed",
+            "stale",
+            "fresh_only_unverified",
+        }
     ):
         return {
             "disposition": "investigate_implementation",
@@ -438,6 +461,8 @@ def diagnose_source(source_id: Any) -> dict[str, Any]:
         "category": catalogue_source.get("category"),
         "hasDataset": catalogue_source.get("has_dataset"),
         "datasetFetchedAt": catalogue_source.get("dataset_fetched_at"),
+        "upstreamFreshness": catalogue_source.get("upstream_freshness"),
+        "freshOnlyEligible": catalogue_source.get("fresh_only_eligible"),
         "flags": next(
             (
                 item["flags"]

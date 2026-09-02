@@ -99,6 +99,42 @@ class ParserOpsValidationTest(unittest.TestCase):
         self.assertEqual(result["sourceIds"], ["healthy", "broken"])
         self.assertEqual([item["id"] for item in result["problemSources"]], ["broken"])
 
+    def test_audit_marks_hsreplay_meta_without_fresh_only_evidence(self) -> None:
+        health = {
+            "data": {
+                "ok": True,
+                "stale_sources": [],
+                "cached_after_failure_sources": [],
+                "hard_failed_sources": [],
+                "semantic_failed_sources": [],
+                "publication_failed_sources": [],
+                "operationally_disabled_sources": [],
+            }
+        }
+        reliability = {"data": {"generated_at": "now", "windows": []}}
+        source_id = "hsreplay_meta_archetypes_legend_eu_1d"
+        catalogue = [
+            {
+                "id": source_id,
+                "site": "hsreplay",
+                "fresh_only_eligible": False,
+                "upstream_freshness": {
+                    "status": "unknown",
+                    "reason": "missing_evidence",
+                },
+            }
+        ]
+        with (
+            patch.object(service, "_request_json", side_effect=[health, reliability]),
+            patch.object(service, "_sources_catalogue", return_value=catalogue),
+        ):
+            result = service.audit_all_sources()
+
+        problem = result["problemSources"][0]
+        self.assertIn("fresh_only_unverified", problem["flags"])
+        self.assertEqual(problem["upstreamFreshness"]["status"], "unknown")
+        self.assertFalse(problem["freshOnlyEligible"])
+
     def test_reliability_windows_keep_decision_metrics_without_large_details(self) -> None:
         result = service._compact_reliability_windows(
             [
