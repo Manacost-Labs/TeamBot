@@ -3,8 +3,9 @@
 ## Status
 
 Approved by the owner on 2026-09-01. This breakdown implements the approved specification and
-implementation plan. The approval authorises implementation tasks 1–31, but does not authorise
-tasks 32–34 to touch copied production data, deploy a canary or change public traffic.
+implementation plan. The original approval authorised implementation tasks 1–31. Separate owner
+approvals subsequently authorised Task 32 (copied-production rehearsal) and Task 33 (loopback-only
+canary) on 2026-09-02. Task 34 still requires its own public-cutover approval.
 
 ## Standing definition of done
 
@@ -938,7 +939,10 @@ healthy. These checks validate the ordinary compatible runtime only and do not s
 - [x] Tasks 1–31 and the standing definition of done are complete.
 - [x] Approved spec, plan, task list, code, migrations and runbooks are committed on `main`.
 - [x] Owner receives a release summary, known limitations and exact canary prerequisites.
-- [ ] A new explicit approval is obtained before Task 32.
+- [x] A new explicit approval was obtained before Task 32; the copied-production rehearsal passed.
+- [x] A separate explicit approval was obtained before Task 33; the loopback canary is recorded in
+  `docs/manacostteam-canary-evidence.md` and remains incomplete at the integration gate.
+- [ ] A separate explicit approval is obtained before Task 34 public cutover.
 
 **Release handoff:** The source release implements Telegram allowlisted sessions, per-user ChatGPT
 or OpenRouter connections, actor-isolated Codex runtime profiles, ManacostTeam branding and the
@@ -946,7 +950,7 @@ documented operator workflow. The compatible runtime has already been updated th
 production deploy path; copied production data, the public route and canary/cutover traffic gates
 remain untouched.
 
-**Known limits:** Tasks 32–34 have not started. The 15 exact OSV exceptions and two rootful-container
+**Known limits:** Task 32 is complete, Task 33 is in progress and Task 34 has not started. The 15 exact OSV exceptions and two rootful-container
 architecture exceptions must be reviewed by 2026-12-01. Trivy skips the Helm chart until its pinned
 `postgresql` dependency has been fetched into `charts/openbot/charts`; lockfiles, templates and all
 ten repository Dockerfiles are still scanned by the completed gate.

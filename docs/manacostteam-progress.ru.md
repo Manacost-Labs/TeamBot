@@ -42,11 +42,13 @@ ManacostTeam. Каждый этап должен быть отдельным н�
 
 Подготовлен отдельный [canary-чеклист](manacostteam-canary-checklist.ru.md): backup/restore,
 owner-binding на копии, изолированный owner/editor smoke, проверка Google/AI/artifact путей и
-условия немедленного rollback. Он не выполняет операции сам и не заменяет отдельное разрешение на
-Task 32. Для rehearsal, canary и cutover подготовлены отдельные [шаблоны evidence](manacostteam-rehearsal-evidence.md),
-[canary evidence](manacostteam-canary-evidence.md) и [cutover evidence](manacostteam-cutover-evidence.md):
-они содержат только безопасные counts, bounded IDs и pass/fail поля и заполняются после соответствующего
-разрешения.
+условия немедленного rollback. Task 32 уже завершён на копии, а отдельное разрешение на Task 33
+получено для loopback-canary. Фактический [canary evidence](manacostteam-canary-evidence.md)
+фиксирует пройденную инфраструктуру и оставшиеся blockers; public cutover по-прежнему требует
+отдельного разрешения. Для rehearsal, canary и cutover используются отдельные
+[evidence-документы](manacostteam-rehearsal-evidence.md), [canary evidence](manacostteam-canary-evidence.md)
+и [cutover evidence](manacostteam-cutover-evidence.md), содержащие только безопасные counts,
+bounded IDs и pass/fail поля.
 
 На ревизии `8008525` продакшен уже получил два важных исправления: история чата повторно находит
 созданный агентом файл через авторизованный список вложений, а естественные сообщения вроде
@@ -83,8 +85,9 @@ credential и удаляет связь. При недоступности пр�
 unit, route и database regression-тесты; ревизия выкачена обычным production deploy и прошла smoke
 (`/=200`, `/health=200`, закрытый `/api/results=401`, все 10 runtime-контейнеров `healthy`). Для
 Notion дополнительно сверена живая OAuth-метадата: его `revocation_endpoint` намеренно совпадает с
-`https://mcp.notion.com/token`; это не повод менять закреплённый каталоговый URL. Task 32–34
-canary/cutover по-прежнему требуют отдельного разрешения.
+`https://mcp.notion.com/token`; это не повод менять закреплённый каталоговый URL. Task 32 завершён,
+Task 33 выполняется в loopback-canary, а Task 34 public cutover по-прежнему требует отдельного
+разрешения.
 
 Ревизия `ee85f7f` усилила drain-aware deployment helper: проверка текущего `agent-codex` выполняется
 до сборки, ошибки Compose/inspect/resume больше не скрываются, а cleanup возвращает ненулевой код
