@@ -15,13 +15,13 @@ import {
   type PersonalAiConnectionRoutesOptions,
 } from "./ai-connections/routes";
 import {
-  type AttachmentRouteDependencies,
-  createAttachmentRoutes,
-} from "./attachments/routes";
-import {
   type ArtifactRouteDependencies,
   createArtifactRoutes,
 } from "./artifacts/routes";
+import {
+  type AttachmentRouteDependencies,
+  createAttachmentRoutes,
+} from "./attachments/routes";
 import {
   type AuditReader,
   type AuditStore,

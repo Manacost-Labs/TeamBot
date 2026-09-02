@@ -1,11 +1,11 @@
 import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
-import type { AppVariables } from "../auth/guards";
 import {
   AttachmentQueryError,
   type AttachmentRecord,
   type AttachmentStore,
 } from "../attachments/store";
+import type { AppVariables } from "../auth/guards";
 
 const MAX_PAGE_SIZE = 100;
 
