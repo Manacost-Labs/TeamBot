@@ -13,6 +13,7 @@ Start with the root [README](../README.md), then use these references:
 - [Production workspace verification (2026-08-31, RU)](production-workspace-verification-2026-08-31.ru.md): release evidence, Definition of Done matrix, production smoke, and the remaining Google OAuth operator step.
 - [Переход к ManacostTeam](manacostteam-progress.ru.md): поэтапная карта перехода, критерии выхода и текущая точка.
 - [Навигация и производительность (2026-09-02)](navigation-performance-evidence-2026-09-02.ru.md): исправление прокрутки, render gate, bundle baseline и ограничения наблюдения.
+- [Технический и архитектурный аудит (2026-09-02)](architecture-audit-2026-09-02.ru.md): границы embed API, индекс токенов, quality/security baseline и результаты проверок.
 - [ManacostTeam canary checklist](manacostteam-canary-checklist.ru.md): изолированная rehearsal,
   smoke-сценарии, стоп-условия и rollback перед public cutover.
 - [Task 32 rehearsal evidence](manacostteam-rehearsal-evidence.md): безопасный шаблон backup/restore,

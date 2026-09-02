@@ -143,8 +143,9 @@ POST https://work.kolodahearthstone.com/api/copilotkit/agent/{agentId}/run
 and includes either `x-manacost-embed-token: obot_embed_…` or
 `Authorization: Bearer obot_embed_…`. The response is an AG-UI server-sent event stream. The token is
 scoped to the `{agentId}` in the URL; it cannot be used for another coworker, the callback-tools
-endpoint, administration or a different user's data. Existing visibility, personal AI connection,
-tool grants, audit and run limits still apply to the owner's run.
+endpoint, administration or a different user's data. The runtime mounts only that coworker for a
+scoped request and does not add cross-coworker handoff/escalation tools. Existing visibility,
+personal AI connection, tool grants, audit and run limits still apply to the owner's run.
 
 The body is the normal AG-UI `RunAgentInput` (for example `threadId`, `runId`, `messages`, `state`,
 `tools`, `context` and `forwardedProps`). Use the AG-UI client for parsing the event stream rather

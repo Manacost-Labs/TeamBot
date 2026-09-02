@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "agent_profiles_embed_token_hash_idx" ON "agent_profiles" USING btree ("embed_api_token_hash");

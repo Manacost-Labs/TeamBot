@@ -141,6 +141,22 @@ describe("runtime agent loading", () => {
     expect(idsOf(await loadAgents(otherUser))).toContain(profile.id);
   });
 
+  test("limits an embedding actor to its issued coworker", async () => {
+    const owner = await createUser();
+    const scoped = await createCoworker(owner, { name: "Scoped Coworker" });
+    const unrelated = await createCoworker(owner, {
+      name: "Unrelated Coworker",
+    });
+
+    const loaded = await loadAgents({
+      ...owner,
+      agentId: scoped.id,
+    });
+
+    expect(idsOf(loaded)).toEqual([scoped.id]);
+    expect(idsOf(loaded)).not.toContain(unrelated.id);
+  });
+
   test("drops a deleted coworker that has no history to restore", async () => {
     const owner = await createUser();
     const profile = await createCoworker(owner);

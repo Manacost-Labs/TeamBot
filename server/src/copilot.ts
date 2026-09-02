@@ -1130,6 +1130,10 @@ export function createRequestAgents(
       actor.id && governRemoteRunForActor
         ? governRemoteRunForActor(actor.id)
         : undefined;
+    // An embedding credential is scoped to one coworker. It must not expose the owner's handoff
+    // desk either: otherwise a remote model could use the callback to reach a second coworker even
+    // though the runtime roster itself is correctly narrowed.
+    const handoff = actor.agentId ? undefined : handoffForActor?.(actor.id);
     return resolveRuntimeAgents(
       () => loadAgents(actor),
       model,
@@ -1141,8 +1145,8 @@ export function createRequestAgents(
       loadVendors,
       selectionForActor?.(actor.id),
       agentFetch,
-      handoffForActor?.(actor.id),
-      undefined,
+      handoff,
+      actor.agentId,
       prepareRunInputForActor?.(actor.id),
       governRemoteRun,
     );

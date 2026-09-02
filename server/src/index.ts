@@ -127,6 +127,8 @@ type EmbedApiActor = {
   id: string;
   name: string;
   role: OpenBotRole;
+  /** The only coworker this embedding credential may mount. */
+  agentId: string;
 };
 
 /** Installed once the database-backed agent store exists. */
@@ -154,6 +156,7 @@ async function resolveRequestActor(request: Request): Promise<{
   id: string;
   name: string;
   role: OpenBotRole;
+  agentId?: string;
 }> {
   const embedToken = embedTokenFromRequest(request);
   if (embedToken) {
@@ -202,8 +205,8 @@ const ANONYMOUS_ACTOR = { id: "", role: "user" } as const;
 
 const identifyActor: IdentifyActor = async (request) => {
   try {
-    const { id, role } = await resolveRequestActor(request);
-    return { id, role };
+    const { id, role, agentId } = await resolveRequestActor(request);
+    return { id, role, ...(agentId ? { agentId } : {}) };
   } catch {
     return ANONYMOUS_ACTOR;
   }
@@ -388,6 +391,7 @@ embedApiActorResolver = async (request, token) => {
     id: resolved.ownerUserId,
     name: resolved.ownerName ?? resolved.ownerEmail,
     role,
+    agentId: resolved.id,
   };
 };
 

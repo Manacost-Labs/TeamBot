@@ -246,6 +246,13 @@
       "when": 1788390034994,
       "tag": "0034_regular_the_liberteens",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1788391765195,
+      "tag": "0035_parallel_tenebrous",
+      "breakpoints": true
     }
   ]
 }

@@ -87,6 +87,7 @@ function selectActiveAgents(database: Database, actor: AgentActor) {
     .innerJoin(agentProfiles, eq(agentProfiles.agentId, agents.id))
     .where(
       and(
+        actor.agentId ? eq(agents.id, actor.agentId) : undefined,
         isNull(agentProfiles.deletedAt),
         actor.role === "admin"
           ? undefined
@@ -118,5 +119,10 @@ function selectTombstoneAgents(database: Database, actor: AgentActor) {
         eq(channelMemberships.userId, actor.id),
       ),
     )
-    .where(isNotNull(agentProfiles.deletedAt));
+    .where(
+      and(
+        actor.agentId ? eq(agents.id, actor.agentId) : undefined,
+        isNotNull(agentProfiles.deletedAt),
+      ),
+    );
 }

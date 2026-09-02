@@ -15,6 +15,13 @@ export type AgentAdaptiveReasoningCeiling = "low" | "medium" | "high" | "xhigh";
 export type AgentActor = {
   id: string;
   role: "admin" | "user";
+  /**
+   * Optional runtime scope for a site-embedding credential.
+   *
+   * Normal users have no scope and keep the roster selected by visibility. An embed token carries
+   * this id so the runtime can never accidentally mount the owner's other coworkers.
+   */
+  agentId?: string;
 };
 
 export type AgentProfile = {

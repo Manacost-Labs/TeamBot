@@ -14,6 +14,7 @@ import {
   resolveRuntimeAgents,
   standingRoleMessage,
 } from "../src/copilot";
+import type { AgentActor } from "../src/agents/profile-types";
 import { grantedToolGuidance } from "../src/plugins/tools";
 
 // Every agent row now joins its profile, so the row a coworker is built from always names it.
@@ -850,6 +851,49 @@ describe("standing agent roles", () => {
     expect(seen.request).toBe(request);
     expect(seen.actors).toEqual([{ id: "user-7", role: "user" }]);
     expect(resolved.agent_expense).toBeInstanceOf(HttpAgent);
+  });
+
+  test("keeps an embedding request scoped to its coworker", async () => {
+    const seen: AgentActor[] = [];
+    let handoffFactoryCalls = 0;
+    const factory = createRequestAgents(
+      async () => ({
+        id: "user-7",
+        role: "user" as const,
+        agentId: "agent_expense",
+      }),
+      async (actor) => {
+        seen.push(actor);
+        return [
+          remoteAgent("http://coworker.internal/ag-ui"),
+          remoteAgent("http://other.internal/ag-ui", { id: "agent_other" }),
+        ];
+      },
+      { provider: "openai", defaultModel: "gpt-5.6-terra" },
+      async () => null,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => {
+        handoffFactoryCalls += 1;
+        return async () => [];
+      },
+    );
+
+    const resolved = await factory({
+      request: new Request("http://openbot.test/api/copilotkit"),
+    });
+
+    expect(seen).toEqual([
+      { id: "user-7", role: "user", agentId: "agent_expense" },
+    ]);
+    expect(Object.keys(resolved)).toEqual(["agent_expense"]);
+    expect(resolved.agent_other).toBeUndefined();
+    expect(handoffFactoryCalls).toBe(0);
   });
 
   test("keeps anonymous runtime info free of personal-provider setup", async () => {

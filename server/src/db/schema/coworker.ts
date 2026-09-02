@@ -69,6 +69,10 @@ export const agentProfiles = pgTable(
       table.visibility,
       table.deletedAt,
     ),
+    /** Token lookup is on every embedded request; keep it indexed and reject impossible duplicates. */
+    uniqueIndex("agent_profiles_embed_token_hash_idx").on(
+      table.embedApiTokenHash,
+    ),
   ],
 );
 

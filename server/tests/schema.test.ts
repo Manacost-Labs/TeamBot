@@ -368,6 +368,12 @@ describe("OpenBot database schema", () => {
         unique: false,
         method: "btree",
       },
+      {
+        name: "agent_profiles_embed_token_hash_idx",
+        columns: ["embed_api_token_hash"],
+        unique: true,
+        method: "btree",
+      },
     ]);
   });
 
@@ -405,6 +411,16 @@ describe("OpenBot database schema", () => {
     );
     expect(migration).toContain(
       `ALTER TABLE "agent_profiles" ADD COLUMN "embed_api_token_issued_at" timestamp with time zone;`,
+    );
+  });
+
+  test("indexes embedding credentials in the migration that introduces the lookup contract", async () => {
+    const migration = await readFile(
+      new URL("../drizzle/0035_parallel_tenebrous.sql", import.meta.url),
+      "utf8",
+    );
+    expect(migration).toContain(
+      `CREATE UNIQUE INDEX "agent_profiles_embed_token_hash_idx" ON "agent_profiles" USING btree ("embed_api_token_hash");`,
     );
   });
 
