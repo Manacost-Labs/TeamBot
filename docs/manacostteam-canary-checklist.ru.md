@@ -4,6 +4,9 @@
 переключения production-трафика. Каждый gate останавливается при первом несоответствии; следующий
 gate нельзя считать пройденным по одному только `/health`.
 
+Фактические результаты записываются только после разрешения в [шаблон rehearsal](manacostteam-rehearsal-evidence.md),
+[шаблон canary](manacostteam-canary-evidence.md) или [шаблон cutover](manacostteam-cutover-evidence.md).
+
 ## Границы и роли
 
 - **Оператор** подготавливает изолированный listener/hostname, backup и immutable image IDs.
