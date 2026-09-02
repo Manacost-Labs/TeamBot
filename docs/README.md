@@ -10,6 +10,8 @@ Start with the root [README](../README.md), then use these references:
 - [Переход к ManacostTeam](manacostteam-progress.ru.md): поэтапная карта перехода, критерии выхода и текущая точка.
 - [ManacostTeam canary checklist](manacostteam-canary-checklist.ru.md): изолированная rehearsal,
   smoke-сценарии, стоп-условия и rollback перед public cutover.
+- [Task 32 rehearsal evidence](manacostteam-rehearsal-evidence.md): безопасный шаблон backup/restore,
+  owner binding, resource counts и rollback; заполняется только после отдельного разрешения.
 - [Coworkers](coworkers.md): durable Bot profiles, channels, visibility, deletion, and external AG-UI registration.
 - [Routines](routines.md): standing instructions a Bot runs on a schedule, the worker that fires them, and who they run as.
 - [Main Editor → Google Docs runbook](runbooks/editor-google-docs.md): read-only model boundary, review screen, one-time write-back, rollout and troubleshooting.
