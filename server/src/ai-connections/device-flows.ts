@@ -24,7 +24,7 @@ const MAX_AUTH_DOCUMENT_BYTES = 256 * 1_024;
 const MAX_TOKEN_CHARACTERS = 192 * 1_024;
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const USER_CODE = /^[A-Z0-9]{4}(?:-[A-Z0-9]{4})+$/;
+const USER_CODE = /^[A-Z0-9]{4}(?:-[A-Z0-9]{4,5}){1,3}$/;
 const FLOW_STATES = new Set([
   "pending",
   "completed",

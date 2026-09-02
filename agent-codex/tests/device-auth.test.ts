@@ -36,7 +36,7 @@ function textStream(text: string): ReadableStream<Uint8Array> {
   });
 }
 
-const DEVICE_PROMPT = `Open this URL in your browser:\nhttps://auth.openai.com/codex/device\nEnter this one-time code:\nABCD-EFGH\n`;
+const DEVICE_PROMPT = `Open this URL in your browser:\nhttps://auth.openai.com/codex/device\nEnter this one-time code:\nABCD-EFGHJ\n`;
 const AUTH_DOCUMENT = JSON.stringify({
   auth_mode: "chatgpt",
   tokens: { access_token: "device-auth-secret" },
@@ -129,7 +129,7 @@ describe("ChatGPT device authentication coordinator", () => {
     expect(started.verificationUrl).toBe(
       "https://auth.openai.com/codex/device",
     );
-    expect(started.userCode).toBe("ABCD-EFGH");
+    expect(started.userCode).toBe("ABCD-EFGHJ");
     expect(JSON.stringify(started)).not.toContain("device-auth-secret");
 
     const profile = fixtureState.profiles[0];

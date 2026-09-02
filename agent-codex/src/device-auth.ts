@@ -16,7 +16,9 @@ const MAX_PROMPT_BYTES = 32 * 1_024;
 const MAX_AUTH_DOCUMENT_BYTES = 256 * 1_024;
 const FLOW_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const USER_CODE = /\b[A-Z0-9]{4}(?:-[A-Z0-9]{4})+\b/;
+// Codex 0.150 emits a four-character first group followed by a five-character group. Keep the
+// previous four-character group compatible as well, while retaining a small bounded grammar.
+const USER_CODE = /\b[A-Z0-9]{4}(?:-[A-Z0-9]{4,5}){1,3}\b/;
 const HTTPS_URL = /https:\/\/[^\s<>"']+/gi;
 
 export type DeviceAuthFlowState =

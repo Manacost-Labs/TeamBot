@@ -834,14 +834,16 @@ describe("agent-codex device-auth protocol client", () => {
         return Response.json({
           flowId: "33333333-3333-4333-8333-333333333333",
           verificationUrl: "https://auth.openai.com/codex/device",
-          userCode: "ABCD-EFGH",
+          userCode: "ABCD-EFGHJ",
           expiresAt: expiresAt.toISOString(),
         });
       },
       now: () => new Date(now),
     });
 
-    await client.start("33333333-3333-4333-8333-333333333333");
+    const started = await client.start("33333333-3333-4333-8333-333333333333");
+
+    expect(started.userCode).toBe("ABCD-EFGHJ");
 
     expect(requests).toHaveLength(1);
     const request = requests[0]!;
