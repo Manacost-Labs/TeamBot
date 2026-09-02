@@ -135,6 +135,12 @@ analyzer, edge-auth, БД и render/extract сервисы их не получ�
 после этого заменяет контейнеры. Это предотвращает `socket connection was closed unexpectedly` в
 долгом исследовании. При отменённом deployment helper снова открывает admission:
 
+Перед build helper проверяет, что Compose может получить текущий `agent-codex` и при наличии
+контейнера — успешно его inspect-ит; ошибка останавливает deployment до сборки. Если drain уже
+начался, исчезнувший контейнер, неудачный `inspect` или отрицательный ответ `/admin/resume` дают
+ненулевой exit-код. Cleanup повторяет попытку resume и также сообщает об ошибке восстановления
+`routine-worker`, поэтому сбой не превращается в ложный успешный релиз.
+
 ```sh
 ./scripts/deploy-production.sh
 docker compose -f "$COMPOSE_FILE" ps

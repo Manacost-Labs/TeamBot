@@ -81,42 +81,77 @@ else
 fi
 
 "${compose_cmd[@]}" config --quiet
+
+# Discover the managed agent before building anything. A failed Compose query must stop the
+# deployment rather than silently skipping the drain and replacing a live service.
+if ! agent_container=$("${compose_cmd[@]}" ps -q agent-codex 2>/dev/null); then
+	echo "Deployment cancelled: could not inspect the managed runtime before draining." >&2
+	exit 1
+fi
+if [[ -n "$agent_container" ]] && ! "${docker_cmd[@]}" inspect "$agent_container" >/dev/null 2>&1; then
+	echo "Deployment cancelled: managed runtime container could not be inspected before draining." >&2
+	exit 1
+fi
+
 if ((${#build_services[@]})); then
 	"${compose_cmd[@]}" build "${build_services[@]}"
 else
 	"${compose_cmd[@]}" build
 fi
 
-agent_container=$("${compose_cmd[@]}" ps -q agent-codex 2>/dev/null || true)
 drain_started=false
 routine_worker_stopped=false
 
 resume_agent() {
+	local require_container="${1:-false}"
 	local container
-	container=$("${compose_cmd[@]}" ps -q agent-codex 2>/dev/null || true)
-	if [[ -z "$container" ]] || ! "${docker_cmd[@]}" inspect "$container" >/dev/null 2>&1; then
-		return
+	if ! container=$("${compose_cmd[@]}" ps -q agent-codex 2>/dev/null); then
+		echo "Deployment failed: could not inspect the managed runtime while resuming." >&2
+		return 1
 	fi
-	"${docker_cmd[@]}" exec "$container" bun -e '
+	if [[ -z "$container" ]]; then
+		if [[ "$require_container" == true ]]; then
+			echo "Deployment failed: managed runtime disappeared while the deployment was draining." >&2
+			return 1
+		fi
+		return 0
+	fi
+	if ! "${docker_cmd[@]}" inspect "$container" >/dev/null 2>&1; then
+		echo "Deployment failed: managed runtime container could not be inspected while resuming." >&2
+		return 1
+	fi
+	if ! "${docker_cmd[@]}" exec "$container" bun -e '
     const response = await fetch("http://127.0.0.1:4202/admin/resume", {
       method: "POST",
       headers: { "x-openbot-agent-token": process.env.MANAGED_AGENT_TOKEN },
     });
     process.exit(response.ok ? 0 : 1);
-  ' >/dev/null 2>&1 || true
+  ' >/dev/null 2>&1; then
+		echo "Deployment failed: managed runtime admission could not resume." >&2
+		return 1
+	fi
 }
 
 cleanup() {
+	local exit_code=$?
+	trap - EXIT
+	set +e
 	if [[ "$routine_worker_stopped" == true ]]; then
-		"${compose_cmd[@]}" up -d --no-build routine-worker >/dev/null 2>&1 || true
+		if ! "${compose_cmd[@]}" up -d --no-build routine-worker >/dev/null 2>&1; then
+			echo "Deployment failed: routine-worker could not be restored during cleanup." >&2
+			exit_code=1
+		fi
 	fi
 	if [[ "$drain_started" == true ]]; then
-		resume_agent
+		if ! resume_agent true; then
+			exit_code=1
+		fi
 	fi
+	exit "$exit_code"
 }
 trap cleanup EXIT
 
-if [[ -n "$agent_container" ]] && "${docker_cmd[@]}" inspect "$agent_container" >/dev/null 2>&1; then
+if [[ -n "$agent_container" ]]; then
 	"${docker_cmd[@]}" exec "$agent_container" bun -e '
     const response = await fetch("http://127.0.0.1:4202/admin/drain", {
       method: "POST",
@@ -165,6 +200,8 @@ else
 fi
 
 routine_worker_stopped=false
-resume_agent
+if [[ "$drain_started" == true ]] && ! resume_agent true; then
+	exit 1
+fi
 drain_started=false
 trap - EXIT

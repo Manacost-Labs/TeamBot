@@ -5,6 +5,15 @@ import { join } from "node:path";
 
 const temporaryDirectories: string[] = [];
 
+type DeployTestOptions = {
+  agentRunning?: boolean;
+  expectedExitCode?: number;
+  failInspect?: boolean;
+  failPs?: boolean;
+  failResume?: boolean;
+  agentDisappearsAfterDrain?: boolean;
+};
+
 afterEach(async () => {
   await Promise.all(
     temporaryDirectories
@@ -13,7 +22,10 @@ afterEach(async () => {
   );
 });
 
-async function runDeploy(...services: string[]) {
+async function runDeploy(
+  options: DeployTestOptions = {},
+  ...services: string[]
+) {
   const directory = await mkdtemp(join(tmpdir(), "openbot-deploy-test-"));
   temporaryDirectories.push(directory);
   const log = join(directory, "docker.log");
@@ -27,7 +39,33 @@ for name in TELEGRAM_LOGIN_BOT_TOKEN TELEGRAM_OIDC_CLIENT_ID TELEGRAM_OIDC_CLIEN
   if printenv "$name" >/dev/null 2>&1; then printf 'ENV_PRESENT %s\\n' "$name" >> "$DEPLOY_TEST_LOG"; fi
 done
 if [ "$1" = "info" ]; then exit 0; fi
-if [ "$1" = "compose" ] && [ "$5" = "ps" ]; then exit 0; fi
+is_ps=false
+for arg in "$@"; do
+  if [ "$arg" = "ps" ]; then is_ps=true; fi
+done
+if [ "$1" = "compose" ] && [ "$is_ps" = "true" ]; then
+  if [ "\${DEPLOY_TEST_FAIL_PS:-0}" = "1" ]; then exit 17; fi
+  if [ "\${DEPLOY_TEST_AGENT_RUNNING:-0}" = "1" ]; then
+    ps_count_file="\${DEPLOY_TEST_LOG}.ps-count"
+    ps_count=0
+    if [ -f "$ps_count_file" ]; then ps_count=$(sed -n '1p' "$ps_count_file"); fi
+    ps_count=$((ps_count + 1))
+    printf '%s\\n' "$ps_count" > "$ps_count_file"
+    if [ "\${DEPLOY_TEST_AGENT_DISAPPEARS_AFTER_DRAIN:-0}" != "1" ] || [ "$ps_count" -eq 1 ]; then
+      printf 'agent-container\\n'
+    fi
+  fi
+  exit 0
+fi
+if [ "$1" = "inspect" ] && [ "\${DEPLOY_TEST_FAIL_INSPECT:-0}" = "1" ]; then exit 18; fi
+if [ "$1" = "exec" ]; then
+  case "$*" in
+    *"/admin/resume"*)
+      if [ "\${DEPLOY_TEST_FAIL_RESUME:-0}" = "1" ]; then exit 19; fi
+      ;;
+    *"/health"*) printf '0 0\\n';;
+  esac
+fi
 exit 0
 `,
   );
@@ -51,6 +89,12 @@ exit 0
         TELEGRAM_ALLOWED_USER_IDS: "123456789,987654321",
         TELEGRAM_OWNER_USER_IDS: "123456789",
         OPENROUTER_MODEL: "openai/synthetic-test-model",
+        DEPLOY_TEST_AGENT_RUNNING: options.agentRunning ? "1" : "0",
+        DEPLOY_TEST_FAIL_INSPECT: options.failInspect ? "1" : "0",
+        DEPLOY_TEST_FAIL_PS: options.failPs ? "1" : "0",
+        DEPLOY_TEST_FAIL_RESUME: options.failResume ? "1" : "0",
+        DEPLOY_TEST_AGENT_DISAPPEARS_AFTER_DRAIN:
+          options.agentDisappearsAfterDrain ? "1" : "0",
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -62,16 +106,16 @@ exit 0
     new Response(process.stdout).text(),
     new Response(process.stderr).text(),
   ]);
-  expect({ exitCode, stdout, stderr }).toEqual({
-    exitCode: 0,
-    stdout: "",
-    stderr: "",
-  });
-  return readFile(log, "utf8");
+  const expectedExitCode = options.expectedExitCode ?? 0;
+  expect(exitCode).toBe(expectedExitCode);
+  if (expectedExitCode === 0) {
+    expect({ stdout, stderr }).toEqual({ stdout: "", stderr: "" });
+  }
+  return { exitCode, log: await readFile(log, "utf8"), stderr, stdout };
 }
 
 test("a targeted OpenBot deployment also replaces its network-sharing routine worker", async () => {
-  const log = await runDeploy("openbot");
+  const { log } = await runDeploy({}, "openbot");
 
   expect(log).toContain("build openbot\n");
   expect(log).toContain("stop --timeout 30 routine-worker\n");
@@ -79,7 +123,7 @@ test("a targeted OpenBot deployment also replaces its network-sharing routine wo
 });
 
 test("an unrelated targeted deployment stays targeted", async () => {
-  const log = await runDeploy("agent-codex");
+  const { log } = await runDeploy({}, "agent-codex");
 
   expect(log).toContain("build agent-codex\n");
   expect(log).toContain("up -d --no-build --wait agent-codex\n");
@@ -87,7 +131,7 @@ test("an unrelated targeted deployment stays targeted", async () => {
 });
 
 test("a full deployment stops the network-sharing worker before replacement", async () => {
-  const log = await runDeploy();
+  const { log } = await runDeploy();
 
   expect(log).toContain("build\n");
   expect(log).toContain("stop --timeout 30 routine-worker\n");
@@ -95,7 +139,7 @@ test("a full deployment stops the network-sharing worker before replacement", as
 });
 
 test("uses the base and protected environment files only as Compose interpolation sources", async () => {
-  const log = await runDeploy("agent-codex");
+  const { log } = await runDeploy({}, "agent-codex");
   const repository = join(import.meta.dir, "..");
 
   expect(log).toContain(
@@ -108,4 +152,59 @@ test("uses the base and protected environment files only as Compose interpolatio
   expect(log).not.toContain("TELEGRAM_OWNER_USER_IDS=");
   expect(log).not.toContain("OPENROUTER_MODEL=");
   expect(log).not.toContain("ENV_PRESENT");
+});
+
+test("fails closed before build when Compose cannot inspect the managed runtime", async () => {
+  const result = await runDeploy(
+    { expectedExitCode: 1, failPs: true },
+    "agent-codex",
+  );
+
+  expect(result.stderr).toContain(
+    "Deployment cancelled: could not inspect the managed runtime before draining.",
+  );
+  expect(result.log).not.toContain("build agent-codex");
+  expect(result.log).not.toContain("up -d --no-build --wait agent-codex");
+});
+
+test("fails closed before build when the running managed runtime cannot be inspected", async () => {
+  const result = await runDeploy(
+    { agentRunning: true, expectedExitCode: 1, failInspect: true },
+    "agent-codex",
+  );
+
+  expect(result.stderr).toContain(
+    "Deployment cancelled: managed runtime container could not be inspected before draining.",
+  );
+  expect(result.log).not.toContain("build agent-codex");
+});
+
+test("returns a failure when the drained managed runtime cannot be resumed", async () => {
+  const result = await runDeploy(
+    { agentRunning: true, expectedExitCode: 1, failResume: true },
+    "agent-codex",
+  );
+
+  expect(result.stderr).toContain(
+    "Deployment failed: managed runtime admission could not resume.",
+  );
+  expect(
+    (result.log.match(/\/admin\/resume/g) ?? []).length,
+  ).toBeGreaterThanOrEqual(2);
+});
+
+test("returns a failure when the drained managed runtime disappears", async () => {
+  const result = await runDeploy(
+    {
+      agentDisappearsAfterDrain: true,
+      agentRunning: true,
+      expectedExitCode: 1,
+    },
+    "agent-codex",
+  );
+
+  expect(result.stderr).toContain(
+    "Deployment failed: managed runtime disappeared while the deployment was draining.",
+  );
+  expect(result.log).not.toContain("/admin/resume");
 });
