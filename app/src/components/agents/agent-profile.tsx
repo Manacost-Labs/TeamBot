@@ -6,6 +6,7 @@ import { AbstractAvatar } from "@/components/agents/abstract-avatar";
 import { AgentCapabilities } from "@/components/agents/agent-capabilities";
 import { AgentFields } from "@/components/agents/agent-fields";
 import { CallbackTokenPanel } from "@/components/agents/callback-token-panel";
+import { EmbedApiPanel } from "@/components/agents/embed-api-panel";
 import { HandoffPanel } from "@/components/agents/handoff-panel";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -111,6 +112,7 @@ export function AgentProfile({ agentId }: { agentId: string }) {
         <div className="flex flex-wrap justify-center gap-1.5">
           <Tag>{profile.visibility === "private" ? "Личный" : "Общий"}</Tag>
           {profile.systemOwned ? <Tag>Системный</Tag> : null}
+          {profile.folder ? <Tag>{profile.folder}</Tag> : null}
         </div>
         {profile.canManage && !isEditing ? (
           <Button
@@ -132,6 +134,7 @@ export function AgentProfile({ agentId }: { agentId: string }) {
             name: profile.name,
             avatarSeed: profile.avatarSeed,
             roleDescription: profile.roleDescription,
+            folder: profile.folder ?? "",
             title: profile.title,
             visibility: profile.visibility,
             endpoint: profile.endpoint ?? "",
@@ -189,6 +192,10 @@ export function AgentProfile({ agentId }: { agentId: string }) {
           agentId={agentId}
           hasToken={profile.hasCallbackToken}
         />
+      ) : null}
+
+      {!isEditing && profile.canManage && !profile.systemOwned ? (
+        <EmbedApiPanel agentId={agentId} hasToken={profile.hasEmbedApiToken} />
       ) : null}
 
       {/*

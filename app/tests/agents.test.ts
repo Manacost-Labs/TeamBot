@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { groupAgentsByFolder } from "@/lib/agents/grouping";
 import {
   agentFormSchema,
   agentInputFrom,
@@ -17,6 +18,43 @@ describe("coworker query keys", () => {
       "channels",
       "detail",
       "channel_1",
+    ]);
+  });
+});
+
+describe("coworker folders", () => {
+  test("groups named folders first and puts empty folders last", () => {
+    const base = {
+      name: "Agent",
+      title: "Role",
+      roleDescription: "Description",
+      avatarSeed: "seed",
+      visibility: "private" as const,
+      endpoint: null,
+      hasAuth: false,
+      model: null,
+      reasoningEffort: null,
+      reasoningCeiling: null,
+      hasCallbackToken: false,
+      hidden: false,
+      systemOwned: false,
+      canManage: true,
+      mine: true,
+    };
+    const groups = groupAgentsByFolder([
+      { ...base, id: "unfiled" },
+      { ...base, id: "editor", folder: "Редакция" },
+      { ...base, id: "control", folder: "Технический контроль" },
+      { ...base, id: "another-editor", folder: "Редакция" },
+    ]);
+    expect(groups.map((group) => group.folder)).toEqual([
+      "Редакция",
+      "Технический контроль",
+      "Без папки",
+    ]);
+    expect(groups[0]?.agents.map((agent) => agent.id)).toEqual([
+      "editor",
+      "another-editor",
     ]);
   });
 });

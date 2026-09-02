@@ -1,5 +1,7 @@
 import {
   IconArrowLeft,
+  IconBox,
+  IconClock,
   IconLayoutGrid,
   IconPlug,
   IconSettings,
@@ -46,6 +48,16 @@ export const SETTINGS_ITEMS: {
     title: "Интеграции",
     icon: IconPlug,
     linkOptions: { to: "/settings/connected-accounts" },
+  },
+  {
+    title: "Автоматизация",
+    icon: IconClock,
+    linkOptions: { to: "/routines" },
+  },
+  {
+    title: "Навыки",
+    icon: IconBox,
+    linkOptions: { to: "/skills" },
   },
   {
     /* The same mark Admin gives UI Components. It is the same subject seen from the other side. */

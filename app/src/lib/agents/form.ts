@@ -20,6 +20,7 @@ export const agentFormSchema = z.object({
     .trim()
     .min(1, "Role description is required.")
     .max(1000, "Role description must be 1000 characters or fewer."),
+  folder: z.string().trim().max(80, "Folder must be 80 characters or fewer."),
   avatarSeed: z
     .string()
     .trim()
@@ -69,6 +70,7 @@ export const emptyAgentForm: AgentFormValues = {
   name: "",
   title: "",
   roleDescription: "",
+  folder: "",
   avatarSeed: "",
   visibility: "private",
   endpoint: "",
@@ -84,6 +86,7 @@ export function agentInputFrom(values: AgentFormValues) {
     name: values.name,
     title: values.title,
     roleDescription: values.roleDescription,
+    folder: values.folder.trim() || null,
     ...(values.avatarSeed.trim()
       ? { avatarSeed: values.avatarSeed.trim() }
       : {}),

@@ -3,7 +3,10 @@ import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import { authoriseAgentCall, sameToken } from "./agents/callback-token";
 import type { BotAccessCheck } from "./agents/profile-policy";
-import type { AgentProfileStore } from "./agents/profile-store";
+import type {
+  AgentEmbedStore,
+  AgentProfileStore,
+} from "./agents/profile-store";
 import { createAgentRoutes } from "./agents/routes";
 import type { ChatGptDeviceFlowService } from "./ai-connections/device-flows";
 import {
@@ -253,6 +256,11 @@ export function createApp(
   personalAiDeviceFlows?: ChatGptDeviceFlowService,
   /** Owner-scoped generated artifact index; appended to preserve positional call sites. */
   artifactRoutes?: ArtifactRouteDependencies,
+  /** Site-embedding credential and the explicit browser origins allowed to call AG-UI. */
+  agentEmbedApi?: {
+    store: AgentEmbedStore;
+    allowedOrigins: ReadonlySet<string>;
+  },
 ) {
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -803,6 +811,52 @@ export function createApp(
   // The CopilotKit runtime, behind the same session guard as every other API route. Mounted last so
   // its own routing under /api/copilotkit cannot shadow an OpenBot route declared above.
   if (copilotHandler) {
+    if (agentEmbedApi) {
+      /*
+       * AG-UI is also the site API. Browser callers need an explicit allow-list because a token in
+       * a page is a credential: wildcard CORS would let any origin spend it. Non-browser/server
+       * callers do not send Origin and continue through the same runtime path.
+       */
+      app.use("/api/copilotkit/*", async (context, next) => {
+        const origin = context.req.header("origin");
+        const allowed = Boolean(
+          origin && agentEmbedApi.allowedOrigins.has(origin),
+        );
+        const embedHeader = context.req.header("x-manacost-embed-token");
+        const bearer = context.req.header("authorization");
+        const hasEmbedCredential =
+          Boolean(embedHeader) ||
+          Boolean(bearer?.startsWith("Bearer obot_embed_"));
+
+        if (origin && !allowed && hasEmbedCredential) {
+          return context.json(
+            {
+              error: "This website origin is not allowed for agent embedding.",
+            },
+            403,
+          );
+        }
+        if (context.req.method === "OPTIONS") {
+          if (!allowed) return context.body(null, 403);
+          context.header("Access-Control-Allow-Origin", origin as string);
+          context.header("Access-Control-Allow-Credentials", "true");
+          context.header(
+            "Access-Control-Allow-Headers",
+            "content-type, x-manacost-embed-token, authorization",
+          );
+          context.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+          context.header("Access-Control-Max-Age", "600");
+          context.header("Vary", "Origin");
+          return context.body(null, 204);
+        }
+        if (allowed) {
+          context.header("Access-Control-Allow-Origin", origin as string);
+          context.header("Access-Control-Allow-Credentials", "true");
+          context.header("Vary", "Origin");
+        }
+        await next();
+      });
+    }
     // Mounted at the ROOT with the handler carrying its own basePath. Mounting it at
     // "/api/copilotkit" as well double-prefixes it: Hono strips the prefix before the handler sees
     // the path, so every route lands at /api/copilotkit/api/copilotkit/* and /info 404s. The browser
@@ -906,6 +960,7 @@ export function createApp(
                 pluginStore.botsReachableFrom(agentId),
             }
           : undefined,
+        agentEmbedApi?.store,
       ),
     );
     // Choosing a coworker for an untagged message needs the same permission-filtered roster the

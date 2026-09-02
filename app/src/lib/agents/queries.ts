@@ -14,6 +14,8 @@ export type AgentProfile = {
   name: string;
   title: string;
   roleDescription: string;
+  /** Optional workspace folder; absent means the default "Без папки" group. */
+  folder?: string | null;
   avatarSeed: string;
   visibility: AgentVisibility;
   /** Where this coworker runs. Null for the Bot in the box. */
@@ -41,6 +43,8 @@ export type AgentProfile = {
    * surface needs this only to decide between offering "generate" and "rotate".
    */
   hasCallbackToken: boolean;
+  /** Whether a site-embedding credential exists; the credential is shown only once on issuance. */
+  hasEmbedApiToken?: boolean;
   hidden: boolean;
   systemOwned: boolean;
   canManage: boolean;

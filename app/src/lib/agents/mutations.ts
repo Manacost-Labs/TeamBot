@@ -6,6 +6,7 @@ export type AgentInput = {
   name: string;
   title: string;
   roleDescription: string;
+  folder?: string | null;
   visibility: AgentVisibility;
   /** Where this coworker runs. Empty means the Bot in the box. */
   endpoint?: string;
@@ -121,6 +122,31 @@ export function revokeCallbackTokenMutationOptions(queryClient: QueryClient) {
   return mutationOptions({
     mutationFn: async (agentId: string) => {
       await client(`/api/agents/${agentId}/callback-token`, {
+        method: "DELETE",
+        fallback: FALLBACK,
+      });
+    },
+    onSuccess: () => invalidateAgents(queryClient),
+  });
+}
+
+/** Issue a credential for a website embedding this one coworker through AG-UI. */
+export function issueEmbedApiTokenMutationOptions(queryClient: QueryClient) {
+  return mutationOptions({
+    mutationFn: (agentId: string): Promise<string> =>
+      client(`/api/agents/${agentId}/embed-token`, "token", {
+        method: "POST",
+        fallback: FALLBACK,
+      }),
+    onSuccess: () => invalidateAgents(queryClient),
+  });
+}
+
+/** Revoke the website credential without affecting the coworker's normal chat access. */
+export function revokeEmbedApiTokenMutationOptions(queryClient: QueryClient) {
+  return mutationOptions({
+    mutationFn: async (agentId: string) => {
+      await client(`/api/agents/${agentId}/embed-token`, {
         method: "DELETE",
         fallback: FALLBACK,
       });

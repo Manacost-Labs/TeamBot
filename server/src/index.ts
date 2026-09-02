@@ -123,6 +123,26 @@ import {
 import { repeatAfterEach } from "./work/loop";
 import { createWorkQueue } from "./work/queue";
 
+type EmbedApiActor = {
+  id: string;
+  name: string;
+  role: OpenBotRole;
+};
+
+/** Installed once the database-backed agent store exists. */
+let embedApiActorResolver:
+  | ((request: Request, token: string) => Promise<EmbedApiActor | null>)
+  | undefined;
+
+function embedTokenFromRequest(request: Request): string | null {
+  const explicit = request.headers.get("x-manacost-embed-token")?.trim();
+  if (explicit) return explicit;
+  const authorization = request.headers.get("authorization")?.trim();
+  return authorization?.startsWith("Bearer obot_embed_")
+    ? authorization.slice("Bearer ".length).trim()
+    : null;
+}
+
 /**
  * Who is asking, for a CopilotKit request.
  *
@@ -135,6 +155,14 @@ async function resolveRequestActor(request: Request): Promise<{
   name: string;
   role: OpenBotRole;
 }> {
+  const embedToken = embedTokenFromRequest(request);
+  if (embedToken) {
+    const actor = await embedApiActorResolver?.(request, embedToken);
+    if (!actor) {
+      throw new Error("This agent embedding credential is invalid or revoked.");
+    }
+    return actor;
+  }
   if (config.singleUser) {
     return { id: DEV_ACTOR.id, name: DEV_ACTOR.email, role: DEV_ACTOR.role };
   }
@@ -183,6 +211,29 @@ const identifyActor: IdentifyActor = async (request) => {
 
 const config = loadConfig();
 const port = Number.parseInt(process.env.PORT ?? "3001", 10);
+
+function normalizedOrigin(value: string | undefined): string | null {
+  if (!value?.trim()) return null;
+  try {
+    const origin = new URL(value.trim());
+    return origin.protocol === "http:" || origin.protocol === "https:"
+      ? origin.origin
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Browser origins allowed to use an embed token; empty means server-to-server only. */
+const agentEmbedAllowedOrigins = new Set(
+  [
+    config.appUrl,
+    config.publicUrl,
+    ...(process.env.AGENT_EMBED_ALLOWED_ORIGINS ?? "").split(","),
+  ]
+    .map(normalizedOrigin)
+    .filter((origin): origin is string => origin !== null),
+);
 const database = createDatabase(config.databaseUrl);
 await initializeDevActorUser(database, config.singleUser);
 // The vault, built before the agent store because a customer's agent may sit behind a key and that
@@ -307,6 +358,39 @@ const channelActivityListener = await startChannelActivityListener(
   channelEvents,
 );
 const roleRepository = createRoleRepository(database);
+
+/*
+ * A token is accepted only on the AG-UI path for the exact agent it was issued for. It resolves to
+ * the owner's role, so existing visibility, model-connection and tool-grant checks remain in force;
+ * the token is not a second permission system.
+ */
+embedApiActorResolver = async (request, token) => {
+  const match = new URL(request.url).pathname.match(
+    /^\/api\/copilotkit\/agent\/([^/]+)\/(?:run|connect)$/,
+  );
+  if (!match?.[1]) return null;
+  let agentId: string;
+  try {
+    agentId = decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+  const resolved = await agentProfileStore.agentForEmbedApiToken(token);
+  if (!resolved || resolved.id !== agentId) return null;
+  const roles = await roleRepository.rolesForUser(resolved.ownerUserId);
+  const role = roles.includes("admin")
+    ? "admin"
+    : roles.includes("user")
+      ? "user"
+      : null;
+  if (!role) return null;
+  return {
+    id: resolved.ownerUserId,
+    name: resolved.ownerName ?? resolved.ownerEmail,
+    role,
+  };
+};
+
 const loadAgentsForActor = createRuntimeAgentLoader(
   database,
   agentVault,
@@ -1238,6 +1322,10 @@ const app = createApp(
     : undefined,
   personalAiDeviceFlows,
   { store: attachmentStore },
+  {
+    store: agentProfileStore,
+    allowedOrigins: agentEmbedAllowedOrigins,
+  },
 );
 
 /**

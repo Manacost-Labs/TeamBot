@@ -337,6 +337,8 @@ export const auditEventTypes = [
   "bot.deleted",
   "bot.callback_token_issued",
   "bot.callback_token_revoked",
+  "bot.embed_token_issued",
+  "bot.embed_token_revoked",
 
   /*
    * One Bot handing work to another.

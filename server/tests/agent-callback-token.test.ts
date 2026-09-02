@@ -2,8 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   authoriseAgentCall,
   hashCallbackToken,
+  hashEmbedApiToken,
   looksLikeCallbackToken,
+  looksLikeEmbedApiToken,
   mintCallbackToken,
+  mintEmbedApiToken,
   mintRunAssertion,
   readRunAssertion,
   runAssertionTtlMs,
@@ -37,6 +40,17 @@ describe("an agent's callback token", () => {
         hashCallbackToken(mintCallbackToken()),
       ),
     ).toBe(false);
+  });
+});
+
+describe("a website's embed token", () => {
+  test("uses its own recognisable namespace and one-way hash", () => {
+    const token = mintEmbedApiToken();
+    expect(token).toMatch(/^obot_embed_/);
+    expect(looksLikeEmbedApiToken(token)).toBe(true);
+    expect(looksLikeCallbackToken(token)).toBe(false);
+    expect(looksLikeEmbedApiToken("obot_embed_")).toBe(false);
+    expect(hashEmbedApiToken(token)).not.toContain(token);
   });
 });
 

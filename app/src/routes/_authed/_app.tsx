@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, Outlet } from "@tanstack/react-router";
+import { createFileRoute, Outlet, useLocation } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { AppSidebar } from "@/components/app-sidebar/app-sidebar";
 import { MobileSidebarHeader } from "@/components/layout/mobile-sidebar-header";
+import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import {
   WORKSPACE_MAIN_CLASS,
   WORKSPACE_PROVIDER_CLASS,
@@ -17,11 +18,17 @@ export const Route = createFileRoute("/_authed/_app")({
 });
 
 function RouteComponent() {
+  const pathname = useLocation({ select: (location) => location.pathname });
   const { data: currentUser } = useQuery(currentUserQueryOptions());
   const currentUserId = currentUser?.id;
   useEffect(() => {
     if (currentUserId) setAgentRunSessionScope(currentUserId);
   }, [currentUserId]);
+
+  // Skills and automation are workspace settings, but keep their existing URLs so bookmarks and
+  // links from older clients continue to work. The shell swaps only the navigation rail; the page
+  // routes and their query state stay untouched.
+  const settingsSurface = pathname === "/skills" || pathname === "/routines";
 
   return (
     <SidebarProvider
@@ -33,9 +40,15 @@ function RouteComponent() {
         } as React.CSSProperties
       }
     >
-      <AppSidebar />
+      {settingsSurface ? <SettingsSidebar /> : <AppSidebar />}
       <main className={WORKSPACE_MAIN_CLASS}>
-        <MobileSidebarHeader title={appConfig.brand.productName} />
+        <MobileSidebarHeader
+          title={
+            settingsSurface
+              ? "Настройки рабочего пространства"
+              : appConfig.brand.productName
+          }
+        />
         <Outlet />
       </main>
     </SidebarProvider>

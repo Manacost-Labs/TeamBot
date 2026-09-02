@@ -38,6 +38,8 @@ export type AgentProfile = {
   reasoningEffort: AgentReasoningEffort | null;
   /** Maximum effort an adaptive employee may select. Null unless adaptive mode is enabled. */
   reasoningCeiling: AgentAdaptiveReasoningCeiling | null;
+  /** Optional workspace folder used to group coworkers in the roster. */
+  folder?: string | null;
   /**
    * Whether this agent holds a credential for calling tools back.
    *
@@ -45,6 +47,8 @@ export type AgentProfile = {
    * it. A surface only needs to know whether to offer "generate" or "rotate".
    */
   hasCallbackToken: boolean;
+  /** Whether this coworker has a site-embedding credential. The credential itself is never returned. */
+  hasEmbedApiToken?: boolean;
 };
 
 export type CreateAgentInput = Pick<
@@ -74,4 +78,6 @@ export type CreateAgentInput = Pick<
   reasoningCeiling?: AgentAdaptiveReasoningCeiling | null;
   /** Optional deterministic avatar seed; the server mints one when omitted. */
   avatarSeed?: string;
+  /** Optional workspace folder. A supplied null/empty value clears it on update. */
+  folder?: string | null;
 };

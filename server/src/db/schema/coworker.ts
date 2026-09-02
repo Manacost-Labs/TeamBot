@@ -39,6 +39,8 @@ export const agentProfiles = pgTable(
     roleDescription: text("role_description").notNull(),
     avatarSeed: text("avatar_seed").notNull(),
     visibility: agentVisibility("visibility").notNull(),
+    /** Optional human grouping, for example "Технический контроль" or "Редакция". */
+    folder: text("folder"),
     /*
      * The credential this Bot's agent presents when it calls a tool back.
      *
@@ -51,6 +53,11 @@ export const agentProfiles = pgTable(
      */
     callbackTokenHash: text("callback_token_hash"),
     callbackTokenIssuedAt: timestamp("callback_token_issued_at", {
+      withTimezone: true,
+    }),
+    /** Hash of the site-embedding credential; the raw token is returned once on issuance. */
+    embedApiTokenHash: text("embed_api_token_hash"),
+    embedApiTokenIssuedAt: timestamp("embed_api_token_issued_at", {
       withTimezone: true,
     }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),

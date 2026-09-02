@@ -9,6 +9,7 @@ import { canManageAgent } from "./profile-policy";
 import {
   AgentNotFoundError,
   AgentNotManageableError,
+  type AgentEmbedStore,
   type AgentProfileStore,
   CustomAgentModelError,
   ManagedAgentUnavailableError,
@@ -35,6 +36,7 @@ type AgentInputObject = {
   model?: unknown;
   reasoningEffort?: unknown;
   reasoningCeiling?: unknown;
+  folder?: unknown;
 };
 
 const REASONING_EFFORTS = new Set([
@@ -94,6 +96,21 @@ export function parseAgentInput(
     "Role description must be text between 1 and 1000 characters.",
   );
   if (typeof roleDescription !== "string") return roleDescription;
+
+  let folder: string | null | undefined;
+  if (input.folder !== undefined) {
+    if (input.folder === null || input.folder === "") {
+      folder = null;
+    } else {
+      const parsedFolder = boundedText(
+        input.folder,
+        80,
+        "Folder must be text between 1 and 80 characters.",
+      );
+      if (typeof parsedFolder !== "string") return parsedFolder;
+      folder = parsedFolder;
+    }
+  }
 
   let avatarSeed: string | undefined;
   if (input.avatarSeed !== undefined && input.avatarSeed !== "") {
@@ -224,6 +241,7 @@ export function parseAgentInput(
       name,
       title,
       roleDescription,
+      ...(folder !== undefined ? { folder } : {}),
       ...(avatarSeed ? { avatarSeed } : {}),
       visibility,
       ...(endpoint ? { endpoint } : {}),
@@ -278,6 +296,8 @@ export function createAgentRoutes(
     /** The Bots this one may address today, read per call so a revoked grant stops showing. */
     reachableFrom: (agentId: string) => Promise<readonly string[]>;
   },
+  /** Optional site-embedding API credential operations. */
+  embed?: AgentEmbedStore,
 ) {
   const routes = new Hono<{ Variables: AppVariables }>();
 
@@ -588,6 +608,46 @@ export function createAgentRoutes(
     }
   });
 
+  if (embed) {
+    /*
+     * Issue a scoped site credential and show it once. Rotation replaces the previous hash, so a
+     * lost or leaked token is retired by pressing the same button again.
+     */
+    routes.post("/:agentId/embed-token", requireUser, async (context) => {
+      try {
+        const token = await embed.issueEmbedApiToken(
+          context.var.actor,
+          context.req.param("agentId"),
+        );
+        await record(
+          context,
+          "bot.embed_token_issued",
+          context.req.param("agentId"),
+        );
+        return context.json({ token }, 201);
+      } catch (error) {
+        return mapStoreError(context, error);
+      }
+    });
+
+    routes.delete("/:agentId/embed-token", requireUser, async (context) => {
+      try {
+        await embed.revokeEmbedApiToken(
+          context.var.actor,
+          context.req.param("agentId"),
+        );
+        await record(
+          context,
+          "bot.embed_token_revoked",
+          context.req.param("agentId"),
+        );
+        return context.body(null, 204);
+      } catch (error) {
+        return mapStoreError(context, error);
+      }
+    });
+  }
+
   routes.delete("/:agentId", requireUser, async (context) => {
     try {
       await store.softDelete(context.var.actor, context.req.param("agentId"));
@@ -661,8 +721,10 @@ function agentDto(actor: AgentActor, agent: AgentProfile) {
     model: agent.model,
     reasoningEffort: agent.reasoningEffort,
     reasoningCeiling: agent.reasoningCeiling,
+    ...(agent.folder ? { folder: agent.folder } : {}),
     // Whether one exists, never what it is.
     hasCallbackToken: agent.hasCallbackToken,
+    ...(agent.hasEmbedApiToken ? { hasEmbedApiToken: true } : {}),
     canManage: canManageAgent(actor, agent),
     // Ownership, kept separate from permission. `canManage` is also true for an administrator on
     // another user's coworker, so a roster that split "mine" on it would file other people's work

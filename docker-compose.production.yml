@@ -138,6 +138,9 @@ services:
       MANAGED_AGENT_AG_UI_URL: http://agent-codex:4202/ag-ui
       MANAGED_AGENT_TOKEN: ${MANAGED_AGENT_TOKEN:?MANAGED_AGENT_TOKEN is required}
       AGENT_ENDPOINT_ALLOWED_HOSTS: "agent-codex:4202,editor-gateway:8080"
+      # Optional browser origins for the per-agent AG-UI embedding API. Empty keeps it
+      # server-to-server only; never use a wildcard.
+      AGENT_EMBED_ALLOWED_ORIGINS: ${AGENT_EMBED_ALLOWED_ORIGINS:-}
       AGENT_CONNECTION_TEST_TIMEOUT_MS: "45000"
       AGENT_COMPUTER_URL: http://agent-computer:4100
       COMPUTER_TOKEN: ${COMPUTER_TOKEN:?COMPUTER_TOKEN is required}

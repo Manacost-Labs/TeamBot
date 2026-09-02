@@ -7,7 +7,7 @@ A coworker is a Bot with a durable profile and standing role. The role is sent w
 | Piece                | Table                           | Purpose                                                               |
 | -------------------- | ------------------------------- | --------------------------------------------------------------------- |
 | Runtime agent        | `agents`                        | AG-UI endpoint and optional key reference.                            |
-| Profile              | `agent_profiles`                | Name, title, role, avatar seed, owner, visibility, and soft deletion. |
+| Profile              | `agent_profiles`                | Name, title, role, avatar seed, folder, owner, visibility, and soft deletion. |
 | Personal roster      | `agent_preferences`             | Per-user hidden state.                                                |
 | Channel              | `channels`                      | Conversation membership and coworker binding.                         |
 | Intelligence mapping | `intelligence_channel_mappings` | Channel-to-thread mapping.                                            |
@@ -24,6 +24,12 @@ never grants tools, copies secrets or connects somebody's OAuth account.
 The editor controls name, deterministic avatar, title, standing role, model, visibility and the
 optional external AG-UI endpoint/key. Skills, exact tool grants, Google Drive/Docs/Sheets access and
 delegation remain explicit governed controls on the saved coworker's profile.
+
+### Folders
+
+Each coworker may have one optional folder, such as `Технический контроль` or `Редакция`. The roster
+groups the signed-in user's coworkers by this value and puts empty values in `Без папки`. Folders are
+labels only: they do not change visibility, grants, routing or the permissions of a coworker.
 
 Reasoning may use a fixed bounded effort or `Adaptive`. Adaptive classifies only the current user
 turn into low/medium/high/xhigh and clamps it to the configured ceiling before forwarding the run.
@@ -121,3 +127,32 @@ A coworker's role does not grant capabilities. Capabilities are governed separat
 - deployment skills are managed by administrators.
 
 See [architecture.md](architecture.md).
+
+## Embed a coworker on a website
+
+An owner or administrator can open a coworker's profile and choose **Встраивание на сайт**. Issuing
+the credential returns an `obot_embed_…` token once; only its SHA-256 hash is stored. Issuing again
+rotates the old credential, and **Отозвать доступ** invalidates it immediately.
+
+The website sends the standard AG-UI run request to:
+
+```text
+POST https://work.kolodahearthstone.com/api/copilotkit/agent/{agentId}/run
+```
+
+and includes either `x-manacost-embed-token: obot_embed_…` or
+`Authorization: Bearer obot_embed_…`. The response is an AG-UI server-sent event stream. The token is
+scoped to the `{agentId}` in the URL; it cannot be used for another coworker, the callback-tools
+endpoint, administration or a different user's data. Existing visibility, personal AI connection,
+tool grants, audit and run limits still apply to the owner's run.
+
+The body is the normal AG-UI `RunAgentInput` (for example `threadId`, `runId`, `messages`, `state`,
+`tools`, `context` and `forwardedProps`). Use the AG-UI client for parsing the event stream rather
+than assuming one JSON response.
+
+Browser origins are deny-by-default. Add a comma-separated list to `AGENT_EMBED_ALLOWED_ORIGINS` and
+redeploy; the deployment's own app/public origins remain allowed. Wildcards are not accepted. A
+server-to-server integration can omit this setting because it does not send an `Origin` header.
+
+Treat the token like a password: keep it server-side where possible, rotate it after exposure, and
+never commit it to a site bundle or source control.

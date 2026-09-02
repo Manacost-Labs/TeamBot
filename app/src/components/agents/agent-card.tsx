@@ -15,6 +15,11 @@ export function AgentCard({ agent }: { agent: AgentProfile }) {
         <span className="line-clamp-2 text-xs text-muted-foreground">
           {agent.roleDescription}
         </span>
+        {agent.folder ? (
+          <span className="line-clamp-1 text-[10px] text-muted-foreground/80">
+            {agent.folder}
+          </span>
+        ) : null}
       </div>
     </div>
   );

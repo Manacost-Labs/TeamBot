@@ -6,11 +6,15 @@ describe("ManacostTeam settings navigation", () => {
     expect(SETTINGS_ITEMS.map((item) => item.title)).toEqual([
       "Основные",
       "Интеграции",
+      "Автоматизация",
+      "Навыки",
       "Галерея компонентов",
     ]);
     expect(SETTINGS_ITEMS.map((item) => item.linkOptions.to)).toEqual([
       "/settings",
       "/settings/connected-accounts",
+      "/routines",
+      "/skills",
       "/settings/components-gallery",
     ]);
   });

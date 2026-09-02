@@ -184,6 +184,36 @@ export function AgentFields({
             );
           }}
         </form.Field>
+        <form.Field name="folder">
+          {(field) => {
+            const isInvalid =
+              field.state.meta.isTouched && !field.state.meta.isValid;
+            return (
+              <Field data-invalid={isInvalid}>
+                <FieldLabel htmlFor={field.name}>
+                  Папка (необязательно)
+                </FieldLabel>
+                <Input
+                  aria-invalid={isInvalid}
+                  id={field.name}
+                  name={field.name}
+                  onBlur={field.handleBlur}
+                  onChange={(event) => field.handleChange(event.target.value)}
+                  placeholder="Технический контроль или Редакция"
+                  value={field.state.value}
+                />
+                {isInvalid ? (
+                  <FieldError errors={field.state.meta.errors} />
+                ) : (
+                  <p className="text-muted-foreground text-sm">
+                    Папка помогает держать сотрудников по направлениям. Оставьте
+                    пустым, чтобы показать сотрудника в разделе «Без папки».
+                  </p>
+                )}
+              </Field>
+            );
+          }}
+        </form.Field>
         <form.Field name="model">
           {(field) => {
             const custom =

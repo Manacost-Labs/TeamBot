@@ -25,6 +25,16 @@ import { sign, verify } from "../auth/signed-value";
 const TOKEN_PREFIX = "obot_agt_";
 
 /**
+ * Credential for a site embedding one coworker through the public AG-UI boundary.
+ *
+ * It is deliberately a different prefix from the callback credential. A callback token is held by
+ * an agent process and can call governed tools; an embed token only authenticates a visitor-facing
+ * run as the token's owner. Keeping the namespaces separate makes accidental cross-use fail closed
+ * and gives operators something recognisable to revoke when a site is retired.
+ */
+const EMBED_TOKEN_PREFIX = "obot_embed_";
+
+/**
  * Long enough that guessing is not a strategy.
  *
  * 32 bytes, which is the same material the deployment's other secrets use. There is no reason to be
@@ -64,7 +74,17 @@ export function mintCallbackToken(): string {
   return `${TOKEN_PREFIX}${randomBytes(TOKEN_BYTES).toString("base64url")}`;
 }
 
+/** Mint the one-time-readable credential used by an embedded AG-UI client. */
+export function mintEmbedApiToken(): string {
+  return `${EMBED_TOKEN_PREFIX}${randomBytes(TOKEN_BYTES).toString("base64url")}`;
+}
+
 export function hashCallbackToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+/** Hash an embed credential with the same one-way primitive, under an explicit API name. */
+export function hashEmbedApiToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
@@ -72,6 +92,14 @@ export function hashCallbackToken(token: string): string {
 export function looksLikeCallbackToken(value: string): boolean {
   return (
     value.startsWith(TOKEN_PREFIX) && value.length > TOKEN_PREFIX.length + 20
+  );
+}
+
+/** Keep obvious non-credentials out of an embed-token lookup. */
+export function looksLikeEmbedApiToken(value: string): boolean {
+  return (
+    value.startsWith(EMBED_TOKEN_PREFIX) &&
+    value.length > EMBED_TOKEN_PREFIX.length + 20
   );
 }
 

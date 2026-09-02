@@ -206,6 +206,12 @@ describe("OpenBot database schema", () => {
         hasDefault: false,
         primary: false,
       },
+      {
+        name: "folder",
+        notNull: false,
+        hasDefault: false,
+        primary: false,
+      },
       /*
        * Nullable, and that is the security property.
        *
@@ -220,6 +226,18 @@ describe("OpenBot database schema", () => {
       },
       {
         name: "callback_token_issued_at",
+        notNull: false,
+        hasDefault: false,
+        primary: false,
+      },
+      {
+        name: "embed_api_token_hash",
+        notNull: false,
+        hasDefault: false,
+        primary: false,
+      },
+      {
+        name: "embed_api_token_issued_at",
         notNull: false,
         hasDefault: false,
         primary: false,
@@ -371,6 +389,22 @@ describe("OpenBot database schema", () => {
     );
     expect(migration).toContain(
       `ALTER TABLE "agent_profiles" ADD COLUMN "callback_token_issued_at" timestamp with time zone;`,
+    );
+  });
+
+  test("adds folders and embed credentials in a follow-up migration", async () => {
+    const migration = await readFile(
+      new URL("../drizzle/0034_regular_the_liberteens.sql", import.meta.url),
+      "utf8",
+    );
+    expect(migration).toContain(
+      `ALTER TABLE "agent_profiles" ADD COLUMN "folder" text;`,
+    );
+    expect(migration).toContain(
+      `ALTER TABLE "agent_profiles" ADD COLUMN "embed_api_token_hash" text;`,
+    );
+    expect(migration).toContain(
+      `ALTER TABLE "agent_profiles" ADD COLUMN "embed_api_token_issued_at" timestamp with time zone;`,
     );
   });
 

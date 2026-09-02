@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import {
   AgentNotFoundError,
   AgentNotManageableError,
+  type AgentEmbedStore,
   type AgentProfileStore,
   ProtectedAgentError,
 } from "../src/agents/profile-store";
@@ -100,9 +101,21 @@ const requireUser: MiddlewareHandler<{ Variables: AppVariables }> = async (
 function appFor(
   store: AgentProfileStore,
   middleware: MiddlewareHandler<{ Variables: AppVariables }> = requireUser,
+  embed?: AgentEmbedStore,
 ) {
   const app = new Hono<{ Variables: AppVariables }>();
-  app.route("/", createAgentRoutes(store, middleware));
+  app.route(
+    "/",
+    createAgentRoutes(
+      store,
+      middleware,
+      false,
+      undefined,
+      new Set(),
+      undefined,
+      embed,
+    ),
+  );
   return app;
 }
 
@@ -303,6 +316,19 @@ describe("agent input parser", () => {
       ok: false,
       error: "Adaptive reasoning ceiling must be low, medium, high or xhigh.",
     });
+
+    expect(parseAgentInput({ ...validInput, folder: "  Редакция  " })).toEqual({
+      ok: true,
+      value: { ...validInput, folder: "Редакция" },
+    });
+    expect(parseAgentInput({ ...validInput, folder: "" })).toEqual({
+      ok: true,
+      value: { ...validInput, folder: null },
+    });
+    expect(parseAgentInput({ ...validInput, folder: "f".repeat(81) })).toEqual({
+      ok: false,
+      error: "Folder must be text between 1 and 80 characters.",
+    });
   });
 });
 
@@ -311,7 +337,12 @@ describe("agent lifecycle routes", () => {
     const store = fakeStore();
     const denied: MiddlewareHandler<{ Variables: AppVariables }> = (context) =>
       Promise.resolve(context.json({ error: "denied" }, 401));
-    const app = appFor(store, denied);
+    const embed: AgentEmbedStore = {
+      issueEmbedApiToken: async () => "obot_embed_test",
+      revokeEmbedApiToken: async () => {},
+      agentForEmbedApiToken: async () => null,
+    };
+    const app = appFor(store, denied, embed);
     const requests: [string, RequestInit?][] = [
       ["/"],
       ["/agent-1"],
@@ -320,6 +351,8 @@ describe("agent lifecycle routes", () => {
       ["/agent-1/duplicate", { method: "POST" }],
       ["/agent-1/hide", { method: "POST" }],
       ["/agent-1/unhide", { method: "POST" }],
+      ["/agent-1/embed-token", { method: "POST" }],
+      ["/agent-1/embed-token", { method: "DELETE" }],
       ["/agent-1", { method: "DELETE" }],
     ];
 
@@ -578,6 +611,44 @@ describe("agent lifecycle routes", () => {
 
     expect(response.status).toBe(404);
     expect(await json(response)).toEqual({ error: "Agent not found." });
+  });
+
+  test("issues and revokes a scoped website token without returning it in the profile", async () => {
+    let revoked = false;
+    const embed: AgentEmbedStore = {
+      issueEmbedApiToken: async () => "obot_embed_one-time",
+      revokeEmbedApiToken: async () => {
+        revoked = true;
+      },
+      agentForEmbedApiToken: async () => null,
+    };
+    const store = fakeStore({
+      async get() {
+        return profile({ hasEmbedApiToken: true });
+      },
+    });
+    const app = appFor(store, requireUser, embed);
+
+    const issued = await app.request(
+      "http://openbot.test/agent-1/embed-token",
+      {
+        method: "POST",
+      },
+    );
+    expect(issued.status).toBe(201);
+    expect(await json(issued)).toEqual({ token: "obot_embed_one-time" });
+
+    const revokedResponse = await app.request(
+      "http://openbot.test/agent-1/embed-token",
+      { method: "DELETE" },
+    );
+    expect(revokedResponse.status).toBe(204);
+    expect(revoked).toBe(true);
+
+    const detail = await app.request("http://openbot.test/agent-1");
+    expect(await json(detail)).toMatchObject({
+      agent: { hasEmbedApiToken: true },
+    });
   });
 
   test.each([

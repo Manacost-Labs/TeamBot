@@ -239,6 +239,13 @@
       "when": 1788320583234,
       "tag": "0033_steady_master_mold",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1788390034994,
+      "tag": "0034_regular_the_liberteens",
+      "breakpoints": true
     }
   ]
 }

@@ -9,6 +9,7 @@ import {
   mcpTools,
   pluginGrants,
   skills,
+  users,
 } from "../db/schema";
 import {
   authFromConfiguration,
@@ -17,7 +18,10 @@ import {
 } from "./auth-header";
 import {
   hashCallbackToken,
+  hashEmbedApiToken,
   mintCallbackToken,
+  mintEmbedApiToken,
+  looksLikeEmbedApiToken,
   sameToken,
 } from "./callback-token";
 import { canManageAgent } from "./profile-policy";
@@ -76,6 +80,19 @@ export type AgentProfileStore = {
    * presenting a credential, and the credential is the whole of its claim.
    */
   agentForCallbackToken(hash: string): Promise<{ id: string } | null>;
+};
+
+/** Site-embedding credential operations kept separate so lightweight route fakes need not store it. */
+export type AgentEmbedStore = {
+  issueEmbedApiToken(actor: AgentActor, id: string): Promise<string>;
+  revokeEmbedApiToken(actor: AgentActor, id: string): Promise<void>;
+  /** Resolve a raw one-time-readable token to its owner and scoped agent. */
+  agentForEmbedApiToken(token: string): Promise<{
+    id: string;
+    ownerUserId: string;
+    ownerName: string | null;
+    ownerEmail: string;
+  } | null>;
 };
 
 export class AgentNotFoundError extends Error {
@@ -143,12 +160,14 @@ const joinedProjection = {
   roleDescription: agentProfiles.roleDescription,
   avatarSeed: agentProfiles.avatarSeed,
   visibility: agentProfiles.visibility,
+  folder: agentProfiles.folder,
   ownerUserId: agentProfiles.ownerUserId,
   packageId: deploymentPackages.id,
   hiddenAt: agentPreferences.hiddenAt,
   deletedAt: agentProfiles.deletedAt,
   /* The hash, only so a surface can say whether one exists. It never leaves this module. */
   callbackTokenHash: agentProfiles.callbackTokenHash,
+  embedApiTokenHash: agentProfiles.embedApiTokenHash,
   configuration: agents.configuration,
 };
 
@@ -191,6 +210,8 @@ function mapProfile(
     ownerUserId: row.ownerUserId,
     systemOwned: row.packageId !== null,
     hasCallbackToken: row.callbackTokenHash !== null,
+    ...(row.folder ? { folder: row.folder } : {}),
+    ...(row.embedApiTokenHash ? { hasEmbedApiToken: true } : {}),
     hidden: row.hiddenAt !== null,
     deletedAt: row.deletedAt,
     endpoint: endpointOf(row.configuration),
@@ -423,6 +444,48 @@ async function findByTokenHash(
   return sameToken(row.hash, hash) ? { id: row.agentId } : null;
 }
 
+async function findByEmbedApiToken(
+  database: Database,
+  token: string,
+): Promise<{
+  id: string;
+  ownerUserId: string;
+  ownerName: string | null;
+  ownerEmail: string;
+} | null> {
+  if (!looksLikeEmbedApiToken(token)) return null;
+  const hash = hashEmbedApiToken(token);
+  const rows = await database
+    .select({
+      agentId: agentProfiles.agentId,
+      ownerUserId: agentProfiles.ownerUserId,
+      hash: agentProfiles.embedApiTokenHash,
+      ownerName: users.name,
+      ownerEmail: users.email,
+    })
+    .from(agentProfiles)
+    .leftJoin(users, eq(users.id, agentProfiles.ownerUserId))
+    .where(
+      and(
+        eq(agentProfiles.embedApiTokenHash, hash),
+        isNotNull(agentProfiles.ownerUserId),
+        isNull(agentProfiles.deletedAt),
+      ),
+    )
+    .limit(1);
+
+  const row = rows[0];
+  if (!row?.hash || !row.ownerUserId || !row.ownerEmail) return null;
+  return sameToken(row.hash, hash)
+    ? {
+        id: row.agentId,
+        ownerUserId: row.ownerUserId,
+        ownerName: row.ownerName,
+        ownerEmail: row.ownerEmail,
+      }
+    : null;
+}
+
 export function createAgentProfileStore(
   database: Database,
   managedAgentAgUiUrl: URL | undefined,
@@ -431,7 +494,7 @@ export function createAgentProfileStore(
    * agent with a key then simply cannot be created, which is better than storing it in the clear.
    */
   vault?: { store: CredentialStore; encryptionKey: string },
-): AgentProfileStore {
+): AgentProfileStore & AgentEmbedStore {
   const managedConfiguration = managedAgentAgUiUrl
     ? { endpoint: managedAgentAgUiUrl.toString() }
     : undefined;
@@ -508,6 +571,7 @@ export function createAgentProfileStore(
           roleDescription: input.roleDescription,
           avatarSeed: input.avatarSeed ?? id,
           visibility: input.visibility,
+          folder: input.folder ?? null,
         });
 
         const profile = await findAccessibleProfile(transaction, actor, id);
@@ -595,6 +659,7 @@ export function createAgentProfileStore(
               roleDescription: input.roleDescription,
               ...(input.avatarSeed ? { avatarSeed: input.avatarSeed } : {}),
               visibility: input.visibility,
+              ...(input.folder !== undefined ? { folder: input.folder } : {}),
               updatedAt,
             })
             .where(eq(agentProfiles.agentId, id));
@@ -640,6 +705,7 @@ export function createAgentProfileStore(
           roleDescription: source.roleDescription,
           avatarSeed: source.avatarSeed,
           visibility: "private",
+          folder: source.folder ?? null,
         });
         if (grants.length > 0) {
           await transaction.insert(pluginGrants).values(
@@ -692,7 +758,12 @@ export function createAgentProfileStore(
           const deletedAt = new Date();
           await transaction
             .update(agentProfiles)
-            .set({ deletedAt, updatedAt: deletedAt })
+            .set({
+              deletedAt,
+              embedApiTokenHash: null,
+              embedApiTokenIssuedAt: null,
+              updatedAt: deletedAt,
+            })
             .where(eq(agentProfiles.agentId, id));
 
           /*
@@ -778,8 +849,58 @@ export function createAgentProfileStore(
       );
     },
 
+    issueEmbedApiToken(actor, id) {
+      return database.transaction(
+        async (transaction) => {
+          await lockProfileMutationRows(transaction, id);
+          const profile = await findAccessibleProfile(transaction, actor, id);
+          if (!profile) throw new AgentNotFoundError(id);
+          requireManageable(actor, profile);
+
+          const token = mintEmbedApiToken();
+          const issuedAt = new Date();
+          await transaction
+            .update(agentProfiles)
+            .set({
+              embedApiTokenHash: hashEmbedApiToken(token),
+              embedApiTokenIssuedAt: issuedAt,
+              updatedAt: issuedAt,
+            })
+            .where(eq(agentProfiles.agentId, id));
+          return token;
+        },
+        { isolationLevel: "read committed" },
+      );
+    },
+
+    revokeEmbedApiToken(actor, id) {
+      return database.transaction(
+        async (transaction) => {
+          await lockProfileMutationRows(transaction, id);
+          const profile = await findAccessibleProfile(transaction, actor, id);
+          if (!profile) throw new AgentNotFoundError(id);
+          requireManageable(actor, profile);
+
+          const now = new Date();
+          await transaction
+            .update(agentProfiles)
+            .set({
+              embedApiTokenHash: null,
+              embedApiTokenIssuedAt: null,
+              updatedAt: now,
+            })
+            .where(eq(agentProfiles.agentId, id));
+        },
+        { isolationLevel: "read committed" },
+      );
+    },
+
     agentForCallbackToken(hash) {
       return findByTokenHash(database, hash);
+    },
+
+    agentForEmbedApiToken(token) {
+      return findByEmbedApiToken(database, token);
     },
   };
 }

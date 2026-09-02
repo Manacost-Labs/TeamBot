@@ -9,7 +9,8 @@ import { DetailPanel } from "@/components/layout/detail-panel";
 import { StaggerItem } from "@/components/layout/stagger";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
-import { agentListQueryOptions } from "@/lib/agents/queries";
+import { groupAgentsByFolder } from "@/lib/agents/grouping";
+import { agentListQueryOptions, type AgentProfile } from "@/lib/agents/queries";
 
 /**
  * Creating and inspecting a coworker are search-parameter states so the roster remains mounted and
@@ -74,19 +75,7 @@ function AgentsScreen() {
             </Button>
           </div>
           <div className="flex flex-row mt-4">
-            {!!mine?.length && (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(144px,1fr))] gap-4">
-                {mine.map((agent, index) => {
-                  return (
-                    <StaggerItem index={index} key={agent.id}>
-                      <Link to="/agents" search={{ agent: agent.id }}>
-                        <AgentCard agent={agent} />
-                      </Link>
-                    </StaggerItem>
-                  );
-                })}
-              </div>
-            )}
+            {!!mine?.length && <AgentGroups agents={mine} />}
             {!mine?.length && (
               <Empty className="border border-dashed h-[180px]">
                 <EmptyHeader>
@@ -100,20 +89,34 @@ function AgentsScreen() {
         </div>
         <div className="mt-8 w-full max-w-2xl">
           <h2 className="font-bold text-lg">Доступные сотрудники</h2>
-          <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(144px,1fr))] gap-4">
-            {!!explore?.length &&
-              explore.map((agent, index) => {
-                return (
-                  <StaggerItem index={index} key={agent.id}>
-                    <Link to="/agents" search={{ agent: agent.id }}>
-                      <AgentCard agent={agent} />
-                    </Link>
-                  </StaggerItem>
-                );
-              })}
+          <div className="mt-4">
+            {!!explore?.length && <AgentGroups agents={explore} />}
           </div>
         </div>
       </div>
     </DetailPanel>
+  );
+}
+
+function AgentGroups({ agents }: { agents: AgentProfile[] }) {
+  return (
+    <div className="flex w-full flex-col gap-5">
+      {groupAgentsByFolder(agents).map((group) => (
+        <section className="flex flex-col gap-2" key={group.folder}>
+          <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            {group.folder}
+          </h3>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(144px,1fr))] gap-4">
+            {group.agents.map((agent, index) => (
+              <StaggerItem index={index} key={agent.id}>
+                <Link to="/agents" search={{ agent: agent.id }}>
+                  <AgentCard agent={agent} />
+                </Link>
+              </StaggerItem>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
   );
 }
