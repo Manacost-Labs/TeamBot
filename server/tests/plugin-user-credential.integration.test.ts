@@ -72,6 +72,11 @@ let appendEffect: "applied" | "unknown" | "missing" = "applied";
 /** Every refresh token handed to the vendor's token endpoint, in order. */
 const exchanged: string[] = [];
 
+/** Every refresh token handed to the vendor's revoke endpoint, in order. */
+const vendorRevocations: string[] = [];
+let vendorRevocationResult = true;
+let duringVendorRevoke: (() => Promise<void>) | null = null;
+
 /** The deployment's OAuth client, as the connect flow will eventually write it. */
 const CLIENT = { clientId: "client-id", clientSecret: "client-secret" };
 
@@ -135,8 +140,8 @@ const store = createPluginStore({
      *
      * `create` still throws, because connections are still written directly.
      */
-    revoke: async (id) => {
-      const [row] = await database
+    revoke: async (id, executor = database) => {
+      const [row] = await executor
         .update(credentials)
         .set({ revokedAt: new Date() })
         .where(eq(credentials.id, id))
@@ -182,6 +187,14 @@ const store = createPluginStore({
     expect(client).toEqual(CLIENT);
     exchanged.push(refreshToken);
     return { accessToken: accessTokenFrom(refreshToken) };
+  },
+  revokeUserGrant: async ({ revokeUrl, token }) => {
+    expect(revokeUrl).toBe("https://oauth2.googleapis.com/revoke");
+    vendorRevocations.push(token);
+    const race = duringVendorRevoke;
+    duringVendorRevoke = null;
+    if (race) await race();
+    return vendorRevocationResult;
   },
 });
 
@@ -788,5 +801,83 @@ describe("retiring the credentials a person owns", () => {
     expect(
       (await store.retireConnectionsFor("", "admin@openbot.local")).retired,
     ).toBe(0);
+  });
+
+  test("disconnects the personal grant at the vendor and in the vault", async () => {
+    await registerClient();
+    const credentialId = await connect(askerId, askerRefreshToken);
+    vendorRevocations.length = 0;
+    vendorRevocationResult = true;
+
+    await expect(
+      store.disconnectConnection(serverId, askerId, "asker@openbot.test"),
+    ).resolves.toEqual({ disconnected: true, vendorRevoked: true });
+
+    expect(vendorRevocations).toEqual([askerRefreshToken]);
+    const [credential] = await database
+      .select({ revokedAt: credentials.revokedAt })
+      .from(credentials)
+      .where(eq(credentials.id, credentialId));
+    expect(credential?.revokedAt).not.toBeNull();
+    expect(await store.connectionsFor(askerId)).toEqual([]);
+
+    // The endpoint is idempotent and does not call the vendor after the row is gone.
+    vendorRevocations.length = 0;
+    await expect(
+      store.disconnectConnection(serverId, askerId, "asker@openbot.test"),
+    ).resolves.toEqual({ disconnected: false, vendorRevoked: false });
+    expect(vendorRevocations).toEqual([]);
+  });
+
+  test("retires local access even when the vendor does not confirm revocation", async () => {
+    await registerClient();
+    const credentialId = await connect(askerId, askerRefreshToken);
+    vendorRevocationResult = false;
+    try {
+      await expect(
+        store.disconnectConnection(serverId, askerId, "asker@openbot.test"),
+      ).resolves.toEqual({ disconnected: true, vendorRevoked: false });
+    } finally {
+      vendorRevocationResult = true;
+    }
+
+    const [credential] = await database
+      .select({ revokedAt: credentials.revokedAt })
+      .from(credentials)
+      .where(eq(credentials.id, credentialId));
+    expect(credential?.revokedAt).not.toBeNull();
+    expect(await store.connectionsFor(askerId)).toEqual([]);
+  });
+
+  test("does not delete a connection that was replaced while revocation was in flight", async () => {
+    await registerClient();
+    const oldCredentialId = await connect(askerId, askerRefreshToken);
+    duringVendorRevoke = async () => {
+      await connect(askerId, `${askerRefreshToken}-replacement`);
+    };
+
+    const result = await store.disconnectConnection(
+      serverId,
+      askerId,
+      "asker@openbot.test",
+    );
+    expect(result).toEqual({ disconnected: false, vendorRevoked: false });
+    expect(vendorRevocations).toContain(askerRefreshToken);
+
+    const [connection] = await database
+      .select({ credentialId: mcpUserCredentials.credentialId })
+      .from(mcpUserCredentials)
+      .where(
+        and(
+          eq(mcpUserCredentials.serverId, serverId),
+          eq(mcpUserCredentials.userId, askerId),
+        ),
+      );
+    expect(connection?.credentialId).not.toBe(oldCredentialId);
+    const [replacement] = await database
+      .select({ revokedAt: credentials.revokedAt })
+      .from(credentials)
+      .where(eq(credentials.id, connection?.credentialId ?? ""));
+    expect(replacement?.revokedAt).toBeNull();
   });
 });

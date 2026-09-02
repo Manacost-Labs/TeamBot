@@ -261,6 +261,36 @@ export function connectAccountMutationOptions(
   });
 }
 
+export type DisconnectAccountResult = {
+  disconnected: boolean;
+  vendorRevoked: boolean;
+};
+
+/** Withdraw the signed-in person's grant and refresh the integration screens. */
+export function disconnectAccountMutationOptions(queryClient: QueryClient) {
+  return mutationOptions({
+    mutationFn: async (serverId: string): Promise<DisconnectAccountResult> => {
+      const response = await client(
+        `/api/plugins/connections/${encodeURIComponent(serverId)}`,
+        {
+          method: "DELETE",
+          fallback: "Не удалось отключить аккаунт.",
+        },
+      );
+      const result =
+        (await response.json()) as Partial<DisconnectAccountResult>;
+      if (
+        typeof result.disconnected !== "boolean" ||
+        typeof result.vendorRevoked !== "boolean"
+      ) {
+        throw new Error("Сервис вернул неполный результат отключения.");
+      }
+      return result as DisconnectAccountResult;
+    },
+    onSuccess: () => invalidatePlugins(queryClient),
+  });
+}
+
 export function removeSkillMutationOptions(queryClient: QueryClient) {
   return mutationOptions({
     mutationFn: async (slug: string) => {

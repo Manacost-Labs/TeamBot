@@ -38,9 +38,19 @@ function app(store: {
     serverId: string,
     by: string,
   ) => Promise<OAuthClient | null>;
+  disconnectConnection?: (
+    serverId: string,
+    userId: string,
+    by: string,
+  ) => Promise<{ disconnected: boolean; vendorRevoked: boolean }>;
 }) {
   const routes = createPluginRoutes(
-    store as never,
+    {
+      ...store,
+      disconnectConnection:
+        store.disconnectConnection ??
+        (async () => ({ disconnected: false, vendorRevoked: false })),
+    } as never,
     signedIn(),
     async () => true,
     {
@@ -157,5 +167,60 @@ describe("connecting a vendor this deployment has not added", () => {
     expect(body.error).toBe(
       "Notion has not been added to this deployment yet. An administrator has to add it first.",
     );
+  });
+});
+
+describe("disconnecting a personal connector", () => {
+  test("uses the signed-in person and returns the vendor outcome", async () => {
+    const calls: { serverId: string; userId: string; by: string }[] = [];
+    const hono = app({
+      oauthClientFor: async () => null,
+      ensureOAuthClient: async () => null,
+      disconnectConnection: async (serverId, userId, by) => {
+        calls.push({ serverId, userId, by });
+        return { disconnected: true, vendorRevoked: true };
+      },
+    });
+
+    const response = await hono.request(
+      "http://t/api/plugins/connections/google-drive",
+      { method: "DELETE" },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      disconnected: true,
+      vendorRevoked: true,
+    });
+    expect(calls).toEqual([
+      {
+        serverId: "google-drive",
+        userId: "user-1",
+        by: "person@openbot.test",
+      },
+    ]);
+  });
+
+  test("refuses a connector that is not a personal OAuth account", async () => {
+    let called = false;
+    const hono = app({
+      oauthClientFor: async () => null,
+      ensureOAuthClient: async () => null,
+      disconnectConnection: async () => {
+        called = true;
+        return { disconnected: true, vendorRevoked: true };
+      },
+    });
+
+    const response = await hono.request(
+      "http://t/api/plugins/connections/not-a-vendor",
+      { method: "DELETE" },
+    );
+
+    expect(response.status).toBe(400);
+    expect(called).toBe(false);
+    expect(await response.json()).toEqual({
+      error: "not-a-vendor is not connected as an individual person.",
+    });
   });
 });

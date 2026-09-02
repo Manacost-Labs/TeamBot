@@ -377,6 +377,36 @@ export async function redeemAuthorizationCode(input: {
 }
 
 /**
+ * Ask a catalogue-pinned OAuth endpoint to revoke one person's grant.
+ *
+ * The endpoint and the request shape are deliberately narrow: only the refresh token is sent,
+ * redirects are treated as failures, and the response body is never read.  A vendor refusal is a
+ * normal outcome of disconnect (the local credential still has to be retired), so this helper
+ * returns a boolean instead of leaking a vendor error or body into the application.
+ */
+export async function revokeOAuthTokenOverHttp(input: {
+  revokeUrl: string;
+  token: string;
+}): Promise<boolean> {
+  if (!input.token) return false;
+
+  try {
+    const response = await fetch(input.revokeUrl, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: input.token }),
+      // A redirect is not a revoke confirmation and must not carry the token elsewhere.
+      redirect: "manual",
+      signal: AbortSignal.timeout(15_000),
+    });
+    return response.ok;
+  } catch {
+    // Network, timeout and malformed-response failures are all an unconfirmed vendor revoke.
+    return false;
+  }
+}
+
+/**
  * Register this deployment as an OAuth client, at the vendor's own registration endpoint.
  *
  * RFC 7591, the shape Notion's hosted MCP expects: a public client (`token_endpoint_auth_method:

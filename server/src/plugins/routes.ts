@@ -353,6 +353,33 @@ export function createPluginRoutes(
   });
 
   /**
+   * Withdraw one person's own connector grant.
+   *
+   * The server id comes from the path and the person always comes from the session. There is no
+   * user id in the request body, so a caller cannot ask this endpoint to disconnect somebody else.
+   * The store first asks the pinned vendor endpoint to revoke the refresh token, then retires the
+   * local credential even when that remote request is unavailable.
+   */
+  routes.delete("/connections/:id", requireUser, async (context) => {
+    const serverId = context.req.param("id");
+    const entry = catalogueEntry(serverId);
+    if (entry?.auth.kind !== "user-oauth") {
+      return context.json(
+        { error: `${serverId} is not connected as an individual person.` },
+        400,
+      );
+    }
+
+    return context.json(
+      await store.disconnectConnection(
+        serverId,
+        context.var.actor.id,
+        actorEmail(context),
+      ),
+    );
+  });
+
+  /**
    * The settings health panel needs availability and connection counts, not the full Plugins page.
    * Keep this read projection small so a growing tool catalogue cannot slow an ordinary settings
    * visit or place schemas in a diagnostics response.

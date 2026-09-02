@@ -10,6 +10,7 @@ import {
   redeemAuthorizationCode,
   redirectUriFor,
   registerDynamicClient,
+  revokeOAuthTokenOverHttp,
   sealConnectState,
 } from "../src/plugins/oauth";
 
@@ -554,6 +555,97 @@ describe("registering this deployment as an OAuth client", () => {
         }),
       ).toBeNull();
       expect(seen[0]?.redirect).toBe("manual");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
+
+describe("revoking a personal OAuth grant", () => {
+  test("posts only the refresh token to the pinned endpoint", async () => {
+    const seen: {
+      url: string;
+      method: string;
+      contentType: string | null;
+      body: string;
+    }[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      seen.push({
+        url: String(url),
+        method: String(init?.method),
+        contentType: new Headers(init?.headers).get("content-type"),
+        body: String(init?.body),
+      });
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+    try {
+      expect(
+        await revokeOAuthTokenOverHttp({
+          revokeUrl: "https://oauth2.googleapis.com/revoke",
+          token: "refresh token/1",
+        }),
+      ).toBe(true);
+      expect(seen).toEqual([
+        {
+          url: "https://oauth2.googleapis.com/revoke",
+          method: "POST",
+          contentType: "application/x-www-form-urlencoded",
+          body: "token=refresh+token%2F1",
+        },
+      ]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("treats refusal, redirects and network failures as unconfirmed", async () => {
+    const realFetch = globalThis.fetch;
+    try {
+      for (const response of [
+        new Response(null, { status: 400 }),
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://elsewhere.test" },
+        }),
+      ]) {
+        globalThis.fetch = (async () => response) as unknown as typeof fetch;
+        expect(
+          await revokeOAuthTokenOverHttp({
+            revokeUrl: "https://vendor.example/revoke",
+            token: "token",
+          }),
+        ).toBe(false);
+      }
+      globalThis.fetch = (async () => {
+        throw new Error("upstream down");
+      }) as unknown as typeof fetch;
+      expect(
+        await revokeOAuthTokenOverHttp({
+          revokeUrl: "https://vendor.example/revoke",
+          token: "token",
+        }),
+      ).toBe(false);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("does not call the network for an empty token", async () => {
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+    try {
+      expect(
+        await revokeOAuthTokenOverHttp({
+          revokeUrl: "https://vendor.example/revoke",
+          token: "",
+        }),
+      ).toBe(false);
+      expect(calls).toBe(0);
     } finally {
       globalThis.fetch = realFetch;
     }

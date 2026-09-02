@@ -27,7 +27,10 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Separator } from "@/components/ui/separator";
-import { connectAccountMutationOptions } from "@/lib/plugins/mutations";
+import {
+  connectAccountMutationOptions,
+  disconnectAccountMutationOptions,
+} from "@/lib/plugins/mutations";
 import {
   connectionsQueryOptions,
   pluginKeys,
@@ -77,6 +80,19 @@ function RouteComponent() {
      */
     onSuccess: (authorizationUrl) => {
       window.location.href = authorizationUrl;
+    },
+  });
+
+  const disconnect = useMutation({
+    ...disconnectAccountMutationOptions(queryClient),
+    onError: (thrown: Error) => setNotice(thrown.message),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: pluginKeys.all });
+      setNotice(
+        result.vendorRevoked
+          ? "Аккаунт отключён. Доступ отозван и в приложении, и у сервиса."
+          : "Аккаунт отключён в приложении. Сервис не подтвердил отзыв доступа — проверьте его настройки приложений.",
+      );
     },
   });
 
@@ -206,25 +222,14 @@ function RouteComponent() {
                    */}
                   <DropdownMenuContent align="end" className="w-auto">
                     <DropdownMenuItem
-                      disabled={connect.isPending}
+                      disabled={connect.isPending || disconnect.isPending}
                       onClick={startConnect}
                     >
                       Переподключить или изменить доступ
                     </DropdownMenuItem>
                     <DropdownMenuItem
-                      onClick={() =>
-                        /*
-                         * NOT BUILT YET, and it says so rather than appearing to work.
-                         *
-                         * Withdrawing is three acts — revoke at the vendor, revoke the vault
-                         * credential, delete the row — and none exist. An item that closed the menu
-                         * and changed nothing would report that access had been withdrawn when it
-                         * had not, which is the one outcome worse than not offering it.
-                         */
-                        setNotice(
-                          `Отключение из приложения пока не реализовано. Отзовите доступ в настройках сторонних приложений аккаунта ${entry.vendor} — после этого приложение сразу перестанет читать данные.`,
-                        )
-                      }
+                      disabled={disconnect.isPending}
+                      onClick={() => disconnect.mutate(key)}
                       className="whitespace-nowrap"
                       variant="destructive"
                     >

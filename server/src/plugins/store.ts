@@ -43,7 +43,7 @@ import {
 } from "./google-append-idempotency";
 import * as googleWorkspaceRest from "./google-workspace-rest";
 import { McpServerError } from "./mcp";
-import { registerDynamicClient } from "./oauth";
+import { registerDynamicClient, revokeOAuthTokenOverHttp } from "./oauth";
 import {
   type TrustedToolCallContext,
   transportFor,
@@ -567,6 +567,11 @@ export type PluginStoreOptions = {
     registrationUrl: string;
     redirectUri: string;
   }) => Promise<OAuthClient | null>;
+  /** Revoke a person's vendor grant. Defaults to the bounded catalogue-pinned HTTP call. */
+  revokeUserGrant?: (input: {
+    revokeUrl: string;
+    token: string;
+  }) => Promise<boolean>;
   /** Where the vendor sends people back; needed to (re)register a dynamic client. */
   redirectUri?: string;
 };
@@ -583,6 +588,7 @@ export function createPluginStore(options: PluginStoreOptions) {
   const exchangeRefreshToken =
     options.exchangeRefreshToken ?? exchangeRefreshTokenOverHttp;
   const registerClient = options.registerClient ?? registerDynamicClient;
+  const revokeUserGrant = options.revokeUserGrant ?? revokeOAuthTokenOverHttp;
 
   /*
    * One exchange at a time per (server, person). A rotating vendor invalidates the refresh
@@ -2754,6 +2760,127 @@ export function createPluginStore(options: PluginStoreOptions) {
         scope: row.scope,
         connectedAt: iso(row.connectedAt) ?? "",
       }));
+    },
+
+    /**
+     * Disconnect one person's own account from a user-OAuth connector.
+     *
+     * The vendor grant is withdrawn before the local row is retired, but the two network/database
+     * operations are deliberately not held in one database transaction. A vendor can take seconds
+     * to answer, and keeping a pooled connection and row lock through that wait would turn a normal
+     * disconnect into a pool-wide outage. The credential id is compared again under a row lock after
+     * the network call, so a reconnect that won the race is never deleted or revoked by a stale
+     * disconnect request.
+     *
+     * Local retirement is unconditional once this request still owns the same connection. If the
+     * vendor is unavailable, the deployment must nevertheless stop using the grant and report the
+     * unconfirmed vendor side honestly to the caller and the audit trail.
+     */
+    async disconnectConnection(
+      serverId: string,
+      userId: string,
+      by: string,
+    ): Promise<{ disconnected: boolean; vendorRevoked: boolean }> {
+      if (!serverId || !userId) {
+        return { disconnected: false, vendorRevoked: false };
+      }
+
+      const entry = catalogueEntry(serverId);
+      if (entry?.auth.kind !== "user-oauth") {
+        return { disconnected: false, vendorRevoked: false };
+      }
+
+      const [connection] = await database
+        .select({ credentialId: mcpUserCredentials.credentialId })
+        .from(mcpUserCredentials)
+        .where(
+          and(
+            eq(mcpUserCredentials.serverId, serverId),
+            eq(mcpUserCredentials.userId, userId),
+          ),
+        );
+      if (!connection) {
+        // DELETE is idempotent. A refresh after a second click should not turn a completed
+        // disconnect into an error or imply that somebody else's connection was touched.
+        return { disconnected: false, vendorRevoked: false };
+      }
+
+      let vendorRevoked = false;
+      const stored = await credentials.readSecret(connection.credentialId);
+      if (stored && !stored.revokedAt) {
+        try {
+          const refreshToken = await decryptSecret(
+            encryptionKey,
+            stored.encryptedValue,
+          );
+          vendorRevoked = await revokeUserGrant({
+            revokeUrl: entry.auth.revokeUrl,
+            token: refreshToken,
+          });
+        } catch {
+          // The local credential still has to be retired. The false result is the honest
+          // indication that vendor-side revocation was not confirmed.
+          vendorRevoked = false;
+        }
+      }
+
+      const disconnected = await database.transaction(async (transaction) => {
+        const [current] = await transaction
+          .select({ credentialId: mcpUserCredentials.credentialId })
+          .from(mcpUserCredentials)
+          .where(
+            and(
+              eq(mcpUserCredentials.serverId, serverId),
+              eq(mcpUserCredentials.userId, userId),
+            ),
+          )
+          .for("update");
+
+        // A reconnect replaced the credential while the vendor request was in flight. Its new
+        // grant belongs to the person and must survive this older disconnect request.
+        if (!current || current.credentialId !== connection.credentialId) {
+          return false;
+        }
+
+        const [credential] = await transaction
+          .select({ revokedAt: credentialRows.revokedAt })
+          .from(credentialRows)
+          .where(eq(credentialRows.id, connection.credentialId))
+          .for("update");
+        if (credential && !credential.revokedAt) {
+          await credentials.revoke(connection.credentialId, transaction);
+        }
+
+        await transaction
+          .delete(mcpUserCredentials)
+          .where(
+            and(
+              eq(mcpUserCredentials.serverId, serverId),
+              eq(mcpUserCredentials.userId, userId),
+              eq(mcpUserCredentials.credentialId, connection.credentialId),
+            ),
+          );
+        return true;
+      });
+
+      if (!disconnected) {
+        return { disconnected: false, vendorRevoked: false };
+      }
+
+      await recordAuditEvent(auditStore, {
+        eventType: "mcp.account_disconnected",
+        targetType: "mcp_server",
+        targetId: serverId,
+        payload: {
+          actor: by,
+          server: serverId,
+          owner: userId,
+          reason: "person_disconnected",
+          vendorRevoked,
+        },
+      });
+
+      return { disconnected: true, vendorRevoked };
     },
 
     /**
