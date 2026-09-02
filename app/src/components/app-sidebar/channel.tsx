@@ -166,9 +166,10 @@ export const Channel = memo(function Channel({
             to="/channel/$channelId"
             params={{ channelId }}
             type="button"
-            className="flex flex-row py-2 px-2 gap-2 items-center w-full hover:bg-foreground/5 rounded-lg [contain-intrinsic-size:auto_3.25rem] [content-visibility:auto]"
+            className="group flex min-h-16 w-full flex-row items-center gap-3 rounded-lg px-2.5 py-2 transition-colors hover:bg-sidebar-accent/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring [contain-intrinsic-size:auto_4rem] [content-visibility:auto]"
             activeProps={{
-              className: "bg-foreground/5",
+              className:
+                "bg-sidebar-accent/80 ring-1 ring-inset ring-sidebar-border/70",
             }}
             onFocus={prefetchChannel}
             onMouseEnter={prefetchChannel}
@@ -177,22 +178,24 @@ export const Channel = memo(function Channel({
               beginChannelTiming(channelId);
             }}
           >
-            <ChannelAvatar participantIds={participantIds} size={32} />
-            <div className="flex-col min-w-0 flex-1">
-              <div className="flex flex-row items-center justify-between gap-2">
+            <div className="shrink-0">
+              <ChannelAvatar participantIds={participantIds} size={32} />
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col">
+              <div className="flex min-w-0 flex-row items-center gap-2">
                 <span
-                  className={`text-[14px] tracking-[-1%] truncate ${
+                  className={`min-w-0 flex-1 truncate text-sm tracking-tight ${
                     unread ? "font-medium" : ""
                   }`}
                 >
                   {name}
                 </span>
-                <div className="text-[12px] text-muted-foreground/70">
+                <div className="shrink-0 whitespace-nowrap text-right text-[11px] leading-4 text-muted-foreground/70">
                   {lastMessageAt}
                 </div>
               </div>
-              <div className="mt-px flex h-4 items-center gap-1.5">
-                <span className="min-w-0 flex-1 truncate text-[12px] leading-4 text-muted-foreground">
+              <div className="mt-0.5 flex h-4 min-w-0 items-center gap-1.5">
+                <span className="min-w-0 flex-1 truncate text-xs leading-4 text-muted-foreground">
                   {isWorking
                     ? agentRunStatusLabel(runActivity.state.status)
                     : lastMessage}

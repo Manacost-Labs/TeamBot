@@ -23,7 +23,7 @@ import {
 } from "@tanstack/react-router";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type * as React from "react";
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,6 +40,7 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
@@ -103,7 +104,7 @@ function UserAvatar() {
 /**
  * Cap layout animation because `layout` measures every animated row on each reorder.
  */
-const MAX_ANIMATED_ROWS = 60;
+const MAX_ANIMATED_ROWS = 32;
 
 /**
  * The roster, narrowed to what the person typed.
@@ -116,7 +117,7 @@ const MAX_ANIMATED_ROWS = 60;
  * An empty query returns the input array unchanged rather than a copy, so typing and clearing does
  * not hand `AnimatePresence` a new array identity and restage the whole list.
  */
-function matchingChannels(
+export function matchingChannels(
   channels: ChannelSummary[] | undefined,
   query: string,
 ): ChannelSummary[] {
@@ -179,13 +180,15 @@ export function isUnread(
  * moves to the top. Nothing else animates, a roster that reacts to being read is a roster that
  * moves under the cursor.
  */
-function ChannelRow({
+const ChannelRow = memo(function ChannelRow({
   channel,
   animateOrder,
+  animateEntrance,
   historyScope,
 }: {
   channel: ChannelSummary;
   animateOrder: boolean;
+  animateEntrance: boolean;
   historyScope?: string;
 }) {
   const shouldReduceMotion = useReducedMotion();
@@ -199,13 +202,20 @@ function ChannelRow({
   return (
     <motion.div
       animate={{ opacity: 1, transform: "translateY(0px)" }}
-      initial={{
-        opacity: 0,
-        transform: shouldReduceMotion ? "none" : "translateY(-8px)",
-      }}
+      initial={
+        animateEntrance
+          ? {
+              opacity: 0,
+              transform: shouldReduceMotion ? "none" : "translateY(-8px)",
+            }
+          : false
+      }
       exit={{ opacity: 0 }}
       layout={animateOrder && !shouldReduceMotion ? "position" : false}
-      transition={{ duration: ENTRANCE_SECONDS, ease: EASE_OUT }}
+      transition={{
+        duration: animateEntrance ? ENTRANCE_SECONDS : 0,
+        ease: EASE_OUT,
+      }}
     >
       <Channel
         channelId={channel.id}
@@ -224,7 +234,7 @@ function ChannelRow({
       />
     </motion.div>
   );
-}
+});
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { data: currentUser } = useQuery(currentUserQueryOptions());
@@ -240,6 +250,15 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     () => pinnedFirst(matchingChannels(channels.data, search)),
     [channels.data, search],
   );
+  const visibleOrder = useMemo(
+    () => visibleChannels.map((channel) => channel.id).join("\u0000"),
+    [visibleChannels],
+  );
+  const previousVisibleOrder = useRef(visibleOrder);
+  const orderChanged = previousVisibleOrder.current !== visibleOrder;
+  useEffect(() => {
+    previousVisibleOrder.current = visibleOrder;
+  }, [visibleOrder]);
   const currentUserId = currentUser?.id;
   useEffect(() => {
     if (!currentUserId || !channels.data) return;
@@ -300,7 +319,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
    * occasional; this is not.
    */
   const animateOrder =
-    !searching && (channels.data?.length ?? 0) <= MAX_ANIMATED_ROWS;
+    !searching && orderChanged && visibleChannels.length <= MAX_ANIMATED_ROWS;
 
   const handleSignOut = async () => {
     if (currentUser) {
@@ -321,11 +340,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
   return (
     <Sidebar {...props}>
-      <SidebarHeader className="h-12 p-2">
+      <SidebarHeader className="border-sidebar-border/60 border-b px-3 py-2.5">
         <SidebarMenu>
-          <SidebarMenuItem className="flex flex-row gap-1.5">
+          <SidebarMenuItem className="flex h-9 flex-row items-center gap-1.5">
             <SidebarMenuButton
-              className="font-semibold text-[14px] tracking-tighter h-full leading-tight"
+              className="h-9 font-semibold text-[14px] tracking-tight leading-tight"
               render={(props) => (
                 <Link {...appLinkOptions} {...props}>
                   {appConfig.brand.productName}
@@ -333,6 +352,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               )}
             />
             <Button
+              aria-label="Новый диалог"
               size="icon"
               variant="ghost"
               render={(props) => (
@@ -351,10 +371,18 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent className="scroll-fade-b">
-        <SidebarMenu>
-          <SidebarGroup className="gap-px">
+        <SidebarMenu aria-busy={channels.isPending} aria-label="Диалоги">
+          <SidebarGroup className="gap-2 px-3 py-3">
+            <SidebarGroupLabel className="h-6 px-1 text-[11px] uppercase tracking-wide">
+              <span>Диалоги</span>
+              {channels.data ? (
+                <span className="ml-auto tabular-nums text-sidebar-foreground/50">
+                  {channels.data.length}
+                </span>
+              ) : null}
+            </SidebarGroupLabel>
             <SidebarMenuItem>
-              <InputGroup className="bg-background text-sm rounded-lg h-9">
+              <InputGroup className="h-9 rounded-lg bg-background text-sm shadow-none">
                 <InputGroupInput
                   aria-label="Поиск диалогов"
                   onChange={(event) => setSearch(event.target.value)}
@@ -366,7 +394,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 </InputGroupAddon>
               </InputGroup>
             </SidebarMenuItem>
-            <div className="w-full h-2" />
             {/*
              * TWO DIFFERENT NOTHINGS, AND SAYING THE WRONG ONE IS ALARMING. A roster nobody has
              * used yet needs telling how to start. A roster that simply does not match what is in
@@ -375,7 +402,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
              */}
             {searching && visibleChannels.length === 0 ? (
               <div className="py-4">
-                <Empty className="border border-dashed min-h-[40dvh]">
+                <Empty className="min-h-40 border border-dashed">
                   <EmptyHeader>
                     <EmptyTitle>Диалоги не найдены</EmptyTitle>
                     <EmptyDescription className="text-pretty">
@@ -388,7 +415,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             ) : null}
             {!searching && channels.data?.length === 0 ? (
               <div className="py-4">
-                <Empty className="border border-dashed min-h-[40dvh]">
+                <Empty className="min-h-40 border border-dashed">
                   <EmptyHeader>
                     <EmptyTitle>У вас пока нет диалогов</EmptyTitle>
                     <EmptyDescription className="text-pretty">
@@ -399,16 +426,29 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 </Empty>
               </div>
             ) : null}
-            <AnimatePresence initial={false}>
-              {visibleChannels.map((channel) => (
+            {searching ? (
+              visibleChannels.map((channel) => (
                 <ChannelRow
+                  animateEntrance={false}
                   key={channel.id}
-                  animateOrder={animateOrder}
+                  animateOrder={false}
                   channel={channel}
                   historyScope={currentUser?.id}
                 />
-              ))}
-            </AnimatePresence>
+              ))
+            ) : (
+              <AnimatePresence initial={false}>
+                {visibleChannels.map((channel) => (
+                  <ChannelRow
+                    animateEntrance
+                    animateOrder={animateOrder}
+                    channel={channel}
+                    historyScope={currentUser?.id}
+                    key={channel.id}
+                  />
+                ))}
+              </AnimatePresence>
+            )}
           </SidebarGroup>
         </SidebarMenu>
       </SidebarContent>
