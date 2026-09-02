@@ -33,7 +33,6 @@ export type SignInOptions = {
 };
 
 const TELEGRAM_BOT_USERNAME = /^[A-Za-z][A-Za-z0-9_]{1,28}[Bb][Oo][Tt]$/;
-const TELEGRAM_LOGIN_STATE = /^[a-f0-9]{64}$/;
 
 async function signInOptions(): Promise<SignInOptions> {
   // The whole body, so both fields arrive together. Reading a field off the Response `client`
@@ -60,25 +59,6 @@ async function signInOptions(): Promise<SignInOptions> {
     sso: body.ssoConfigured === true,
     telegram: botUsername ? { botUsername } : null,
   };
-}
-
-/** Ask the server for one browser-bound state; neither the destination nor its shape is caller-controlled. */
-export async function telegramLoginState(
-  signal?: AbortSignal,
-): Promise<string> {
-  const response = await client("/api/auth/telegram/state?returnPath=/", {
-    fallback: "Could not prepare Telegram sign-in",
-    method: "POST",
-    signal,
-  });
-  const body = (await response.json()) as { state?: unknown };
-  if (
-    typeof body.state !== "string" ||
-    !TELEGRAM_LOGIN_STATE.test(body.state)
-  ) {
-    throw new Error("Telegram sign-in returned an invalid state");
-  }
-  return body.state;
 }
 
 /**

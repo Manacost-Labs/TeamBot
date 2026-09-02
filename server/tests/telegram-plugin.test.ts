@@ -16,6 +16,8 @@ const BASE_URL = "http://manacost.test";
 const SESSION_COOKIE = "better-auth.session_token";
 const TELEGRAM_BASE_URL = "https://manacost.test";
 const TELEGRAM_BOT_TOKEN = "123456789:synthetic-plugin-test-token";
+const TELEGRAM_OIDC_CLIENT_ID = "123456789";
+const TELEGRAM_OIDC_CLIENT_SECRET = "synthetic-oidc-client-secret";
 const EDITOR_TELEGRAM_ID = "1234567890123";
 const OWNER_TELEGRAM_ID = "1234567890124";
 const UNKNOWN_TELEGRAM_ID = "1234567890125";
@@ -198,11 +200,14 @@ function signedTelegramParams(
   return new URLSearchParams([...fields, ["hash", hash]]);
 }
 
-function transientCookieFrom(response: Response): string {
+function transientCookieFrom(
+  response: Response,
+  bindingName = "telegram_login_binding",
+): string {
   const setCookie = response.headers.get("set-cookie");
   expect(setCookie).not.toBeNull();
   const cookie = setCookie?.split(";", 1)[0] ?? "";
-  expect(cookie).toContain("telegram_login_binding=");
+  expect(cookie).toContain(`${bindingName}=`);
   return cookie;
 }
 
@@ -224,6 +229,11 @@ function createTelegramFixture(
   const ownerUserIds = new Set([OWNER_TELEGRAM_ID]);
   const roleByUserId = new Map<string, "admin" | "user">();
   const refusalReasons: string[] = [];
+  const oidcExchanges: Array<{
+    code: string;
+    codeVerifier: string;
+    redirectUri: string;
+  }> = [];
   const storage = new InMemoryTelegramLoginOneTimeStorage();
 
   if (options.bindOwner) {
@@ -333,11 +343,37 @@ function createTelegramFixture(
       telegramSessionPlugin({
         telegram: {
           botToken: TELEGRAM_BOT_TOKEN,
+          oidc: {
+            clientId: TELEGRAM_OIDC_CLIENT_ID,
+            clientSecret: TELEGRAM_OIDC_CLIENT_SECRET,
+          },
           allowedUserIds,
           ownerUserIds,
           trustedOrigin: TELEGRAM_BASE_URL,
         },
         oneTimeStorage: storage,
+        oidc: {
+          exchangeCode: async (input) => {
+            oidcExchanges.push({
+              code: input.code,
+              codeVerifier: input.codeVerifier,
+              redirectUri: input.redirectUri,
+            });
+            return `synthetic-id-token:${input.code}`;
+          },
+          verifyIdToken: async (idToken, input) => ({
+            id: idToken.endsWith(OWNER_TELEGRAM_ID)
+              ? OWNER_TELEGRAM_ID
+              : idToken.endsWith(UNKNOWN_TELEGRAM_ID)
+                ? UNKNOWN_TELEGRAM_ID
+                : EDITOR_TELEGRAM_ID,
+            firstName: "OIDC",
+            lastName: "Editor",
+            username: "oidc_editor",
+            authDate: Math.floor(Date.now() / 1_000),
+            replayKey: input.expectedNonce,
+          }),
+        },
         provisionVerifiedUser,
         recordRefusal: async (reason) => {
           refusalReasons.push(reason);
@@ -381,16 +417,128 @@ function createTelegramFixture(
     );
   }
 
+  async function startOidc(returnPath = "/settings", origin = TELEGRAM_BASE_URL) {
+    return auth.handler(
+      new Request(
+        `${TELEGRAM_BASE_URL}/api/auth/telegram/start?returnPath=${encodeURIComponent(returnPath)}`,
+        { method: "POST", headers: { origin } },
+      ),
+    );
+  }
+
+  async function oidcCallback(code: string, state: string, cookie: string) {
+    return auth.handler(
+      new Request(
+        `${TELEGRAM_BASE_URL}/api/auth/telegram/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
+        { headers: { cookie } },
+      ),
+    );
+  }
+
   return {
     allowedUserIds,
     auth,
     callback,
     database,
     issueState,
+    oidcCallback,
+    oidcExchanges,
     refusalReasons,
     roleByUserId,
+    startOidc,
   };
 }
+
+describe("Telegram OIDC session flow", () => {
+  test("starts only from the trusted origin with PKCE and a secure browser binding", async () => {
+    const fixture = createTelegramFixture();
+
+    const refused = await fixture.startOidc("/", "https://attacker.example");
+    expect(refused.status).toBe(401);
+
+    const response = await fixture.startOidc("/settings");
+    expect(response.status).toBe(302);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    const cookie = response.headers.get("set-cookie") ?? "";
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("Secure");
+    expect(cookie).toContain("SameSite=Lax");
+    expect(cookie).not.toContain("synthetic-oidc-client-secret");
+
+    const authorization = new URL(response.headers.get("location") ?? "");
+    expect(authorization.origin).toBe("https://oauth.telegram.org");
+    expect(authorization.pathname).toBe("/auth");
+    expect(authorization.searchParams.get("client_id")).toBe(
+      TELEGRAM_OIDC_CLIENT_ID,
+    );
+    expect(authorization.searchParams.get("redirect_uri")).toBe(
+      `${TELEGRAM_BASE_URL}/api/auth/telegram/callback`,
+    );
+    expect(authorization.searchParams.get("scope")).toBe("openid profile");
+    expect(authorization.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(authorization.searchParams.get("code_challenge")).toMatch(
+      /^[A-Za-z0-9_-]{43}$/,
+    );
+    expect(authorization.searchParams.get("state")).toMatch(/^[a-f0-9]{64}$/);
+    expect(authorization.searchParams.get("nonce")).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  test("exchanges one code, preserves the numeric binding and creates the normal session", async () => {
+    const fixture = createTelegramFixture({ bindEditor: true });
+    const started = await fixture.startOidc("/settings");
+    const authorization = new URL(started.headers.get("location") ?? "");
+    const state = authorization.searchParams.get("state") ?? "";
+    const cookie = transientCookieFrom(started, "telegram_oidc_binding");
+
+    const response = await fixture.oidcCallback(
+      EDITOR_TELEGRAM_ID,
+      state,
+      cookie,
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(
+      `${TELEGRAM_BASE_URL}/settings`,
+    );
+    expect(response.headers.get("set-cookie")).toContain(SESSION_COOKIE);
+    expect(fixture.oidcExchanges).toHaveLength(1);
+    expect(fixture.oidcExchanges[0]?.code).toBe(EDITOR_TELEGRAM_ID);
+    expect(fixture.oidcExchanges[0]?.redirectUri).toBe(
+      `${TELEGRAM_BASE_URL}/api/auth/telegram/callback`,
+    );
+    expect(fixture.oidcExchanges[0]?.codeVerifier).toMatch(/^[a-f0-9]{64}$/);
+    expect(fixture.database.session).toHaveLength(1);
+    expect(fixture.database.account).toHaveLength(1);
+
+    const replay = await fixture.oidcCallback(
+      EDITOR_TELEGRAM_ID,
+      state,
+      cookie,
+    );
+    expect(replay.status).toBe(401);
+    expect(fixture.oidcExchanges).toHaveLength(1);
+    expect(fixture.database.session).toHaveLength(1);
+  });
+
+  test("does not create a user, account or session for an unknown signed profile", async () => {
+    const fixture = createTelegramFixture();
+    const started = await fixture.startOidc("/");
+    const authorization = new URL(started.headers.get("location") ?? "");
+
+    const response = await fixture.oidcCallback(
+      UNKNOWN_TELEGRAM_ID,
+      authorization.searchParams.get("state") ?? "",
+      transientCookieFrom(started, "telegram_oidc_binding"),
+    );
+
+    expect(response.status).toBe(401);
+    expect(fixture.refusalReasons).toEqual(["not_allowlisted"]);
+    expect(fixture.database.user).toHaveLength(0);
+    expect(fixture.database.account).toHaveLength(0);
+    expect(fixture.database.session).toHaveLength(0);
+  });
+});
 
 describe("verified Telegram account binding", () => {
   test("issues state only for POST from the exact trusted origin", async () => {

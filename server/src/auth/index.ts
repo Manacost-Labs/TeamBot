@@ -253,6 +253,7 @@ export function createAuth(
           telegramSessionPlugin({
             telegram: {
               botToken: authConfig.telegram.botToken,
+              oidc: authConfig.telegram.oidc,
               allowedUserIds: authConfig.telegram.allowedUserIds,
               ownerUserIds: authConfig.telegram.ownerUserIds,
               trustedOrigin: authConfig.baseUrl,

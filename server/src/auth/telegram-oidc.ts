@@ -214,7 +214,7 @@ export async function exchangeTelegramOidcCode(
       parsed && typeof parsed === "object"
         ? boundedText((parsed as Record<string, unknown>).id_token, 14_000)
         : null;
-    if (!idToken || idToken.split(".").length !== 3) {
+    if (idToken?.split(".").length !== 3) {
       throw genericExchangeError();
     }
     return idToken;
@@ -276,7 +276,8 @@ export async function verifyTelegramOidcIdToken(
       payload.sub.length > 256 ||
       typeof payload.iat !== "number" ||
       !Number.isSafeInteger(payload.iat) ||
-      payload.iat <= 0
+      payload.iat <= 0 ||
+      payload.iat > nowSeconds + 60
     ) {
       throw genericVerificationError();
     }

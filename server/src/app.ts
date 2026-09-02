@@ -328,7 +328,8 @@ export function createApp(
     const response = await auth.handler(context.req.raw);
     const path = new URL(context.req.url).pathname;
     if (
-      path === "/api/auth/telegram/callback" &&
+      (path === "/api/auth/telegram/start" ||
+        path === "/api/auth/telegram/callback") &&
       config.auth?.telegram &&
       response.status >= 400
     ) {

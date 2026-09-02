@@ -415,6 +415,8 @@ describe("deployment configuration", () => {
     BETTER_AUTH_SECRET: "a-long-enough-telegram-session-secret",
     TELEGRAM_LOGIN_BOT_USERNAME: "ManacostTeamBot",
     TELEGRAM_LOGIN_BOT_TOKEN: "123456:telegram-test-token",
+    TELEGRAM_OIDC_CLIENT_ID: "123456",
+    TELEGRAM_OIDC_CLIENT_SECRET: "telegram-oidc-client-secret",
     TELEGRAM_ALLOWED_USER_IDS: "123456789,987654321",
     TELEGRAM_OWNER_USER_IDS: "123456789",
   };
@@ -430,6 +432,10 @@ describe("deployment configuration", () => {
       telegram: {
         botUsername: "ManacostTeamBot",
         botToken: "123456:telegram-test-token",
+        oidc: {
+          clientId: "123456",
+          clientSecret: "telegram-oidc-client-secret",
+        },
         allowedUserIds: new Set(["123456789", "987654321"]),
         ownerUserIds: new Set(["123456789"]),
       },
@@ -442,6 +448,8 @@ describe("deployment configuration", () => {
     ["BETTER_AUTH_SECRET", "BETTER_AUTH_SECRET"],
     ["TELEGRAM_LOGIN_BOT_USERNAME", "TELEGRAM_LOGIN_BOT_USERNAME"],
     ["TELEGRAM_LOGIN_BOT_TOKEN", "TELEGRAM_LOGIN_BOT_TOKEN"],
+    ["TELEGRAM_OIDC_CLIENT_ID", "TELEGRAM_OIDC_CLIENT_ID"],
+    ["TELEGRAM_OIDC_CLIENT_SECRET", "TELEGRAM_OIDC_CLIENT_SECRET"],
     ["TELEGRAM_ALLOWED_USER_IDS", "TELEGRAM_ALLOWED_USER_IDS"],
     ["TELEGRAM_OWNER_USER_IDS", "TELEGRAM_OWNER_USER_IDS"],
   ] as const)(

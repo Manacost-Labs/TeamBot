@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { motion, useReducedMotion } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import AgentOrb from "@/components/agents/orb/agent-orb";
 import { ProviderLogo } from "@/components/auth/provider-logo";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,6 @@ import {
   type AuthProviderId,
   authProvidersQueryOptions,
   currentUserQueryOptions,
-  telegramLoginState,
 } from "../lib/auth/queries";
 
 const EASE_OUT = [0.23, 1, 0.32, 1] as const;
@@ -41,73 +40,8 @@ export const Route = createFileRoute("/sign")({
   component: SignScreen,
 });
 
-const TELEGRAM_WIDGET_SOURCE = "https://telegram.org/js/telegram-widget.js?22";
-const TELEGRAM_BOT_USERNAME = /^[A-Za-z][A-Za-z0-9_]{1,28}[Bb][Oo][Tt]$/;
-const TELEGRAM_LOGIN_STATE = /^[a-f0-9]{64}$/;
 const TELEGRAM_GENERIC_ERROR =
   "Не удалось выполнить вход через Telegram. Попробуйте ещё раз.";
-
-/**
- * The official Telegram widget is a script, so it cannot be represented as ordinary JSX.
- *
- * Every value reaching its data attributes is bounded before the node exists. The script source,
- * callback path and callback origin are constants owned by this app; no HTML string is ever parsed.
- */
-export function TelegramLoginWidget({
-  botUsername,
-  state,
-  onError,
-}: {
-  botUsername: string;
-  state: string;
-  onError: () => void;
-}) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const errorHandlerRef = useRef(onError);
-
-  useEffect(() => {
-    errorHandlerRef.current = onError;
-  }, [onError]);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    if (
-      !TELEGRAM_BOT_USERNAME.test(botUsername) ||
-      !TELEGRAM_LOGIN_STATE.test(state)
-    ) {
-      errorHandlerRef.current();
-      return;
-    }
-
-    const callback = new URL(
-      "/api/auth/telegram/callback",
-      window.location.origin,
-    );
-    callback.searchParams.set("state", state);
-
-    const script = document.createElement("script");
-    script.src = TELEGRAM_WIDGET_SOURCE;
-    script.async = true;
-    script.setAttribute("data-telegram-login", botUsername);
-    script.setAttribute("data-size", "large");
-    script.setAttribute("data-radius", "8");
-    script.setAttribute("data-userpic", "false");
-    script.setAttribute("data-auth-url", callback.toString());
-    const handleLoadFailure = () => errorHandlerRef.current();
-    script.addEventListener("error", handleLoadFailure);
-    container.replaceChildren(script);
-
-    return () => {
-      script.removeEventListener("error", handleLoadFailure);
-      // The widget may have replaced the script with an iframe by now, so remove all children it
-      // owns rather than only the original script node.
-      container.replaceChildren();
-    };
-  }, [botUsername, state]);
-
-  return <div className="flex min-h-10 justify-center" ref={containerRef} />;
-}
 
 export function SignScreen() {
   // Which provider is being opened, rather than whether one is: with three buttons, a single
@@ -121,40 +55,7 @@ export function SignScreen() {
   const { data: options } = useQuery(authProvidersQueryOptions());
   const providers = options?.providers ?? [];
   const telegram = options?.telegram ?? null;
-  const [telegramState, setTelegramState] = useState<{
-    status: "idle" | "loading" | "ready" | "error";
-    value?: string;
-  }>({ status: "idle" });
   const [email, setEmail] = useState("");
-
-  useEffect(() => {
-    if (!telegram) {
-      setTelegramState({ status: "idle" });
-      return;
-    }
-
-    const controller = new AbortController();
-    setTelegramState({ status: "loading" });
-    telegramLoginState(controller.signal).then(
-      (value) => {
-        if (!controller.signal.aborted) {
-          setTelegramState({ status: "ready", value });
-        }
-      },
-      (cause: unknown) => {
-        if (
-          controller.signal.aborted ||
-          (cause instanceof DOMException && cause.name === "AbortError")
-        )
-          return;
-        setTelegramState({ status: "error" });
-        setError(
-          "Не удалось подготовить вход через Telegram. Попробуйте ещё раз.",
-        );
-      },
-    );
-    return () => controller.abort();
-  }, [telegram]);
 
   /**
    * Sign in through whichever identity provider covers this address.
@@ -236,20 +137,19 @@ export function SignScreen() {
           variants={{ hidden, shown }}
         >
           {telegram ? (
-            telegramState.status === "ready" && telegramState.value ? (
-              <TelegramLoginWidget
-                botUsername={telegram.botUsername}
-                onError={() => setError(TELEGRAM_GENERIC_ERROR)}
-                state={telegramState.value}
-              />
-            ) : telegramState.status === "loading" ? (
-              <p
-                className="text-center text-sm text-muted-foreground"
-                role="status"
+            <form
+              action="/api/auth/telegram/start?returnPath=/"
+              method="post"
+            >
+              <Button
+                className="h-10 w-full tracking-tight"
+                size="lg"
+                type="submit"
+                variant="outline"
               >
-                Готовим безопасный вход через Telegram…
-              </p>
-            ) : null
+                Продолжить через Telegram
+              </Button>
+            </form>
           ) : providers.length > 0 ? (
             <div className="flex flex-col gap-2">
               {providers.map((provider) => (

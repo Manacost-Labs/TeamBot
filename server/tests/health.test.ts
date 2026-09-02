@@ -69,6 +69,8 @@ describe("runtime capabilities", () => {
           OPENBOT_PUBLIC_URL: "https://work.kolodahearthstone.com",
           TELEGRAM_LOGIN_BOT_USERNAME: "ManacostTeamBot",
           TELEGRAM_LOGIN_BOT_TOKEN: "123456:not-for-the-browser",
+          TELEGRAM_OIDC_CLIENT_ID: "123456",
+          TELEGRAM_OIDC_CLIENT_SECRET: "oidc-not-for-the-browser",
           TELEGRAM_ALLOWED_USER_IDS: "810001,810002",
           TELEGRAM_OWNER_USER_IDS: "810001",
           TRUSTED_ORIGINS: "https://internal-auth.example",
@@ -100,13 +102,19 @@ describe("runtime capabilities", () => {
       "botUsername",
     ]);
     expect(body).not.toContain("not-for-the-browser");
+    expect(body).not.toContain("123456");
     expect(body).not.toContain("810001");
     expect(body).not.toContain("810002");
     expect(body).not.toContain("internal-auth.example");
     expect(body).not.toContain("OPENBOT_PUBLIC_URL");
   });
 
-  test("turns private Telegram callback failures into one generic sign-in result", async () => {
+  test.each([
+    ["callback", "/api/auth/telegram/callback?state=bad", "GET"],
+    ["start", "/api/auth/telegram/start?returnPath=/", "POST"],
+  ] as const)(
+    "turns private Telegram %s failures into one generic sign-in result",
+    async (_flow, path, method) => {
     const telegramApp = createApp(
       loadConfig(
         testEnvironment({
@@ -117,6 +125,8 @@ describe("runtime capabilities", () => {
           OPENBOT_PUBLIC_URL: "https://work.kolodahearthstone.com",
           TELEGRAM_LOGIN_BOT_USERNAME: "ManacostTeamBot",
           TELEGRAM_LOGIN_BOT_TOKEN: "123456:not-for-the-browser",
+          TELEGRAM_OIDC_CLIENT_ID: "123456",
+          TELEGRAM_OIDC_CLIENT_SECRET: "oidc-not-for-the-browser",
           TELEGRAM_ALLOWED_USER_IDS: "810001",
           TELEGRAM_OWNER_USER_IDS: "810001",
         }),
@@ -134,15 +144,16 @@ describe("runtime capabilities", () => {
       },
     );
 
-    const response = await telegramApp.request(
-      "http://openbot.local/api/auth/telegram/callback?state=bad",
-    );
+      const response = await telegramApp.request(`http://openbot.local${path}`, {
+        method,
+      });
 
-    expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toBe("/sign?telegramError=1");
-    expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
-    expect(await response.text()).toBe("");
-  });
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe("/sign?telegramError=1");
+      expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+      expect(await response.text()).toBe("");
+    },
+  );
 });
 
 describe("workspace telemetry mount", () => {

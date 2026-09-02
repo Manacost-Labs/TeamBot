@@ -75,12 +75,14 @@ export type AuthProviderId = "google" | "microsoft" | "okta";
 /** An OAuth client, as every provider here needs one. */
 export type OAuthClient = { clientId: string; clientSecret: string };
 
-/** Server-only settings for the official Telegram Login Widget. */
+/** Server-only settings for Telegram sign-in and its one-release legacy fallback. */
 export type TelegramAuthConfig = {
-  /** Public widget name. This is the only Telegram setting a browser may receive. */
+  /** Public bot name retained for capabilities and the legacy widget fallback. */
   botUsername: string;
-  /** BotFather token used to verify callbacks. Never project this configuration wholesale. */
+  /** BotFather token used only by the legacy callback verifier. */
   botToken: string;
+  /** Telegram OIDC confidential client. Neither field may reach the browser or an agent. */
+  oidc: OAuthClient;
   /** Canonical decimal Telegram subjects admitted by this deployment. */
   allowedUserIds: ReadonlySet<string>;
   /** The non-empty subset provisioned with the existing administrator role. */
@@ -485,6 +487,8 @@ function commaSeparated(environment: Environment, name: string): string[] {
 const TELEGRAM_CONFIGURATION_NAMES = [
   "TELEGRAM_LOGIN_BOT_USERNAME",
   "TELEGRAM_LOGIN_BOT_TOKEN",
+  "TELEGRAM_OIDC_CLIENT_ID",
+  "TELEGRAM_OIDC_CLIENT_SECRET",
   "TELEGRAM_ALLOWED_USER_IDS",
   "TELEGRAM_OWNER_USER_IDS",
 ] as const;
@@ -552,6 +556,22 @@ function telegramAuth(
     );
   }
   const botToken = required(environment, "TELEGRAM_LOGIN_BOT_TOKEN");
+  const oidcClientId = required(environment, "TELEGRAM_OIDC_CLIENT_ID");
+  const numericOidcClientId = Number(oidcClientId);
+  if (
+    !/^[1-9]\d*$/.test(oidcClientId) ||
+    !Number.isSafeInteger(numericOidcClientId)
+  ) {
+    throw new Error(
+      "TELEGRAM_OIDC_CLIENT_ID must be a canonical positive numeric client ID",
+    );
+  }
+  const oidcClientSecret = required(environment, "TELEGRAM_OIDC_CLIENT_SECRET");
+  if (oidcClientSecret.length < 16 || oidcClientSecret.length > 512) {
+    throw new Error(
+      "TELEGRAM_OIDC_CLIENT_SECRET must be between 16 and 512 characters",
+    );
+  }
   const allowedUserIds = telegramIdSet(
     environment,
     "TELEGRAM_ALLOWED_USER_IDS",
@@ -570,6 +590,10 @@ function telegramAuth(
     settings: {
       botUsername,
       botToken,
+      oidc: {
+        clientId: oidcClientId,
+        clientSecret: oidcClientSecret,
+      },
       allowedUserIds,
       ownerUserIds,
     },

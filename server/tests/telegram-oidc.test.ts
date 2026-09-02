@@ -42,7 +42,14 @@ async function signedToken(
       : "https://oauth.telegram.org";
   const audience =
     typeof overrides.aud === "string" ? overrides.aud : CLIENT_ID;
-  const { iss: _issuer, aud: _audience, ...profileOverrides } = overrides;
+  const issuedAt =
+    typeof overrides.iat === "number" ? overrides.iat : NOW_SECONDS;
+  const {
+    iss: _issuer,
+    aud: _audience,
+    iat: _issuedAt,
+    ...profileOverrides
+  } = overrides;
   return new SignJWT({
     sub: "telegram-oidc-subject-883935723",
     id: 883935723,
@@ -57,7 +64,7 @@ async function signedToken(
     .setProtectedHeader({ alg: "RS256", kid: "telegram-test-key" })
     .setIssuer(issuer)
     .setAudience(audience)
-    .setIssuedAt(NOW_SECONDS)
+    .setIssuedAt(issuedAt)
     .setExpirationTime(NOW_SECONDS + 300)
     .sign(privateKey);
 }
@@ -177,6 +184,7 @@ describe("Telegram OIDC ID token verification", () => {
     ["wrong nonce", {}, "wrong-nonce"],
     ["missing Telegram id", { id: undefined }, NONCE],
     ["non-canonical Telegram id", { id: "0883935723" }, NONCE],
+    ["an issued-at time from the future", { iat: NOW_SECONDS + 61 }, NONCE],
   ])("rejects %s with one generic verification error", async (_name, claims, nonce) => {
     const token = await signedToken(claims as Record<string, unknown>);
 
