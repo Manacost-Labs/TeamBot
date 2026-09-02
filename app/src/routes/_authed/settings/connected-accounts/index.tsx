@@ -81,8 +81,8 @@ function RouteComponent() {
 
   return (
     <PageShell
-      description="Services a Bot reads as you, so it only ever sees what you can see. Connecting is yours to grant, and nobody can grant it for you."
-      title="Connected accounts"
+      description="Интеграции, которые сотрудники используют от вашего имени. Они видят только те данные, к которым у вас есть доступ."
+      title="Интеграции"
     >
       {/*
        * Only the failure is worth saying. A success needs no sentence: the row it came back to now
@@ -90,12 +90,13 @@ function RouteComponent() {
        */}
       {outcome === "failed" ? (
         <p className="text-destructive text-sm" role="alert">
-          That account could not be connected. Nothing was saved — try again.
+          Не удалось подключить аккаунт. Ничего не сохранено — попробуйте ещё
+          раз.
         </p>
       ) : null}
       {plugins.isPending || connections.isPending ? null : plugins.error ? (
         <p className="mt-12 text-destructive text-sm" role="alert">
-          Your connected accounts could not be loaded.
+          Не удалось загрузить интеграции.
         </p>
       ) : (
         <PageSection>
@@ -105,8 +106,8 @@ function RouteComponent() {
              * something, when what is missing is an administrator enabling a connector.
              */
             <PageEmpty>
-              Nothing to connect yet. These appear once an administrator enables
-              a connector that reads as the person asking.
+              Пока нет доступных интеграций. Они появятся, когда администратор
+              включит сервис, работающий от вашего имени.
             </PageEmpty>
           ) : (
             <PageRows>
@@ -154,8 +155,8 @@ function RouteComponent() {
                         />
                         <span className="text-muted-foreground text-xs">
                           {connected.has(entry.key)
-                            ? "Connected"
-                            : "Not connected"}
+                            ? "Подключено"
+                            : "Не подключено"}
                         </span>
                         <IconChevronRight className="size-4 shrink-0 text-muted-foreground" />
                       </ItemActions>

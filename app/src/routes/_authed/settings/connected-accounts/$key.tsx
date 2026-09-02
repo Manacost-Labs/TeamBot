@@ -72,11 +72,11 @@ function RouteComponent() {
   };
 
   if (plugins.isPending) {
-    return <PageShell title="Account">{null}</PageShell>;
+    return <PageShell title="Интеграция">{null}</PageShell>;
   }
 
   const back = {
-    label: "Connected accounts",
+    label: "Интеграции",
     linkProps: { to: "/settings/connected-accounts" as const },
   };
 
@@ -89,13 +89,13 @@ function RouteComponent() {
     return (
       <PageShell
         backButton={back}
-        description="This is not a service you connect for yourself."
+        description="Этот сервис не подключается для личного использования."
         title={entry?.title ?? key}
       >
         <PageEmpty>
           {entry
-            ? "A Bot reaches this one with a credential the deployment holds, the same for everybody."
-            : "This deployment has no connector by that name."}
+            ? "Сотрудники используют общий доступ приложения, одинаковый для всей команды."
+            : "В этом приложении нет такой интеграции."}
         </PageEmpty>
       </PageShell>
     );
@@ -118,15 +118,15 @@ function RouteComponent() {
         <PageRows className="mt-0">
           <Item size="sm">
             <ItemContent>
-              {/* Not "Connect your account": the row is also the connected state, and a title has to
+              {/* Not "Подключить аккаунт": the row is also the connected state, and a title has to
                   read for both. */}
-              <ItemTitle>Your account</ItemTitle>
+              <ItemTitle>Ваш аккаунт</ItemTitle>
               <ItemDescription>
                 {!enabled
-                  ? "An administrator has not enabled this connector, so there is nothing to connect to yet."
+                  ? "Администратор ещё не включил эту интеграцию, поэтому подключить её пока нельзя."
                   : connection
-                    ? "A Bot granted its tools reads this as you, and sees only what you can see."
-                    : "No Bot can read this as you. Connecting takes you to the vendor to consent."}
+                    ? "Сотрудник с выданным доступом видит только те данные, которые доступны вам."
+                    : "Пока ни один сотрудник не может читать эти данные от вашего имени. Подключение откроет страницу сервиса для подтверждения."}
               </ItemDescription>
             </ItemContent>
             <ItemActions>
@@ -145,7 +145,7 @@ function RouteComponent() {
                           aria-hidden="true"
                           className="size-1.5 rounded-full bg-emerald-500"
                         />
-                        Connected
+                        Подключено
                         <IconChevronDown />
                       </Button>
                     }
@@ -161,7 +161,7 @@ function RouteComponent() {
                       disabled={connect.isPending}
                       onClick={startConnect}
                     >
-                      Reconnect or update access
+                      Переподключить или изменить доступ
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() =>
@@ -174,13 +174,13 @@ function RouteComponent() {
                          * had not, which is the one outcome worse than not offering it.
                          */
                         setNotice(
-                          `Disconnecting is not built yet. Until it is, revoke it in your ${entry.vendor} account's third-party access settings — that stops this deployment reading anything immediately.`,
+                          `Отключение из приложения пока не реализовано. Отзовите доступ в настройках сторонних приложений аккаунта ${entry.vendor} — после этого приложение сразу перестанет читать данные.`,
                         )
                       }
                       className="whitespace-nowrap"
                       variant="destructive"
                     >
-                      Disconnect your {entry.title} account
+                      Отключить аккаунт {entry.title}
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -196,7 +196,7 @@ function RouteComponent() {
                   type="button"
                   variant="outline"
                 >
-                  Connect
+                  Подключить
                   <IconArrowUpRight />
                 </Button>
               )}
@@ -207,22 +207,22 @@ function RouteComponent() {
 
       {connection ? (
         <PageSection
-          description="What you agreed to, as the vendor recorded it — not what was asked for. The two differ when a consent screen is only partly accepted."
-          title="Access"
+          description="Фактически выданные сервисом разрешения. Они могут отличаться от полного списка запрошенного доступа."
+          title="Доступ"
         >
           <PageRows>
             <Item size="sm">
               <ItemContent>
-                <ItemTitle>Granted</ItemTitle>
+                <ItemTitle>Разрешения</ItemTitle>
                 <ItemDescription className="line-clamp-none">
-                  {connection.scope || "The vendor named no scope."}
+                  {connection.scope || "Сервис не указал список разрешений."}
                 </ItemDescription>
               </ItemContent>
             </Item>
             <Separator />
             <Item size="sm">
               <ItemContent>
-                <ItemTitle>Connected</ItemTitle>
+                <ItemTitle>Подключено</ItemTitle>
               </ItemContent>
               <ItemActions>
                 <span className="text-muted-foreground text-xs">

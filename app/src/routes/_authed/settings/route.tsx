@@ -23,7 +23,7 @@ function RouteComponent() {
     >
       <SettingsSidebar />
       <main className="flex min-h-svh flex-1 flex-col">
-        <MobileSidebarHeader title="Настройки" />
+        <MobileSidebarHeader title="Настройки рабочего пространства" />
         <Outlet />
       </main>
     </SidebarProvider>

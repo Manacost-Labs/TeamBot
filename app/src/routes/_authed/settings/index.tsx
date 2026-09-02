@@ -46,10 +46,10 @@ function RouteComponent() {
    */
   return (
     <PageShell
-      description={`Настройки внешнего вида и поведения ${appConfig.brand.productName} для вашей учётной записи.`}
-      title="Настройки"
+      description={`Внешний вид, доступ к ИИ и интеграции ${appConfig.brand.productName} для вашей учётной записи.`}
+      title="Настройки рабочего пространства"
     >
-      <PageSection title="Основные">
+      <PageSection title="Внешний вид">
         <PageRows>
           <Item size="sm">
             <ItemContent>
@@ -192,7 +192,7 @@ export function OpenRouterSettingsCard() {
   return (
     <PageSection
       description="Ваш личный ключ проверяется OpenRouter и сохраняется в зашифрованном виде. После отправки увидеть его снова нельзя."
-      title="Доступ к AI"
+      title="Доступ к ИИ"
     >
       <PageRows>
         <div className="p-4">

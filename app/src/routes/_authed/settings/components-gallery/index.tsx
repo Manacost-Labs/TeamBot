@@ -29,19 +29,19 @@ function RouteComponent() {
 
   return (
     <PageShell
-      description="The pieces a Bot can draw in a conversation instead of describing something in prose. Which of them any one Bot may use is an administrator's decision."
-      title="Components gallery"
+      description="Компоненты, которые сотрудники могут показывать в диалоге вместо обычного текста. Доступ каждого сотрудника настраивает администратор."
+      title="Галерея компонентов"
     >
       {components.isPending ? null : components.error ? (
         <p className="mt-12 text-destructive text-sm" role="alert">
-          Could not load components.
+          Не удалось загрузить компоненты.
         </p>
       ) : published?.length === 0 ? (
         <Empty className="mt-12 min-h-[30dvh] border border-dashed">
           <EmptyHeader>
-            <EmptyTitle>Nothing published yet</EmptyTitle>
+            <EmptyTitle>Пока нет опубликованных компонентов</EmptyTitle>
             <EmptyDescription className="text-pretty">
-              When an administrator publishes a component, it will show up here.
+              Опубликованные компоненты появятся здесь автоматически.
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
