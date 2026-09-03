@@ -35,5 +35,6 @@ Start with the root [README](../README.md), then use these references:
 - Russian production runbooks:
   - [Runtime and security boundaries](production-runtime.ru.md): production topology, authentication, runtime-state ownership, AG-UI streaming, permissions, workspaces, and editor boundaries.
   - [Operations and execution timing](production-operations.ru.md): backup, deployment, rollback, timing phases, troubleshooting, verification, and known limitations.
+- [Skills и автономные запуски ManacostTeam](manacost-team-autonomy.ru.md): канонический каталог, provenance, чекпоинты, лимиты и approval-only публикация.
 
 Do not include credential values, customer data, transcripts, or local-only notes in public docs.

@@ -62,6 +62,10 @@ import { createGoogleDocumentEditRoutes } from "./editor/google-document-edit-ro
 import type { GoogleDocumentEditService } from "./editor/google-document-edits";
 import { createIntelligenceClient } from "./intelligence-client";
 import type { PeopleStore } from "./people/store";
+import {
+  createManacostTeamRoutes,
+  type ManacostTeamService,
+} from "./plugins/manacost-team-routes";
 import { createPluginRoutes } from "./plugins/routes";
 import type { PluginStore } from "./plugins/store";
 import { type GrantedTool, REFUSAL_MARKER } from "./plugins/tools";
@@ -261,6 +265,8 @@ export function createApp(
     store: AgentEmbedStore;
     allowedOrigins: ReadonlySet<string>;
   },
+  /** Canonical ManacostTeam skills and server-owned parser autonomy. */
+  manacostTeamService?: ManacostTeamService,
 ) {
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -1066,6 +1072,13 @@ export function createApp(
         publicUrl: config.publicUrl,
         appUrl: config.appUrl,
       }),
+    );
+  }
+
+  if (manacostTeamService) {
+    app.route(
+      "/api/manacost-team",
+      createManacostTeamRoutes(manacostTeamService, requireUser, canUseBot),
     );
   }
 

@@ -60,6 +60,7 @@ at `agent-langgraph` on a laptop.
 | `APP_DIST_DIR`       | unset                              | Where the built app is, when this process serves it. Set inside the container image; unset in development, where Vite serves the app. |
 | `AUDIT_RETENTION_DAYS` | unset                            | Whole number of days to keep audit rows; older ones are removed. Unset keeps the trail forever. |
 | `WORKER_SHARED_SECRET` | unset; `start.sh` uses a fixed local default | The secret the routines worker presents to fire a due routine. Without it the server refuses every handoff, whether or not a worker exists to send one. |
+| `MANACOST_CANONICAL_SKILL_MANIFESTS` | unset | JSON allowlist of read-only canonical skill roots pinned to a full commit and manifest SHA-256. See [Skills и автономные запуски](manacost-team-autonomy.ru.md). |
 
 Attachment metadata lives in PostgreSQL, but attachment bytes live under
 `ATTACHMENT_STORAGE_DIR`. That directory therefore needs the same backup and persistence treatment

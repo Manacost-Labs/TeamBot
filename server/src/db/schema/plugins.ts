@@ -14,7 +14,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { agents, credentials, users } from "./core";
-import { jsonb } from "./json";
+import { jsonb, jsonbArray } from "./json";
 
 const createdAt = () =>
   timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
@@ -329,6 +329,15 @@ export const skills = pgTable(
     instructions: text("instructions").notNull(),
     /** Where it came from: `catalogue` for one we ship, `yours` for one somebody wrote here. */
     origin: text("origin").notNull().default("yours"),
+    /** Canonical source identity, populated only for server-imported skills. */
+    sourceRoot: text("source_root"),
+    sourceRepo: text("source_repo"),
+    sourceCommit: char("source_commit", { length: 64 }),
+    manifestHash: char("manifest_hash", { length: 64 }),
+    /** Allowlisted companion paths, hashes and content needed by the skill at invocation time. */
+    companionFiles: jsonbArray("companion_files").notNull().default([]),
+    /** Non-secret provenance shown to operators; the catalogue projection omits filesystem roots. */
+    provenance: jsonb("provenance").notNull().default({}),
     installedBy: text("installed_by"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -407,6 +416,139 @@ export const pluginGrants = pgTable(
   (table) => [
     primaryKey({ columns: [table.kind, table.ref, table.agentId] }),
     index("plugin_grants_agent_idx").on(table.agentId),
+  ],
+);
+
+/** The durable lifecycle of a server-governed ManacostTeam run. */
+export const manacostAutonomyStatus = pgEnum("manacost_autonomy_status", [
+  "running",
+  "awaiting_approval",
+  "blocked",
+  "completed",
+  "failed",
+]);
+
+/**
+ * The server-owned autonomy envelope. Action sets are stored with the profile so a checkpoint can
+ * explain which policy was in force, but callers may only change the numeric limits through the
+ * bounded profile API; adding a new automatic action is a code review decision.
+ */
+export const manacostAutonomyProfiles = pgTable(
+  "manacost_autonomy_profiles",
+  {
+    id: text("id").primaryKey(),
+    maxSteps: integer("max_steps").notNull().default(12),
+    maxDurationMs: integer("max_duration_ms")
+      .notNull()
+      .default(20 * 60 * 1000),
+    maxRetries: integer("max_retries").notNull().default(2),
+    maxOutputChars: integer("max_output_chars").notNull().default(20_000),
+    automaticActions: jsonbArray("automatic_actions")
+      .notNull()
+      .default(["audit", "diagnose", "retry", "codegraph", "validate"]),
+    approvalActions: jsonbArray("approval_actions")
+      .notNull()
+      .default(["publish", "deploy"]),
+    updatedBy: text("updated_by"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    check(
+      "manacost_autonomy_profiles_limits_check",
+      sql`${table.maxSteps} BETWEEN 1 AND 100
+        AND ${table.maxDurationMs} BETWEEN 1000 AND 86400000
+        AND ${table.maxRetries} BETWEEN 0 AND 10
+        AND ${table.maxOutputChars} BETWEEN 1000 AND 1000000`,
+    ),
+  ],
+);
+
+/** One durable bounded-autonomy run, addressed by actor and Bot rather than by a browser session. */
+export const manacostAutonomyRuns = pgTable(
+  "manacost_autonomy_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    actorId: text("actor_id").notNull(),
+    botId: text("bot_id").notNull(),
+    skillSlug: text("skill_slug").notNull(),
+    action: text("action").notNull(),
+    /** Bounded parser arguments needed to resume an approved run; never projected by the API. */
+    input: jsonb("input").notNull().default({}),
+    status: manacostAutonomyStatus("status").notNull().default("running"),
+    step: integer("step").notNull().default(0),
+    retries: integer("retries").notNull().default(0),
+    outputChars: integer("output_chars").notNull().default(0),
+    startedAt: timestamp("started_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    index("manacost_autonomy_runs_actor_idx").on(
+      table.actorId,
+      table.createdAt,
+    ),
+    index("manacost_autonomy_runs_status_idx").on(
+      table.status,
+      table.updatedAt,
+    ),
+    check(
+      "manacost_autonomy_runs_counters_check",
+      sql`${table.step} >= 0 AND ${table.retries} >= 0 AND ${table.outputChars} >= 0`,
+    ),
+  ],
+);
+
+/** Append-only progress records; the last one is enough to resume after a process disappears. */
+export const manacostAutonomyCheckpoints = pgTable(
+  "manacost_autonomy_checkpoints",
+  {
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => manacostAutonomyRuns.id, { onDelete: "cascade" }),
+    sequence: integer("sequence").notNull(),
+    action: text("action").notNull(),
+    status: manacostAutonomyStatus("status").notNull(),
+    output: jsonb("output").notNull().default({}),
+    outputChars: integer("output_chars").notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runId, table.sequence] }),
+    index("manacost_autonomy_checkpoints_run_idx").on(
+      table.runId,
+      table.createdAt,
+    ),
+  ],
+);
+
+/**
+ * A signed approval can be consumed once. Only the digest is durable; the raw token exists in the
+ * approving response and cannot be recovered from the database by an operator or a later request.
+ */
+export const manacostAutonomyApprovals = pgTable(
+  "manacost_autonomy_approvals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => manacostAutonomyRuns.id, { onDelete: "cascade" }),
+    action: text("action").notNull(),
+    tokenHash: char("token_hash", { length: 64 }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    uniqueIndex("manacost_autonomy_approvals_token_idx").on(table.tokenHash),
+    index("manacost_autonomy_approvals_run_idx").on(
+      table.runId,
+      table.expiresAt,
+    ),
   ],
 );
 

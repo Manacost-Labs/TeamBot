@@ -107,6 +107,10 @@ import { useConversationAttachmentTools } from "./plugins/builtin-conversation-a
 import { useRoutineTools } from "./plugins/builtin-routines";
 import { createGoogleDriveFileBridge } from "./plugins/google-drive-file-bridge";
 import { useGoogleDriveFileBridge } from "./plugins/google-drive-rest";
+import {
+  canonicalRootsFromEnvironment,
+  createManacostTeamService,
+} from "./plugins/manacost-team";
 import { redirectUriFor } from "./plugins/oauth";
 import { createPluginStore } from "./plugins/store";
 import { grantedSkills, grantedTools } from "./plugins/tools";
@@ -539,6 +543,50 @@ const pluginStore = createPluginStore({
    */
   redirectUri: config.publicUrl ? redirectUriFor(config.publicUrl) : undefined,
 });
+
+const parserToolByAction = {
+  audit: "audit_all_sources",
+  diagnose: "diagnose_source",
+  retry: "retry_sources",
+  codegraph: "codegraph_explore",
+  validate: "validate_workspace",
+  publish: "publish_and_verify",
+  deploy: "publish_and_verify",
+} as const;
+let canonicalRoots: ReturnType<typeof canonicalRootsFromEnvironment> = [];
+try {
+  canonicalRoots = canonicalRootsFromEnvironment();
+} catch {
+  // A malformed optional catalogue configuration must disable the importer, not prevent the app from serving chats.
+  console.warn("[manacost-team] canonical skill catalogue is disabled");
+}
+const manacostTeamService = createManacostTeamService({
+  database,
+  encryptionKey: config.keyEncryptionKey,
+  canonicalRoots,
+  executeParserAction: async ({ action, runId, actorId, botId, input }) => {
+    const result = await pluginStore.callTool({
+      ref: `parser-ops/${parserToolByAction[action]}`,
+      args: input,
+      actorId,
+      botId,
+      runId,
+      threadId: `manacost:${runId}`,
+    });
+    if (result.isError) throw new Error(result.text);
+    return result.text;
+  },
+});
+if (canonicalRoots.length > 0) {
+  void manacostTeamService
+    .importCanonicalSkills()
+    .then((report) =>
+      console.info(
+        JSON.stringify({ type: "manacost-skills-synced", ...report }),
+      ),
+    )
+    .catch(() => console.warn("[manacost-team] canonical skill sync failed"));
+}
 const googleDocumentEdits = createGoogleDocumentEditService({
   database,
   pluginStore,
@@ -1330,6 +1378,7 @@ const app = createApp(
     store: agentProfileStore,
     allowedOrigins: agentEmbedAllowedOrigins,
   },
+  manacostTeamService,
 );
 
 /**

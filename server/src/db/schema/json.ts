@@ -27,3 +27,12 @@ export const jsonb = customType<{
   // Straight through. The double `JSON.stringify` is the whole bug.
   toDriver: (value) => value,
 });
+
+/** JSON arrays need a separate type because `jsonb` deliberately models object payloads. */
+export const jsonbArray = customType<{
+  data: unknown[];
+  driverData: unknown;
+}>({
+  dataType: () => "jsonb",
+  toDriver: (value) => value,
+});

@@ -253,6 +253,13 @@
       "when": 1788391765195,
       "tag": "0035_parallel_tenebrous",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1788428194703,
+      "tag": "0036_manacost_team_autonomy",
+      "breakpoints": true
     }
   ]
 }
