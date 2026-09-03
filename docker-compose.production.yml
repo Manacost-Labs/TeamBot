@@ -141,6 +141,10 @@ services:
       # Optional browser origins for the per-agent AG-UI embedding API. Empty keeps it
       # server-to-server only; never use a wildcard.
       AGENT_EMBED_ALLOWED_ORIGINS: ${AGENT_EMBED_ALLOWED_ORIGINS:-}
+      # Canonical ManacostTeam skills are imported only from the pinned, read-only bundle mounted
+      # below. Keeping the manifest in the protected production environment avoids shipping a
+      # mutable host path or an unreviewed repository revision in the application image.
+      MANACOST_CANONICAL_SKILL_MANIFESTS: ${MANACOST_CANONICAL_SKILL_MANIFESTS:-}
       AGENT_CONNECTION_TEST_TIMEOUT_MS: "45000"
       AGENT_COMPUTER_URL: http://agent-computer:4100
       COMPUTER_TOKEN: ${COMPUTER_TOKEN:?COMPUTER_TOKEN is required}
@@ -152,6 +156,7 @@ services:
     volumes:
       - openbot-postgres:/var/lib/postgresql
       - openbot-attachments:/var/lib/openbot/attachments
+      - /var/lib/openbot/canonical-skills:/var/lib/openbot/canonical-skills:ro
       - ./docker/s6/scripts/migrate.sh:/etc/s6-overlay/scripts/migrate.sh:ro
     depends_on:
       attachment-storage-init:

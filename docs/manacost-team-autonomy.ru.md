@@ -39,6 +39,11 @@ ManacostTeam подключает канонические skills сервера
 MANACOST_CANONICAL_SKILL_MANIFESTS='[{"id":"server-skills","root":"/var/lib/openbot/canonical-skills","repo":"https://github.com/Manacost-Labs/skills","commit":"<commit>","manifestSha256":"<sha256 manifest.json>"}]'
 ```
 
+В production каталог монтируется в `/var/lib/openbot/canonical-skills` только для чтения. Bundle
+собирается из закреплённого commit и принадлежит `root`; обновление требует новой проверки
+манифеста, смены pin в защищённом `.env` и обычного deployment. Сам путь и секреты в Git не
+сохраняются.
+
 Не указывайте рабочее дерево с незакоммиченными изменениями. Сначала соберите bundle из нужного
 commit, сгенерируйте манифест и подключите его read-only. Публичный endpoint каталога возвращает
 только названия, описания и provenance; исходный текст выдаётся отдельному Bot только после проверки
