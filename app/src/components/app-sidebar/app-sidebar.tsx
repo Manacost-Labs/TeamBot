@@ -21,7 +21,7 @@ import {
 } from "@tanstack/react-router";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type * as React from "react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -100,11 +100,6 @@ function UserAvatar() {
 }
 
 /**
- * Cap layout animation because `layout` measures every animated row on each reorder.
- */
-const MAX_ANIMATED_ROWS = 32;
-
-/**
  * The roster, narrowed to what the person typed.
  *
  * Matches the channel's name and the last thing said in it, because those are the two things the
@@ -172,20 +167,17 @@ export function isUnread(
 }
 
 /**
- * A roster row that can animate.
+ * A roster row that can animate on first appearance.
  *
- * Two movements only: a channel that did not exist fades in, and a channel that was just spoken in
- * moves to the top. Nothing else animates, a roster that reacts to being read is a roster that
- * moves under the cursor.
+ * A channel that did not exist fades in. Realtime order changes stay immediate because measuring
+ * every row for a layout animation makes a channel switch visibly compete with the chat surface.
  */
 const ChannelRow = memo(function ChannelRow({
   channel,
-  animateOrder,
   animateEntrance,
   historyScope,
 }: {
   channel: ChannelSummary;
-  animateOrder: boolean;
   animateEntrance: boolean;
   historyScope?: string;
 }) {
@@ -209,7 +201,6 @@ const ChannelRow = memo(function ChannelRow({
           : false
       }
       exit={{ opacity: 0 }}
-      layout={animateOrder && !shouldReduceMotion ? "position" : false}
       transition={{
         duration: animateEntrance ? ENTRANCE_SECONDS : 0,
         ease: EASE_OUT,
@@ -248,15 +239,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     () => pinnedFirst(matchingChannels(channels.data, search)),
     [channels.data, search],
   );
-  const visibleOrder = useMemo(
-    () => visibleChannels.map((channel) => channel.id).join("\u0000"),
-    [visibleChannels],
-  );
-  const previousVisibleOrder = useRef(visibleOrder);
-  const orderChanged = previousVisibleOrder.current !== visibleOrder;
-  useEffect(() => {
-    previousVisibleOrder.current = visibleOrder;
-  }, [visibleOrder]);
   const currentUserId = currentUser?.id;
   useEffect(() => {
     if (!currentUserId || !channels.data) return;
@@ -310,15 +292,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       });
     }
   }, [channels.data, currentUserId]);
-  /*
-   * FILTERING DOES NOT ANIMATE. Rows exit and relayout on every keystroke otherwise, which is a
-   * list thrashing under somebody who is still typing — and the moving target is the very thing
-   * they are trying to read. Order animation is for a channel that was just spoken in, which is
-   * occasional; this is not.
-   */
-  const animateOrder =
-    !searching && orderChanged && visibleChannels.length <= MAX_ANIMATED_ROWS;
-
   const handleSignOut = async () => {
     if (currentUser) {
       // Stop speculative authenticated reads before the server session is revoked. Channel query
@@ -429,7 +402,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 <ChannelRow
                   animateEntrance={false}
                   key={channel.id}
-                  animateOrder={false}
                   channel={channel}
                   historyScope={currentUser?.id}
                 />
@@ -439,7 +411,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 {visibleChannels.map((channel) => (
                   <ChannelRow
                     animateEntrance
-                    animateOrder={animateOrder}
                     channel={channel}
                     historyScope={currentUser?.id}
                     key={channel.id}

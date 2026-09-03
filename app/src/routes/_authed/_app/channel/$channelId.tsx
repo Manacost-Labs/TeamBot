@@ -6,7 +6,6 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { motion, useReducedMotion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { AgentProfile } from "@/components/agents/agent-profile";
@@ -31,19 +30,12 @@ import { onComputerActivity } from "@/lib/copilot/computer-activity";
 import { CopilotProvider } from "@/lib/copilot/provider";
 import { useAgentRunActivity } from "@/lib/copilot/run-activity-store";
 import { agentRunStatusLabel } from "@/lib/copilot/run-state";
-import {
-  CHANNEL_SWITCH_SECONDS,
-  EASE_OUT,
-  ENTRANCE_SECONDS,
-} from "@/lib/motion";
 
 const chatSearchSchema = z.object({
   settings: z.boolean().optional(),
   /** Opens the Bot's screen in the shared detail pane. */
   watch: z.boolean().optional(),
 });
-
-const HEADING_ENTRANCE_OFFSET = "translateY(4px)";
 
 /** Shared detail pane width for the live screen view. */
 const SCREEN_PANEL_WIDTH = 400;
@@ -105,7 +97,6 @@ function RouteComponent() {
   const { data: currentUser } = useQuery(currentUserQueryOptions());
   const navigate = Route.useNavigate();
   const isSettingsOpen = settings === true;
-  const prefersReducedMotion = useReducedMotion();
   const isWatching = watch === true;
   /** Channel routing currently supports one coworker. */
   const agentId = displayedChannel?.agentIds[0];
@@ -200,44 +191,18 @@ function RouteComponent() {
     >
       <div className="flex flex-col">
         <div className="sticky top-0 flex h-12 flex-row items-center justify-between gap-2 border-border border-b px-3">
-          {/* Keyed on the displayed name so cold channel loads animate the resolved name, not the id. */}
+          {/* Keep navigation chrome stable while the keyed chat boundary changes below. */}
           <div className="flex min-w-0 items-center gap-1.5">
-            <motion.div
-              animate={{ opacity: 1 }}
-              className="shrink-0"
-              initial={{ opacity: 0 }}
-              key={`avatar:${displayedChannel?.name ?? channelId}`}
-              transition={{
-                duration: ENTRANCE_SECONDS,
-                ease: EASE_OUT,
-              }}
-            >
+            <div className="shrink-0">
               <ChannelAvatar
                 participantIds={displayedChannel?.agentIds ?? []}
                 size={22}
               />
-            </motion.div>
+            </div>
             <div className="flex min-w-0 flex-col">
-              <motion.span
-                animate={
-                  prefersReducedMotion
-                    ? { opacity: 1 }
-                    : { opacity: 1, transform: "translateY(0px)" }
-                }
-                className="min-w-0 text-sm tracking-tight truncate"
-                initial={
-                  prefersReducedMotion
-                    ? { opacity: 0 }
-                    : { opacity: 0, transform: HEADING_ENTRANCE_OFFSET }
-                }
-                key={`name:${displayedChannel?.name ?? channelId}`}
-                transition={{
-                  duration: ENTRANCE_SECONDS,
-                  ease: EASE_OUT,
-                }}
-              >
+              <span className="min-w-0 text-sm tracking-tight truncate">
                 {displayedChannel?.name ?? "Диалог"}
-              </motion.span>
+              </span>
               {agentId ? (
                 <ChannelHeaderStatus
                   agentId={agentId}
@@ -282,28 +247,14 @@ function RouteComponent() {
           </div>
         </div>
       </div>
-      <motion.div
-        animate={{ opacity: 1, transform: "translateY(0px)" }}
-        className="flex min-h-0 flex-1 flex-col"
-        data-testid="channel-content-transition"
-        initial={
-          prefersReducedMotion
-            ? false
-            : { opacity: 0.82, transform: "translateY(4px)" }
-        }
-        key={displayedChannel?.id ?? `pending:${channelId}`}
-        transition={{
-          duration: prefersReducedMotion ? 0 : CHANNEL_SWITCH_SECONDS,
-          ease: EASE_OUT,
-        }}
-      >
+      <div className="flex min-h-0 flex-1 flex-col">
         <ChannelBody
           channel={displayedChannel}
           hasError={Boolean(channel.error && displayedChannel === undefined)}
           historyScope={currentUser?.id}
           isPending={channel.isPending && displayedChannel === undefined}
         />
-      </motion.div>
+      </div>
     </DetailPanel>
   );
 }
