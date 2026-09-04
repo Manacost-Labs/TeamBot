@@ -121,25 +121,6 @@ function prefersReducedMotion(): boolean {
   );
 }
 
-/**
- * AG-UI may update structured content and tool calls in place. React dependency comparison cannot
- * see a nested mutation when the array object itself remains stable, so keep a bounded signature
- * for only the two live-edge rows that can still change.
- */
-function mutableProjectionSignature(message: Readonly<Message> | undefined) {
-  if (!message) return "";
-  try {
-    return JSON.stringify({
-      content: typeof message.content === "string" ? null : message.content,
-      toolCalls: message.role === "assistant" ? message.toolCalls : null,
-    });
-  } catch {
-    // A malformed circular value will be rejected at the protocol boundary; rendering must still
-    // remain live until that happens.
-    return `${message.id}:${message.role}`;
-  }
-}
-
 type HistoryWindowState = {
   /** Null follows the live tail; an id pins the first mounted row while reading older history. */
   startId: string | null;
@@ -336,9 +317,11 @@ function MessageLayout({
   arriving?: boolean;
   children: React.ReactNode;
 }) {
+  // Eligibility belongs to this mount. Later deltas must not cancel the running animation.
+  const [animateEntrance] = useState(arriving);
   return (
     <div
-      className={`flex w-full flex-col${arriving ? " transcript-row-enter" : ""}`}
+      className={`flex w-full flex-col${animateEntrance ? " transcript-row-enter" : ""}`}
       data-slot="message-arriving"
     >
       {children}
@@ -611,7 +594,7 @@ const TranscriptToolCall = memo(function TranscriptToolCall({
           />
         ) : googleWorkspaceResult ? (
           <GoogleWorkspaceCard result={googleWorkspaceResult} />
-        ) : name.startsWith("mcp__") ? (
+        ) : /^mcp(?:_h)?__/.test(name) ? (
           <ServerToolLine name={name} result={result} />
         ) : (
           <RegisteredToolCall
@@ -815,35 +798,11 @@ export function ChatTranscript({
    * walks from the durable tail and only returns the mounted window; expensive markdown/tool rows
    * below remain memoised on primitive props.
    */
-  const projectionTail = messages.at(-1);
-  const projectionTailBefore = messages.at(-2);
-  const projectionTailMutable = mutableProjectionSignature(projectionTail);
-  const projectionTailBeforeMutable =
-    mutableProjectionSignature(projectionTailBefore);
-  // AG-UI mutates the message array in place while streaming. Scalar tail dependencies preserve
-  // correctness for those mutations without re-projecting the full history on unrelated run state.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: mutable AG-UI arrays are tracked by length and tail snapshots.
-  const visible = useMemo(
-    () =>
-      projectTranscriptWindow(messages, {
-        size: historyWindow.size,
-        startId: historyWindow.startId,
-        olderStep: TRANSCRIPT_HISTORY_PAGE_SIZE,
-      }),
-    [
-      historyWindow.size,
-      historyWindow.startId,
-      messages.length,
-      projectionTail?.content,
-      projectionTail?.id,
-      projectionTail?.role,
-      projectionTailMutable,
-      projectionTailBefore?.content,
-      projectionTailBefore?.id,
-      projectionTailBefore?.role,
-      projectionTailBeforeMutable,
-    ],
-  );
+  const visible = projectTranscriptWindow(messages, {
+    size: historyWindow.size,
+    startId: historyWindow.startId,
+    olderStep: TRANSCRIPT_HISTORY_PAGE_SIZE,
+  });
   const activity = useMemo(
     () => activitySnapshotFor(visible.items, busy, stopped, run),
     [busy, run, stopped, visible.items],

@@ -87,22 +87,36 @@ type ReconciliationMonitorOptions = ReconciliationOptions & {
 const reconciliations = new Map<string, Promise<RunReconciliationEvidence>>();
 const monitors = new Map<string, Promise<RunReconciliationEvidence | null>>();
 
+/** Without per-message run IDs, only output before the next user turn belongs to this request. */
+export function assistantOutputAfter(
+  messages: readonly Message[],
+  userMessageId: string,
+): Extract<Message, { role: "assistant" }> | undefined {
+  const userIndex = messages.findIndex(
+    (message) => message.id === userMessageId && message.role === "user",
+  );
+  if (userIndex < 0) return undefined;
+  let output: Extract<Message, { role: "assistant" }> | undefined;
+  for (let index = userIndex + 1; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message.role === "user") break;
+    if (
+      message.role === "assistant" &&
+      typeof message.content === "string" &&
+      message.content.trim().length > 0 &&
+      !isProgressNote(message.content)
+    ) {
+      output = message;
+    }
+  }
+  return output;
+}
+
 export function hasAssistantOutputAfter(
   messages: readonly Message[],
   userMessageId: string,
 ): boolean {
-  const userIndex = messages.findIndex(
-    (message) => message.id === userMessageId,
-  );
-  if (userIndex < 0) return false;
-  return messages.slice(userIndex + 1).some((message) => {
-    if (message.role !== "assistant") return false;
-    return (
-      typeof message.content === "string" &&
-      message.content.trim().length > 0 &&
-      !isProgressNote(message.content)
-    );
-  });
+  return assistantOutputAfter(messages, userMessageId) !== undefined;
 }
 
 /**

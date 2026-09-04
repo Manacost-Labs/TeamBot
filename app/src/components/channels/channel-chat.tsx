@@ -43,6 +43,7 @@ import {
   agentRunActivityStore,
 } from "@/lib/copilot/run-activity-store";
 import {
+  assistantOutputAfter,
   hasAssistantOutputAfter,
   RECONCILIATION_DELAYS_MS,
 } from "@/lib/copilot/run-reconciliation";
@@ -547,7 +548,7 @@ export function ChannelChat({
           historyScope,
           channel.threadId,
           runtimeAgentId,
-          { timeoutMs: THREAD_HISTORY_REQUEST_TIMEOUT_MS },
+          { timeoutMs: THREAD_HISTORY_REQUEST_TIMEOUT_MS, fresh: true },
         );
         presentAuthoritativeHistory(stored);
         refreshFailure = null;
@@ -594,9 +595,7 @@ export function ChannelChat({
       if (recovered) {
         awaitingReplies.current.delete(token.generation);
         runActivity.finish(token);
-        const reply = [...target.messages]
-          .reverse()
-          .find((message) => message.role === "assistant");
+        const reply = assistantOutputAfter(target.messages, userMessageId);
         const content = typeof reply?.content === "string" ? reply.content : "";
         if (content) reportRef.current(content, runtimeAgentId);
         return true;
@@ -762,9 +761,7 @@ export function ChannelChat({
 
       awaitingReplies.current.delete(token.generation);
       runActivity.finish(token);
-      const reply = [...target.messages]
-        .reverse()
-        .find((message) => message.role === "assistant");
+      const reply = assistantOutputAfter(target.messages, userMessageId);
       const content = typeof reply?.content === "string" ? reply.content : "";
       if (content) reportRef.current(content, runtimeAgentId);
     } catch (error) {

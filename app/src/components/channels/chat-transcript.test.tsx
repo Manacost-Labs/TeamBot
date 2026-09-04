@@ -69,6 +69,31 @@ function PaginatedTranscriptFixture() {
 }
 
 describe("transcript windowing", () => {
+  test("renders aliased server tools without a frontend tool registration", () => {
+    const view = render(
+      <ChatTranscript
+        messages={[
+          {
+            id: "aliased-tool",
+            role: "assistant",
+            toolCalls: [
+              {
+                id: "alias-call",
+                type: "function",
+                function: {
+                  name: "mcp_h__oomol-connector__github_get_user__h0123456789abcdef",
+                  arguments: "{}",
+                },
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(view.getByText("Github get user")).toBeTruthy();
+    expect(view.getByText("oomol-connector")).toBeTruthy();
+  });
+
   test("shows the thinking orb only while the Bot is working", () => {
     const view = render(
       <ChatTranscript
@@ -194,6 +219,75 @@ describe("transcript windowing", () => {
 
     expect(view.queryByText("First content")).toBeNull();
     expect(view.getByText("Second content")).toBeTruthy();
+  });
+
+  test("refreshes an earlier visible row when the final two rows are unchanged", () => {
+    const initial = messages(4);
+    const view = render(<ChatTranscript messages={initial} />);
+    const unchanged = view.getByText("Answer 3");
+
+    view.rerender(
+      <ChatTranscript
+        messages={initial.map((message, index) =>
+          index === 0 && message.role === "assistant"
+            ? { ...message, content: "Refreshed answer" }
+            : message,
+        )}
+      />,
+    );
+
+    expect(view.queryByText("Answer 0")).toBeNull();
+    expect(view.getByText("Refreshed answer")).toBeTruthy();
+    expect(view.getByText("Answer 3")).toBe(unchanged);
+  });
+
+  test("refreshes nested content outside the live edge in a stable array", () => {
+    const content = [{ type: "text" as const, text: "Earlier question" }];
+    const stable: Message[] = [
+      { id: "earlier-user", role: "user", content },
+      ...messages(3),
+    ];
+    const view = render(<ChatTranscript messages={stable} />);
+
+    content[0].text = "Corrected earlier question";
+    view.rerender(<ChatTranscript messages={stable} />);
+
+    expect(view.queryByText("Earlier question")).toBeNull();
+    expect(view.getByText("Corrected earlier question")).toBeTruthy();
+  });
+
+  test("keeps a live row's entrance animation across subsequent text deltas", () => {
+    const initial = messages(2);
+    const view = render(<ChatTranscript messages={initial} />);
+    const reply: Message = {
+      id: "live-answer",
+      role: "assistant",
+      content: "Live answer",
+    };
+    view.rerender(<ChatTranscript messages={[...initial, reply]} />);
+    const row = view
+      .getByText("Live answer")
+      .closest('[data-slot="message-arriving"]');
+    expect(row?.classList.contains("transcript-row-enter")).toBe(true);
+
+    view.rerender(
+      <ChatTranscript
+        messages={[...initial, { ...reply, content: "Live answer continued" }]}
+      />,
+    );
+
+    expect(
+      view
+        .getByText("Live answer continued")
+        .closest('[data-slot="message-arriving"]'),
+    ).toBe(row);
+    expect(row?.classList.contains("transcript-row-enter")).toBe(true);
+    expect(
+      view
+        .getByText("Answer 0")
+        .closest('[data-slot="message-arriving"]')
+        ?.classList.contains("transcript-row-enter"),
+    ).toBe(false);
   });
 
   test("never renders unmarked reasoning-role content", () => {

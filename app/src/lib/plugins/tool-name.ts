@@ -18,11 +18,17 @@ export type ToolName = {
 
 export function readToolName(name: string): ToolName {
   const parts = name.split("__");
-  if (parts.length < 3 || parts[0] !== "mcp") return { label: name };
-
+  if (parts.length < 3 || (parts[0] !== "mcp" && parts[0] !== "mcp_h")) {
+    return { label: name };
+  }
   const [, server, ...rest] = parts;
   const tool = rest.join("__");
-  const label = humanise(tool);
+  // Strip from the joined action: a base64url digest can itself contain `__` separators.
+  const action =
+    parts[0] === "mcp_h"
+      ? tool.replace(/(?:^|__)h[a-zA-Z0-9_-]{16}$/, "")
+      : tool;
+  const label = humanise(action) || "Tool call";
 
   /*
    * The server is dropped when the action already says it. Vendors name a tool after the thing it

@@ -11,6 +11,7 @@ import {
   prefetchThreadMessages,
   readableHistoryPage,
   readableTurns,
+  readThreadMessages,
   refreshThreadHistoryPage,
   refreshThreadMessages,
 } from "../src/lib/copilot/thread-messages";
@@ -272,6 +273,72 @@ describe("shapes a real thread contains", () => {
 });
 
 describe("bounded stale-while-revalidate history", () => {
+  test("fresh reconciliation sees persisted output without waiting for the warm cache", async () => {
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return Response.json({
+        messages: fetchCalls === 1 ? [userTurn] : [userTurn, answer],
+      });
+    }) as typeof fetch;
+
+    await refreshThreadMessages("user-a", "thread", "agent");
+    const warm = await refreshThreadMessages("user-a", "thread", "agent");
+    expect(warm.messages).toHaveLength(1);
+    const fresh = await refreshThreadMessages("user-a", "thread", "agent", {
+      fresh: true,
+    });
+    expect(fresh.messages.at(-1)?.id).toBe(answer.id);
+    expect(fetchCalls).toBe(2);
+  });
+
+  test("concurrent fresh reads still share one pending server response", async () => {
+    globalThis.fetch = (async () =>
+      Response.json({ messages: [userTurn] })) as typeof fetch;
+    await refreshThreadMessages("user-a", "thread", "agent");
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      await released;
+      return Response.json({ messages: [userTurn, answer] });
+    }) as typeof fetch;
+
+    const first = refreshThreadMessages("user-a", "thread", "agent", {
+      fresh: true,
+    });
+    const second = refreshThreadMessages("user-a", "thread", "agent", {
+      fresh: true,
+    });
+    release();
+    const results = await Promise.all([first, second]);
+    expect(results.map((result) => result.messages.at(-1)?.id)).toEqual([
+      answer.id,
+      answer.id,
+    ]);
+    expect(fetchCalls).toBe(1);
+  });
+
+  test("the legacy fresh reader also bypasses a just-completed cache entry", async () => {
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return Response.json({
+        messages: fetchCalls === 1 ? [userTurn] : [userTurn, answer],
+      });
+    }) as typeof fetch;
+    await readThreadMessages("thread", "agent", { sessionScope: "user-a" });
+    const fresh = await readThreadMessages("thread", "agent", {
+      sessionScope: "user-a",
+      fresh: true,
+    });
+    expect(fresh.messages.at(-1)?.id).toBe(answer.id);
+    expect(fetchCalls).toBe(2);
+  });
+
   test("shares a warm history read with the active channel", async () => {
     let fetchCalls = 0;
     let releaseResponse = () => {};

@@ -8,6 +8,39 @@ import { readToolName } from "../src/lib/plugins/tool-name";
  * that exists to keep two vendors' `search` apart. A reader should never see either.
  */
 describe("naming a tool call", () => {
+  test("removes a transport digest even when its base64url contains separators", () => {
+    expect(
+      readToolName(
+        "mcp_h__oomol-connector__github_get_user__hab__cd__ef__ghij",
+      ),
+    ).toEqual({ label: "Github get user", detail: "oomol-connector" });
+  });
+
+  test("keeps a useful label when a long server name consumes the alias stem", () => {
+    const server = "x".repeat(38);
+    expect(readToolName(`mcp_h__${server}__h0123456789abcdef`)).toEqual({
+      label: "Tool call",
+      detail: server,
+    });
+  });
+
+  test("shows an aliased OOMOL action without its transport hash", () => {
+    expect(
+      readToolName(
+        "mcp_h__oomol-connector__github_get_user__h0123456789abcdef",
+      ),
+    ).toEqual({
+      label: "Github get user",
+      detail: "oomol-connector",
+    });
+  });
+
+  test("does not hide a hash-looking suffix from a legacy tool", () => {
+    expect(readToolName("mcp__box__read__h0123456789abcdef").label).toBe(
+      "Read h0123456789abcdef",
+    );
+  });
+
   test("an MCP tool reads as an action against a named server", () => {
     expect(readToolName("mcp__slack__post_message")).toEqual({
       label: "Post message",

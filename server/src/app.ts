@@ -67,7 +67,7 @@ import {
   type ManacostTeamService,
 } from "./plugins/manacost-team-routes";
 import { createPluginRoutes } from "./plugins/routes";
-import type { PluginStore } from "./plugins/store";
+import { type PluginStore, refFromToolName } from "./plugins/store";
 import { type GrantedTool, REFUSAL_MARKER } from "./plugins/tools";
 import { createRoutineRoutes, type RoutineStore } from "./routines/routes";
 import type { RoutineRunner } from "./routines/runner";
@@ -991,9 +991,7 @@ export function createApp(
                 return [
                   ...new Set(
                     granted.tools.map(
-                      (tool) =>
-                        tool.toolName.replace(/^mcp__/, "").split("__")[0] ??
-                        tool.toolName,
+                      (tool) => tool.ref.split("/")[0] ?? tool.ref,
                     ),
                   ),
                 ];
@@ -1186,9 +1184,19 @@ export function createApp(
           });
         }
 
+        // Hashed aliases are not reversible. Resolve only against this signed Bot's current
+        // grants; callTool still rechecks grants, actor access and policy at dispatch time.
+        const ref = body.name.startsWith("mcp_h__")
+          ? refFromToolName(
+              body.name,
+              (await pluginStore.listForAgent(verdict.botId)).tools.map(
+                (tool) => tool.ref,
+              ),
+            )
+          : body.name.replace(/^mcp__/, "").replace("__", "/");
+        if (!ref) throw new Error("That tool is no longer available.");
         const result = await pluginStore.callTool({
-          // The model is offered `mcp__server__tool`; the store speaks `server/tool`.
-          ref: body.name.replace(/^mcp__/, "").replace("__", "/"),
+          ref,
           args: body.args ?? {},
           botId: verdict.botId,
           // From the assertion, never the body: this is the name the audit row will carry.

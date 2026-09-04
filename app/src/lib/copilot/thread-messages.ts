@@ -465,7 +465,9 @@ export async function readThreadMessages(
   }
 
   try {
-    return await refreshThreadMessages(sessionScope, threadId, agentId);
+    return await refreshThreadMessages(sessionScope, threadId, agentId, {
+      fresh: options.fresh,
+    });
   } catch {
     return NOTHING;
   }
@@ -473,23 +475,28 @@ export async function readThreadMessages(
 
 /**
  * Reads the authenticated server, joining a pending prefetch and reusing its just-finished snapshot
- * when possible; callers decide how an explicit refresh failure is shown.
+ * when possible. Reconciliation uses `fresh` to bypass completed snapshots, but still joins a
+ * pending server read. Callers decide how an explicit refresh failure is shown.
  */
 export async function refreshThreadMessages(
   sessionScope: string,
   threadId: string,
   agentId: string,
-  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  options: { signal?: AbortSignal; timeoutMs?: number; fresh?: boolean } = {},
 ): Promise<StoredThread> {
   options.signal?.throwIfAborted();
 
   /*
    * A prefetch that completed moments ago is already the fresh server answer the active view needs.
    * Reusing it removes the click -> duplicate GET round trip while keeping the window deliberately
-   * tiny; writes invalidate the cache immediately, so this cannot hide a local message.
+   * tiny. Local writes invalidate the cache; reconciliation bypasses it to observe remote writes.
    */
   const recent = threadHistoryCache.peek(sessionScope, threadId, agentId);
-  if (recent && Date.now() - recent.cachedAt < PREFETCH_DEDUP_MS) {
+  if (
+    !options.fresh &&
+    recent &&
+    Date.now() - recent.cachedAt < PREFETCH_DEDUP_MS
+  ) {
     options.signal?.throwIfAborted();
     return recent;
   }

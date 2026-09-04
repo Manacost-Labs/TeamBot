@@ -101,15 +101,16 @@ export function grantedToolGuidance(
 
   const bySystem = new Map<string, string[]>();
   for (const tool of tools) {
-    // `mcp__server__tool`, which is the shape the model is offered.
-    const parts = tool.name.replace(/^mcp__/, "").split("__");
-    const system = parts.length > 1 ? (parts[0] as string) : "this deployment";
-    const rest = parts.length > 1 ? parts.slice(1).join("__") : tool.name;
-    bySystem.set(system, [...(bySystem.get(system) ?? []), rest]);
+    // `ref` is the raw server/action identity; the model-facing name may be a hashed alias.
+    const separator = tool.ref.indexOf("/");
+    const system =
+      separator > 0 ? tool.ref.slice(0, separator) : "this deployment";
+    const action = separator > 0 ? tool.ref.slice(separator + 1) : tool.ref;
+    bySystem.set(system, [...(bySystem.get(system) ?? []), action]);
   }
 
   const held = [...bySystem.keys()];
-  const missing = connectedButNotHeld.filter(
+  const missing = [...new Set(connectedButNotHeld)].filter(
     (system) => !held.includes(system),
   );
 

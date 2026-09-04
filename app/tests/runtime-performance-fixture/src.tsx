@@ -21,6 +21,7 @@ type BrowserMeasurement = {
 };
 
 type BenchmarkApi = {
+  showTranscript: (messages: readonly Message[], key?: string) => void;
   peek: (generation: number) => BrowserMeasurement | null;
   prepare: (scenario: Scenario, iteration: number) => number;
   take: (generation: number) => BrowserMeasurement | null;
@@ -269,7 +270,7 @@ function RuntimePerformanceFixture() {
     };
   }, [view.generation]);
 
-  const start = useCallback<BenchmarkApi["start"]>(
+  const start = useCallback<(scenario: Scenario, iteration: number) => number>(
     (scenario, iteration) => {
       if (scenario === "warm_switch") {
         const slot =
@@ -320,6 +321,14 @@ function RuntimePerformanceFixture() {
 
   useEffect(() => {
     globalThis.runtimePerformanceBenchmark = {
+      showTranscript: (messages, key) => {
+        setView((previous) => ({
+          ...previous,
+          key: key ?? previous.key,
+          messages,
+          busy: false,
+        }));
+      },
       peek: (generation) => measurements.current.get(generation) ?? null,
       prepare: (scenario, iteration) => {
         if (prepared.current || pending.current) {

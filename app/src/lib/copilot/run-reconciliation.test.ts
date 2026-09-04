@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Message } from "@ag-ui/core";
 import {
+  assistantOutputAfter,
   hasAssistantOutputAfter,
   isProgressNote,
   monitorRunEvidence,
@@ -11,13 +12,75 @@ import {
 } from "./run-reconciliation";
 
 const user = { id: "user-turn", role: "user", content: "question" } as Message;
-const answer = {
+const answer: Message = {
   id: "assistant-turn",
   role: "assistant",
   content: "answer",
-} as Message;
+};
 
 describe("restored run reconciliation", () => {
+  test("reports the last result in the matching turn, not progress or a newer answer", () => {
+    const progress: Message = {
+      id: "progress",
+      role: "assistant",
+      content: "Now checking sources",
+    };
+    const blank: Message = { id: "blank", role: "assistant", content: "   " };
+    const nextUser: Message = {
+      id: "next",
+      role: "user",
+      content: "next question",
+    };
+    const newer: Message = {
+      id: "newer",
+      role: "assistant",
+      content: "unrelated answer",
+    };
+    expect(
+      assistantOutputAfter(
+        [user, answer, progress, blank, nextUser, newer],
+        user.id,
+      ),
+    ).toBe(answer);
+    expect(
+      assistantOutputAfter([user, progress, blank], user.id),
+    ).toBeUndefined();
+    expect(assistantOutputAfter([user, answer], answer.id)).toBeUndefined();
+  });
+
+  test("never borrows a later user's answer to complete an unanswered turn", async () => {
+    const nextUser: Message = {
+      id: "next-user",
+      role: "user",
+      content: "next question",
+    };
+    const history = [user, nextUser, answer];
+    expect(hasAssistantOutputAfter(history, user.id)).toBe(false);
+    expect(hasAssistantOutputAfter(history, nextUser.id)).toBe(true);
+    await expect(
+      reconcileRunEvidence({
+        logicalRunId: user.id,
+        readExecution: async () => false,
+        readHistory: async () => history,
+        wait: async () => {},
+      }),
+    ).resolves.toEqual({ hasAssistantOutput: false, runtimeActive: false });
+  });
+
+  test("retains a turn's own answer when a newer user message arrives", () => {
+    const nextUser: Message = {
+      id: "next-user",
+      role: "user",
+      content: "next question",
+    };
+    expect(hasAssistantOutputAfter([user, answer, nextUser], user.id)).toBe(
+      true,
+    );
+    expect(hasAssistantOutputAfter([user, answer, nextUser], nextUser.id)).toBe(
+      false,
+    );
+  });
+
   test("recognises only assistant output after the matching logical turn", () => {
     expect(hasAssistantOutputAfter([answer, user], user.id)).toBe(false);
     expect(hasAssistantOutputAfter([user, answer], user.id)).toBe(true);

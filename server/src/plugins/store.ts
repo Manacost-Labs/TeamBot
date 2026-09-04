@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { type AuditStore, recordAuditEvent } from "../audit";
 import {
@@ -271,17 +272,58 @@ export const INVALID_CLIENT = "invalid_client";
  */
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
+/** The name grammar enforced by the model providers we hand these tools to. */
+const MODEL_TOOL_NAME = /^[a-zA-Z0-9_-]{1,64}$/;
+const TOOL_NAME_HASH_LENGTH = 16;
+
+function legacyToolName(ref: string): string {
+  return `mcp__${ref.replace("/", "__")}`;
+}
+
+function hashedToolName(ref: string): string {
+  const suffix = `__h${createHash("sha256")
+    .update(ref)
+    .digest("base64url")
+    .slice(0, TOOL_NAME_HASH_LENGTH)}`;
+  const stem = legacyToolName(ref)
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .replace(/^mcp__/, "mcp_h__")
+    .slice(0, 64 - suffix.length);
+  return `${stem}${suffix}`;
+}
+
 /**
  * A tool name the model can actually call.
  *
  * `<server>/<tool>` is how a grant is stored, because a slash reads correctly to a person and cannot
- * appear in either half. Model tool names may not contain one, so the offered name uses `__`.
- * Converting in one place, both ways, keeps the two spellings from drifting.
+ * appear in either half. Valid refs keep their historical `mcp__` spelling. Provider-invalid refs
+ * use a `mcp_h__`-prefixed sanitized, bounded stem plus a digest of the complete raw ref, so dots
+ * do not collide with underscores and long refs with the same prefix remain distinct.
  */
-export const toolNameFor = (ref: string) => `mcp__${ref.replace("/", "__")}`;
+export const toolNameFor = (ref: string): string => {
+  const legacy = legacyToolName(ref);
+  return MODEL_TOOL_NAME.test(legacy) ? legacy : hashedToolName(ref);
+};
 
-export function refFromToolName(toolName: string): string | null {
-  if (!toolName.startsWith("mcp__")) return null;
+/**
+ * Resolves a model-facing tool name back to its raw ref.
+ *
+ * Legacy names are reversible without context. Hashed names are intentionally not guessed: callers
+ * must provide the currently known refs so a non-reversible alias cannot silently dispatch a
+ * different tool.
+ */
+export function refFromToolName(
+  toolName: string,
+  knownRefs: readonly string[] = [],
+): string | null {
+  if (!toolName.startsWith("mcp__") && !toolName.startsWith("mcp_h__")) {
+    return null;
+  }
+
+  const matches = knownRefs.filter((ref) => toolNameFor(ref) === toolName);
+  if (matches.length === 1) return matches[0] ?? null;
+  if (matches.length > 1 || toolName.startsWith("mcp_h__")) return null;
+
   const rest = toolName.slice("mcp__".length);
   const separator = rest.indexOf("__");
   if (separator <= 0) return null;

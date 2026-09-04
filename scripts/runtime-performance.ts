@@ -7,6 +7,7 @@ import {
   chromium,
   type Page,
 } from "../artifact-renderer/node_modules/playwright/index.mjs";
+import { verifyChatReliability } from "./chat-reliability-browser";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const fixtureConfig = join(
@@ -302,6 +303,7 @@ async function main() {
     let externalRequests = 0;
     const pageErrors: string[] = [];
     const results = [];
+    const reliability = [];
     for (const profile of profiles) {
       const context = await browser.newContext({
         deviceScaleFactor: 1,
@@ -344,7 +346,9 @@ async function main() {
             ).runtimePerformanceBenchmark !== undefined,
         );
 
-        for (const scenario of scenarios) {
+        for (const scenario of process.argv.includes("--reliability-only")
+          ? []
+          : scenarios) {
           const measurements = await runBrowserScenario(page, scenario);
           const sorted = measurements
             .map((measurement) => measurement.elapsedMs)
@@ -372,6 +376,10 @@ async function main() {
             passed: p95 < targetP95Ms,
           });
         }
+        reliability.push({
+          profile: profile.id,
+          ...(await verifyChatReliability(page)),
+        });
       } finally {
         await context.close();
       }
@@ -415,6 +423,7 @@ async function main() {
         totalMemoryBytes: totalmem(),
       },
       results,
+      reliability,
       passed: results.every((result) => result.passed),
     };
 

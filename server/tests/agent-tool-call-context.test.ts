@@ -3,6 +3,7 @@ import { z } from "zod";
 import { mintRunAssertion } from "../src/agents/callback-token";
 import { type CallbackRunTools, createApp } from "../src/app";
 import { loadConfig } from "../src/config";
+import { toolNameFor } from "../src/plugins/store";
 import type { GrantedTool } from "../src/plugins/tools";
 import { vendorToolConnection } from "../src/plugins/transport";
 import { testEnvironment } from "./support/environment";
@@ -18,11 +19,23 @@ type CapturedCall = {
   threadId?: string;
 };
 
-function testApp(calls: CapturedCall[], callbackRunTools?: CallbackRunTools) {
+function testApp(
+  calls: CapturedCall[],
+  callbackRunTools?: CallbackRunTools,
+  knownRefs: readonly string[] = [],
+) {
   const config = loadConfig(
     testEnvironment({ AGENT_TOOL_TOKEN: LEGACY_TOKEN }),
   );
+  const listedBots: string[] = [];
   const pluginStore = {
+    listForAgent: async (botId: string) => {
+      listedBots.push(botId);
+      return {
+        tools: knownRefs.map((ref) => ({ ref, toolName: toolNameFor(ref) })),
+        skills: [],
+      };
+    },
     callTool: async (input: CapturedCall) => {
       calls.push(input);
       return { text: "ok", isError: false };
@@ -60,10 +73,59 @@ function testApp(calls: CapturedCall[], callbackRunTools?: CallbackRunTools) {
   return {
     app: createApp(...args),
     config,
+    listedBots,
   };
 }
 
 describe("the trusted context of an agent tool call", () => {
+  for (const held of [true, false]) {
+    test(`hashed remote tool alias ${held ? "dispatches its granted raw ref" : "refuses a missing or revoked grant"}`, async () => {
+      const ref = "oomol-connector/github.get_current_user";
+      const calls: CapturedCall[] = [];
+      const { app, config, listedBots } = testApp(
+        calls,
+        undefined,
+        held ? [ref] : [],
+      );
+      const run = mintRunAssertion(
+        { actorId: "signed-actor", botId: "signed-bot", runId: "signed-run" },
+        config.keyEncryptionKey,
+      );
+      const response = await app.request(
+        "http://openbot.test/api/agent-tools/call",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-openbot-agent-token": LEGACY_TOKEN,
+          },
+          body: JSON.stringify({
+            name: toolNameFor(ref),
+            args: { botId: "forged-bot" },
+            run,
+          }),
+        },
+      );
+      expect(response.status).toBe(200);
+      const result = await response.json();
+      expect(result.isError).toBe(!held);
+      expect(listedBots).toEqual(["signed-bot"]);
+      expect(calls).toEqual(
+        held
+          ? [
+              {
+                ref,
+                args: { botId: "forged-bot" },
+                botId: "signed-bot",
+                actorId: "signed-actor",
+                runId: "signed-run",
+              },
+            ]
+          : [],
+      );
+    });
+  }
+
   test("comes only from the signed run assertion, never from tool arguments", async () => {
     const calls: CapturedCall[] = [];
     const { app, config } = testApp(calls);
