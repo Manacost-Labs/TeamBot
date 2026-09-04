@@ -7,6 +7,7 @@ import type { CatalogueEntry } from "./catalogue";
 import * as googleWorkspaceRest from "./google-workspace-rest";
 import type { McpCallResult, McpTool } from "./mcp";
 import * as mcp from "./mcp";
+import * as oomolConnector from "./oomol-connector";
 
 /**
  * Identity resolved by this deployment before a tool runs.
@@ -110,7 +111,8 @@ export type TransportKind =
   | "builtin-attachments"
   | "builtin-routines"
   | "builtin-parser-ops"
-  | "builtin-heartpulse-ops";
+  | "builtin-heartpulse-ops"
+  | "oomol-connector";
 
 const TRANSPORTS: Record<TransportKind, VendorTransport> = {
   mcp,
@@ -120,6 +122,7 @@ const TRANSPORTS: Record<TransportKind, VendorTransport> = {
   "builtin-routines": builtinRoutines,
   "builtin-parser-ops": builtinParserOps,
   "builtin-heartpulse-ops": builtinHeartPulseOps,
+  "oomol-connector": oomolConnector,
 };
 
 /**

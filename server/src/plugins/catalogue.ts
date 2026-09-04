@@ -120,6 +120,8 @@ export type CatalogueEntry = {
    * has to lean over-inclusive.
    */
   writeTools: readonly string[];
+  /** Conservative effect for a dynamic catalogue whose complete write list is not reviewable here. */
+  defaultEffect?: "read" | "write";
   /**
    * Extra OAuth scopes required by individual tools after a connector gains new capabilities.
    * Stored grants created before a scope was requested fail with a reconnect instruction instead of
@@ -348,6 +350,25 @@ export const CATALOGUE: readonly CatalogueEntry[] = Object.freeze([
     docsUrl: "https://developers.notion.com/guides/mcp/build-mcp-client",
   },
   {
+    key: "oomol-connector",
+    title: "OOMOL Connector",
+    vendor: "OOMOL",
+    summary: "Actions for apps already connected to your OOMOL account.",
+    host: "https://connector.oomol.com",
+    path: "/v1",
+    transport: "oomol-connector",
+    auth: Object.freeze({ kind: "deployment-bearer" }),
+    /*
+     * OOMOL publishes its action catalogue at runtime and currently supports hundreds of
+     * providers, so a static list here cannot safely name every mutating action. Advertised actions
+     * therefore default to writes. This may ask for stricter local policy than a read action needs,
+     * but it cannot silently turn a newly published OOMOL write into a read.
+     */
+    writeTools: Object.freeze([]),
+    defaultEffect: "write",
+    docsUrl: "https://oomol.com/en/docs/connector-client/",
+  },
+  {
     key: "artifacts",
     title: "Conversation Artifacts",
     vendor: "ManacostTeam",
@@ -516,6 +537,7 @@ export function classifyTool(
   // can say a tool of theirs only reads. Everything it offers is a write.
   if (!entry) return "write";
   if (!advertised) return "write";
+  if (entry.defaultEffect) return entry.defaultEffect;
   return entry.writeTools.includes(toolName) ? "write" : "read";
 }
 

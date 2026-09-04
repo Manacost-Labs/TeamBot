@@ -180,6 +180,8 @@ function RouteComponent() {
    */
   const auth = entry?.auth ?? "deployment-bearer";
   const title = entry?.title ?? server?.title ?? key;
+  const credentialLabel =
+    key === "oomol-connector" ? "OOMOL API key" : "Access token";
   const googleOrigin = googleOAuthJavaScriptOrigin(
     key,
     plugins.data?.redirectUri,
@@ -311,8 +313,10 @@ function RouteComponent() {
                 checked={server !== undefined}
                 onCheckedChange={(next) => {
                   setError(null);
-                  if (next) void add();
-                  else remove.mutate(key);
+                  if (next) {
+                    if (auth === "deployment-bearer") setDialog("token");
+                    else void add();
+                  } else remove.mutate(key);
                 }}
               />
             </ItemActions>
@@ -378,7 +382,7 @@ function RouteComponent() {
                 size="sm"
               >
                 <ItemContent>
-                  <ItemTitle>Access token</ItemTitle>
+                  <ItemTitle>{credentialLabel}</ItemTitle>
                   <ItemDescription>
                     Sent as a bearer token on every call to this vendor.
                   </ItemDescription>
@@ -758,14 +762,14 @@ function RouteComponent() {
                 ? `OAuth client for ${title}`
                 : dialog === "instance"
                   ? `Instance host for ${title}`
-                  : `Access token for ${title}`}
+                  : `${credentialLabel} for ${title}`}
             </DialogTitle>
             <DialogDescription>
               {dialog === "client"
                 ? "From the vendor's console. The secret is stored in this deployment's vault and never read back."
                 : dialog === "instance"
                   ? "Your own hostname with this vendor. It is checked against their pattern before anything is stored."
-                  : "Stored in this deployment's vault and never read back."}
+                  : `Stored in this deployment's vault and never read back. ${credentialLabel} is sent only to the reviewed vendor endpoint.`}
             </DialogDescription>
           </DialogHeader>
           <DialogBody className="mt-4">
@@ -814,7 +818,9 @@ function RouteComponent() {
                 </Field>
               ) : (
                 <Field>
-                  <FieldLabel htmlFor="access-token">Access token</FieldLabel>
+                  <FieldLabel htmlFor="access-token">
+                    {credentialLabel}
+                  </FieldLabel>
                   <Input
                     id="access-token"
                     onChange={(event) => setToken(event.target.value)}
@@ -831,7 +837,7 @@ function RouteComponent() {
             </Button>
             <Button
               onClick={() => {
-                if (!server) {
+                if (!server || dialog === "token") {
                   void add();
                   return;
                 }
