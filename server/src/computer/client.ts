@@ -1,5 +1,10 @@
 import type { NavigateResult } from "./schema";
-import { checkNavigationTarget } from "./target";
+import {
+  checkNavigationTarget,
+  isPrivateNetworkAddress,
+  resolveTargetHostname,
+  type HostnameResolver,
+} from "./target";
 
 /** The computer did not accept or answer a request. */
 export class ComputerUnavailableError extends Error {
@@ -75,6 +80,7 @@ export type ComputerTransportOptions = {
   allowPrivateHosts?: boolean;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  resolveHostname?: HostnameResolver;
 };
 
 /** Internal HTTP interface used only by ComputerGateway. */
@@ -204,6 +210,27 @@ export function createComputerTransport(
     });
     if (!verdict.allowed) {
       throw new NavigationRefusedError(verdict.reason);
+    }
+    const hostname = new URL(verdict.url).hostname.replace(/^\[|\]$/g, "");
+    if (!options.allowPrivateHosts && !isPrivateNetworkAddress(hostname)) {
+      let addresses: readonly string[];
+      try {
+        addresses = await (options.resolveHostname ?? resolveTargetHostname)(
+          hostname,
+        );
+      } catch {
+        throw new NavigationRefusedError(
+          "That address could not be resolved before the browser was asked to open it.",
+        );
+      }
+      if (
+        addresses.length === 0 ||
+        addresses.some((address) => isPrivateNetworkAddress(address))
+      ) {
+        throw new NavigationRefusedError(
+          "That address resolves inside this deployment's own network, so the assistant is not allowed to open it.",
+        );
+      }
     }
     return post<NavigateResult>(baseUrl, botId, "/navigate", {
       url: verdict.url,

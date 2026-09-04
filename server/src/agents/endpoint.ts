@@ -1,4 +1,10 @@
-import { checkNavigationTarget } from "../computer/target";
+import {
+  checkNavigationTarget,
+  isNeverAllowedHostname,
+  isPrivateNetworkAddress,
+  resolveTargetHostname,
+  type HostnameResolver,
+} from "../computer/target";
 
 /**
  * Where an external agent lives, and whether we are willing to talk to it.
@@ -46,6 +52,26 @@ function namedAsAllowed(
   try {
     url = new URL(raw);
   } catch {
+    return false;
+  }
+  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const host = url.host.toLowerCase().replace(/^\[/, "").replace(/\]/, "");
+  return allowedHosts.has(host) || allowedHosts.has(hostname);
+}
+
+/** An exact operator allowlist entry is the explicit trust decision for a private service name. */
+function explicitlyAllowedHost(
+  raw: string,
+  allowedHosts: ReadonlySet<string> | undefined,
+): boolean {
+  if (!allowedHosts || allowedHosts.size === 0) return false;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (!checkNavigationTarget(raw, { allowPrivateHosts: true }).allowed) {
     return false;
   }
   const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
@@ -196,7 +222,12 @@ function strippedBody(body: BodyInit | null | undefined): { body?: BodyInit } {
   if (!run.forwardedProps || typeof run.forwardedProps !== "object") {
     return { body };
   }
-  const { openbotRun: _dropped, ...rest } = run.forwardedProps;
+  const {
+    openbotRun: _droppedRun,
+    openbotCredentialLease: _droppedLease,
+    openbotAdmissionKey: _droppedAdmission,
+    ...rest
+  } = run.forwardedProps;
   return { body: JSON.stringify({ ...run, forwardedProps: rest }) };
 }
 
@@ -255,9 +286,12 @@ export function createAgentFetch(
      * turning it into a dialled request would be worse.
      */
     onRefusal?: (refusal: { address: string; reason: string }) => void;
+    /** Injectable for tests; production resolves every address before the request is sent. */
+    resolveHostname?: HostnameResolver;
   } = {},
 ): (url: string, init?: RequestInit) => Promise<Response> {
   const doFetch = options.fetchImpl ?? fetch;
+  const resolveHostname = options.resolveHostname ?? resolveTargetHostname;
   const refuse = (address: string, reason: string) => {
     try {
       options.onRefusal?.({ address, reason });
@@ -274,6 +308,42 @@ export function createAgentFetch(
       ...(options.allowedHosts ? { allowedHosts: options.allowedHosts } : {}),
     });
 
+  const checkResolvedAddresses = async (address: string) => {
+    const parsed = new URL(address);
+    const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
+    if (isNeverAllowedHostname(hostname)) {
+      throw refuse(
+        address,
+        `This deployment will not dial ${address}: that address holds this deployment's own cloud credentials.`,
+      );
+    }
+    if (
+      options.allowPrivateHosts ||
+      explicitlyAllowedHost(address, options.allowedHosts) ||
+      isPrivateNetworkAddress(hostname)
+    ) {
+      return;
+    }
+
+    let addresses: readonly string[];
+    try {
+      addresses = await resolveHostname(hostname);
+    } catch {
+      throw new Error(
+        `This deployment could not resolve ${hostname} before dialing it.`,
+      );
+    }
+    if (
+      addresses.length === 0 ||
+      addresses.some((resolved) => isPrivateNetworkAddress(resolved))
+    ) {
+      throw refuse(
+        address,
+        `This deployment will not dial ${address}: its DNS answers include an address inside this deployment's own network.`,
+      );
+    }
+  };
+
   return async function guardedFetch(url: string, init?: RequestInit) {
     const stored = check(url);
     if (!stored.allowed) {
@@ -288,6 +358,7 @@ export function createAgentFetch(
     let carried = init;
 
     for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+      await checkResolvedAddresses(target);
       // `manual` is what makes this a check rather than a comment: the caller sees the redirect, and
       // the underlying fetch cannot quietly follow one on its own.
       const response = await doFetch(target, {

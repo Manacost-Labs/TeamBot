@@ -1,5 +1,6 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import type { AuditEventType, AuditStore } from "../audit";
 import { recordAuditEvent } from "../audit";
 import type { AppVariables } from "../auth/guards";
@@ -50,6 +51,7 @@ const REASONING_EFFORTS = new Set([
   "adaptive",
 ]);
 const ADAPTIVE_REASONING_CEILINGS = new Set(["low", "medium", "high", "xhigh"]);
+const MAX_AGENT_EVENT_BODY_BYTES = 16 * 1_024;
 const SELECTABLE_MODELS = new Set([
   "account-default",
   "gpt-5.6-luna",
@@ -300,6 +302,11 @@ export function createAgentRoutes(
   embed?: AgentEmbedStore,
 ) {
   const routes = new Hono<{ Variables: AppVariables }>();
+  const limitAgentEventBody = bodyLimit({
+    maxSize: MAX_AGENT_EVENT_BODY_BYTES,
+    onError: (context) =>
+      context.json({ error: "Agent event request is too large." }, 413),
+  });
 
   /**
    * The Bot declined something, and says so.
@@ -311,43 +318,57 @@ export function createAgentRoutes(
    * to, so a model that declines without a tool call still writes nothing. This is evidence, not enforcement:
    * nothing is prevented by it, and a reader must not mistake an empty list for an untroubled Bot.
    */
-  routes.post("/:agentId/declined", requireUser, async (context) => {
-    const agentId = context.req.param("agentId");
-    const body = (await context.req.json().catch(() => null)) as {
-      reason?: unknown;
-      request?: unknown;
-    } | null;
+  routes.post(
+    "/:agentId/declined",
+    requireUser,
+    limitAgentEventBody,
+    async (context) => {
+      const agentId = context.req.param("agentId");
+      let agent: AgentProfile | null;
+      try {
+        agent = await store.get(context.var.actor, agentId);
+      } catch (error) {
+        return mapStoreError(context, error);
+      }
+      if (!agent) {
+        return context.json({ error: "Agent not found." }, 404);
+      }
+      const body = (await context.req.json().catch(() => null)) as {
+        reason?: unknown;
+        request?: unknown;
+      } | null;
 
-    const reason = typeof body?.reason === "string" ? body.reason.trim() : "";
-    if (!reason) {
-      return context.json({ error: "A reason is required." }, 400);
-    }
+      const reason = typeof body?.reason === "string" ? body.reason.trim() : "";
+      if (!reason) {
+        return context.json({ error: "A reason is required." }, 400);
+      }
 
-    if (auditStore) {
-      const actor = context.var.actor;
-      await recordAuditEvent(auditStore, {
-        eventType: "bot.declined",
-        targetType: "agent",
-        targetId: agentId,
-        ...(actor?.id && actor.email !== DEV_ACTOR_EMAIL
-          ? { actorUserId: actor.id }
-          : {}),
-        payload: {
-          bot: agentId,
-          actor: actor?.email ?? "unknown",
-          reason: reason.slice(0, 500),
-          // What it was asked, in the Bot's own words and only if it offered them. Truncated for the
-          // same reason every other payload here is: a trail is not a transcript.
-          ...(typeof body?.request === "string" && body.request.trim()
-            ? { request: body.request.trim().slice(0, 500) }
+      if (auditStore) {
+        const actor = context.var.actor;
+        await recordAuditEvent(auditStore, {
+          eventType: "bot.declined",
+          targetType: "agent",
+          targetId: agentId,
+          ...(actor?.id && actor.email !== DEV_ACTOR_EMAIL
+            ? { actorUserId: actor.id }
             : {}),
-          reportedBy: "the Bot itself",
-        },
-      });
-    }
+          payload: {
+            bot: agentId,
+            actor: actor?.email ?? "unknown",
+            reason: reason.slice(0, 500),
+            // What it was asked, in the Bot's own words and only if it offered them. Truncated for the
+            // same reason every other payload here is: a trail is not a transcript.
+            ...(typeof body?.request === "string" && body.request.trim()
+              ? { request: body.request.trim().slice(0, 500) }
+              : {}),
+            reportedBy: "the Bot itself",
+          },
+        });
+      }
 
-    return context.json({ recorded: true });
-  });
+      return context.json({ recorded: true });
+    },
+  );
 
   routes.get("/", requireUser, async (context) => {
     try {

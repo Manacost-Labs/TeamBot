@@ -3,6 +3,7 @@ import {
   createAgentFetch,
   EndpointNotAllowedError,
 } from "./endpoint";
+import type { HostnameResolver } from "../computer/target";
 
 /**
  * Ask an endpoint whether it is really an agent before it is stored.
@@ -104,6 +105,7 @@ export async function testAgentConnection(
     allowPrivateHosts?: boolean;
     allowedHosts?: ReadonlySet<string>;
     fetchImpl?: typeof fetch;
+    resolveHostname?: HostnameResolver;
     timeoutMs?: number;
   } = {},
 ): Promise<ConnectionTestResult> {
@@ -123,6 +125,9 @@ export async function testAgentConnection(
       ? { allowPrivateHosts: options.allowPrivateHosts }
       : {}),
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+    ...(options.resolveHostname
+      ? { resolveHostname: options.resolveHostname }
+      : {}),
   });
   let response: Response;
   try {

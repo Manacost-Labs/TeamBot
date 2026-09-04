@@ -6,15 +6,18 @@ import {
   NavigationRefusedError,
   StaleSnapshotError,
 } from "../src/computer/client";
+import type { HostnameResolver } from "../src/computer/target";
 
 function clientWith(
   handler: (url: string, init?: RequestInit) => Promise<Response> | Response,
   allowPrivateHosts = false,
+  resolveHostname: HostnameResolver = async () => ["93.184.216.34"],
 ) {
   const transport = createComputerTransport({
     allowPrivateHosts,
     fetchImpl: ((url: string, init?: RequestInit) =>
       Promise.resolve(handler(url, init))) as unknown as typeof fetch,
+    resolveHostname,
   });
   const baseUrl = "http://agent-computer:4100";
   const botId = "bot-1";
@@ -87,6 +90,23 @@ describe("computer client", () => {
         NavigationRefusedError,
       );
     }
+    expect(called).toBe(false);
+  });
+
+  test("refuses a hostname whose DNS answers include a private address", async () => {
+    let called = false;
+    const client = clientWith(
+      () => {
+        called = true;
+        return ok({});
+      },
+      false,
+      async () => ["93.184.216.34", "192.168.1.10"],
+    );
+
+    await expect(client.navigate("https://agent.example.com/")).rejects.toThrow(
+      NavigationRefusedError,
+    );
     expect(called).toBe(false);
   });
 

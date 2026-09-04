@@ -6,10 +6,24 @@ import {
   createAgentFetch,
   EndpointNotAllowedError,
 } from "../src/agents/endpoint";
+import type { HostnameResolver } from "../src/computer/target";
 import { parseAgentInput } from "../src/agents/routes";
 
 /** A 32-byte key, as the vault expects. */
 const TEST_KEY = Buffer.alloc(32, 7).toString("base64");
+const PUBLIC_HOSTNAME_RESOLVER: HostnameResolver = async () => [
+  "93.184.216.34",
+];
+
+function testConnection(
+  endpoint: unknown,
+  options: Parameters<typeof testAgentConnection>[1] = {},
+) {
+  return testAgentConnection(endpoint, {
+    resolveHostname: PUBLIC_HOSTNAME_RESOLVER,
+    ...options,
+  });
+}
 
 /**
  * Registering an external agent, tested as the security surface it is.
@@ -125,7 +139,7 @@ describe("the connection test", () => {
   const endpoint = "https://agents.example.com/ag-ui";
 
   test("an AG-UI stream is reported as working, with what came back", async () => {
-    const result = await testAgentConnection(endpoint, {
+    const result = await testConnection(endpoint, {
       fetchImpl: async () =>
         new Response(
           'data: {"type":"RUN_STARTED"}\n\ndata: {"type":"TEXT_MESSAGE_CONTENT","delta":"hi"}\n\ndata: {"type":"RUN_FINISHED"}\n\n',
@@ -138,7 +152,7 @@ describe("the connection test", () => {
 
   test("a reachable address that is not an agent says so, and says what it sent", async () => {
     // The most common mistake: pointing at the app's home page instead of its AG-UI path.
-    const result = await testAgentConnection(endpoint, {
+    const result = await testConnection(endpoint, {
       fetchImpl: async () =>
         new Response("<!doctype html><html><body>hello</body></html>", {
           status: 200,
@@ -150,7 +164,7 @@ describe("the connection test", () => {
   });
 
   test("an authentication failure suggests the fix rather than the status code", async () => {
-    const result = await testAgentConnection(endpoint, {
+    const result = await testConnection(endpoint, {
       fetchImpl: async () => new Response("no", { status: 401 }),
     });
     expect(result.ok).toBe(false);
@@ -162,7 +176,7 @@ describe("the connection test", () => {
 
   test("an unreachable address explains the direction of the connection", async () => {
     // The server dials the agent, so the failure message names that direction.
-    const result = await testAgentConnection(endpoint, {
+    const result = await testConnection(endpoint, {
       fetchImpl: async () => {
         throw new Error("connection refused");
       },
@@ -174,7 +188,7 @@ describe("the connection test", () => {
   test("the test refuses the addresses registration would refuse", async () => {
     // Otherwise the button is a way to probe the internal network from a form.
     let called = false;
-    const result = await testAgentConnection("http://169.254.169.254/", {
+    const result = await testConnection("http://169.254.169.254/", {
       allowPrivateHosts: true,
       fetchImpl: async () => {
         called = true;
@@ -187,7 +201,7 @@ describe("the connection test", () => {
 
   test("headers are sent, so an agent behind a key can be tested", async () => {
     let seen: string | null = null;
-    await testAgentConnection(endpoint, {
+    await testConnection(endpoint, {
       headers: { authorization: "Bearer abc123" },
       fetchImpl: async (_url, init) => {
         seen = (init?.headers as Record<string, string>)?.authorization ?? null;
@@ -341,6 +355,15 @@ describe("dialling a stored agent endpoint", () => {
     new Response(null, { status: 307, headers: { location } });
   const arrived = () => new Response("ok");
 
+  function testAgentFetch(
+    options: Parameters<typeof createAgentFetch>[0] = {},
+  ) {
+    return createAgentFetch({
+      resolveHostname: PUBLIC_HOSTNAME_RESOLVER,
+      ...options,
+    });
+  }
+
   /** What a run carries: the customer's key, and this deployment's statement of whose run it is. */
   const runRequest = {
     method: "POST",
@@ -354,7 +377,12 @@ describe("dialling a stored agent endpoint", () => {
     },
     body: JSON.stringify({
       threadId: "t",
-      forwardedProps: { openbotBotId: "risk", openbotRun: "signed.run.token" },
+      forwardedProps: {
+        openbotBotId: "risk",
+        openbotRun: "signed.run.token",
+        openbotCredentialLease: "signed.lease.token",
+        openbotAdmissionKey: "signed.admission.token",
+      },
     }),
   };
 
@@ -362,7 +390,7 @@ describe("dialling a stored agent endpoint", () => {
     // The row was written before this guard existed, or under an older rule. Checking only the
     // redirects leaves the one address that is dialled on every single run unchecked.
     const { calls, impl } = recorder([arrived]);
-    const dial = createAgentFetch({ fetchImpl: impl });
+    const dial = testAgentFetch({ fetchImpl: impl });
 
     await expect(
       dial("http://169.254.169.254/latest/meta-data/", runRequest),
@@ -386,7 +414,7 @@ describe("dialling a stored agent endpoint", () => {
       redirectTo("http://169.254.169.254/latest/meta-data/"),
       arrived,
     ]);
-    const dial = createAgentFetch({
+    const dial = testAgentFetch({
       fetchImpl: impl,
       onRefusal: (refusal) => refusals.push(refusal),
     });
@@ -410,7 +438,7 @@ describe("dialling a stored agent endpoint", () => {
     // on every run of an agent whose stored address stopped being acceptable.
     const refusals: Array<{ address: string; reason: string }> = [];
     const { calls, impl } = recorder([arrived]);
-    const dial = createAgentFetch({
+    const dial = testAgentFetch({
       fetchImpl: impl,
       onRefusal: (refusal) => refusals.push(refusal),
     });
@@ -431,7 +459,7 @@ describe("dialling a stored agent endpoint", () => {
       redirectTo("https://agent.example.com/moved"),
       arrived,
     ]);
-    const dial = createAgentFetch({
+    const dial = testAgentFetch({
       fetchImpl: impl,
       onRefusal: (refusal) => refusals.push(refusal),
     });
@@ -448,7 +476,7 @@ describe("dialling a stored agent endpoint", () => {
       redirectTo("https://elsewhere.example.com/ag-ui"),
       arrived,
     ]);
-    const dial = createAgentFetch({ fetchImpl: impl });
+    const dial = testAgentFetch({ fetchImpl: impl });
 
     const response = await dial("https://agent.example.com/ag-ui", runRequest);
     expect(response.status).toBe(200);
@@ -472,7 +500,7 @@ describe("dialling a stored agent endpoint", () => {
       redirectTo("https://elsewhere.example.com/ag-ui"),
       arrived,
     ]);
-    const dial = createAgentFetch({ fetchImpl: impl });
+    const dial = testAgentFetch({ fetchImpl: impl });
 
     await dial("https://agent.example.com/ag-ui", runRequest);
 
@@ -481,6 +509,8 @@ describe("dialling a stored agent endpoint", () => {
       forwardedProps?: Record<string, unknown>;
     };
     expect(forwarded.forwardedProps?.openbotRun).toBeUndefined();
+    expect(forwarded.forwardedProps?.openbotCredentialLease).toBeUndefined();
+    expect(forwarded.forwardedProps?.openbotAdmissionKey).toBeUndefined();
     // Only the credential is removed. The rest of the run is still the run.
     expect(forwarded.threadId).toBe("t");
     expect(forwarded.forwardedProps?.openbotBotId).toBe("risk");
@@ -493,7 +523,7 @@ describe("dialling a stored agent endpoint", () => {
       redirectTo("https://agent.example.com/ag-ui/"),
       arrived,
     ]);
-    const dial = createAgentFetch({ fetchImpl: impl });
+    const dial = testAgentFetch({ fetchImpl: impl });
 
     await dial("https://agent.example.com/ag-ui", runRequest);
 
@@ -503,6 +533,12 @@ describe("dialling a stored agent endpoint", () => {
       forwardedProps?: Record<string, unknown>;
     };
     expect(forwarded.forwardedProps?.openbotRun).toBe("signed.run.token");
+    expect(forwarded.forwardedProps?.openbotCredentialLease).toBe(
+      "signed.lease.token",
+    );
+    expect(forwarded.forwardedProps?.openbotAdmissionKey).toBe(
+      "signed.admission.token",
+    );
   });
 
   test("an upgrade from http to https on the same host keeps them", async () => {
@@ -513,7 +549,7 @@ describe("dialling a stored agent endpoint", () => {
       redirectTo("https://agent.example.com/ag-ui"),
       arrived,
     ]);
-    const dial = createAgentFetch({ fetchImpl: impl });
+    const dial = testAgentFetch({ fetchImpl: impl });
 
     await dial("http://agent.example.com/ag-ui", runRequest);
 
@@ -527,7 +563,7 @@ describe("dialling a stored agent endpoint", () => {
       redirectTo("http://agent.example.com/ag-ui"),
       arrived,
     ]);
-    const dial = createAgentFetch({
+    const dial = testAgentFetch({
       fetchImpl: impl,
       allowPrivateHosts: false,
     });
@@ -546,7 +582,7 @@ describe("dialling a stored agent endpoint", () => {
       redirectTo("https://elsewhere.example.com/ag-ui"),
       arrived,
     ]);
-    const dial = createAgentFetch({ fetchImpl: impl });
+    const dial = testAgentFetch({ fetchImpl: impl });
 
     await expect(
       dial("https://agent.example.com/ag-ui", {
@@ -562,7 +598,7 @@ describe("dialling a stored agent endpoint", () => {
       redirectTo("https://elsewhere.example.com/ag-ui"),
       arrived,
     ]);
-    const dial = createAgentFetch({ fetchImpl: impl });
+    const dial = testAgentFetch({ fetchImpl: impl });
 
     await expect(
       dial("https://agent.example.com/ag-ui", {
@@ -581,13 +617,26 @@ describe("dialling a stored agent endpoint", () => {
       redirectTo("https://agent.example.com/ag-ui"),
       arrived,
     ]);
-    const dial = createAgentFetch({ fetchImpl: impl });
+    const dial = testAgentFetch({ fetchImpl: impl });
 
     await dial("https://agent.example.com/ag-ui", runRequest);
 
     expect(calls.length).toBe(3);
     const third = new Headers(calls[2]?.init.headers);
     expect(third.get("authorization")).toBeNull();
+  });
+
+  test("refuses a hostname whose DNS answers include a private address", async () => {
+    const { calls, impl } = recorder([arrived]);
+    const dial = testAgentFetch({
+      fetchImpl: impl,
+      resolveHostname: async () => ["93.184.216.34", "10.0.0.7"],
+    });
+
+    await expect(
+      dial("https://agent.example.com/ag-ui", runRequest),
+    ).rejects.toThrow(/DNS answers include|network/i);
+    expect(calls).toHaveLength(0);
   });
 });
 
@@ -696,9 +745,21 @@ describe("named addresses on a redirect hop", () => {
         : new Response("landed", { status: 200 });
     }) as unknown as typeof fetch;
 
+  test("a named internal service hostname may resolve to the private network", async () => {
+    const dial = createAgentFetch({
+      allowedHosts: new Set(["agent-codex:4202"]),
+      resolveHostname: async () => ["172.20.0.4"],
+      fetchImpl: redirectingTo("http://agent-codex:4202/ag-ui"),
+    });
+    const response = await dial("http://agent-codex:4202/start");
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("landed");
+  });
+
   test("a hop to a named private address is followed", async () => {
     const dial = createAgentFetch({
       allowedHosts: new Set(["10.0.0.42:9000"]),
+      resolveHostname: PUBLIC_HOSTNAME_RESOLVER,
       fetchImpl: redirectingTo("http://10.0.0.42:9000/ag-ui"),
     });
     const response = await dial("https://agent.example.com/start");
@@ -709,6 +770,7 @@ describe("named addresses on a redirect hop", () => {
   test("a hop to an unnamed private address is refused", async () => {
     const dial = createAgentFetch({
       allowedHosts: new Set(["10.0.0.42:9000"]),
+      resolveHostname: PUBLIC_HOSTNAME_RESOLVER,
       fetchImpl: redirectingTo("http://10.0.0.99:9000/ag-ui"),
     });
     await expect(dial("https://agent.example.com/start")).rejects.toThrow();
@@ -717,6 +779,7 @@ describe("named addresses on a redirect hop", () => {
   test("a hop to the metadata address is refused however the list is written", async () => {
     const dial = createAgentFetch({
       allowedHosts: new Set(["169.254.169.254"]),
+      resolveHostname: PUBLIC_HOSTNAME_RESOLVER,
       fetchImpl: redirectingTo("http://169.254.169.254/latest/meta-data/"),
     });
     await expect(dial("https://agent.example.com/start")).rejects.toThrow();

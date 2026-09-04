@@ -13,7 +13,19 @@
  * of every action, which is where policy per Bot belongs; this is the floor that holds even without it.
  */
 
+import { lookup } from "node:dns/promises";
+
 const ALLOWED_PROTOCOLS = new Set(["http:", "https:"]);
+
+export type HostnameResolver = (hostname: string) => Promise<readonly string[]>;
+
+/** Resolve all addresses so one private answer cannot hide behind a public one. */
+export async function resolveTargetHostname(
+  hostname: string,
+): Promise<readonly string[]> {
+  const addresses = await lookup(hostname, { all: true, verbatim: true });
+  return addresses.map(({ address }) => address);
+}
 
 /**
  * Addresses no deployment may ever open, including one that opted into private hosts.
@@ -183,6 +195,19 @@ function isPrivateIpv4(hostname: string): boolean {
   return false;
 }
 
+/** Whether a resolved address points back into this host, its private network, or link-local space. */
+export function isPrivateNetworkAddress(hostname: string): boolean {
+  const canonical = canonicalHostname(hostname.toLowerCase());
+  const groups = canonical.includes(":") ? expandIpv6(canonical) : null;
+  const embedded = groups ? embeddedIpv4(groups) : null;
+  return (
+    INTERNAL_HOSTNAMES.has(canonical) ||
+    isPrivateIpv4(canonical) ||
+    isPrivateIpv6(canonical) ||
+    (embedded !== null && isPrivateIpv4(embedded))
+  );
+}
+
 /**
  * Decide whether an address a supervisor handed back may be called at all.
  *
@@ -270,11 +295,7 @@ export function checkNavigationTarget(
     return { allowed: true, url: url.toString() };
   }
 
-  if (
-    INTERNAL_HOSTNAMES.has(hostname) ||
-    isPrivateIpv4(hostname) ||
-    isPrivateIpv6(hostname)
-  ) {
+  if (isPrivateNetworkAddress(hostname)) {
     return {
       allowed: false,
       reason:

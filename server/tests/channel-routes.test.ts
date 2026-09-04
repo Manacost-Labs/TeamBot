@@ -155,6 +155,24 @@ describe("channel input parser", () => {
       }),
     ).toEqual({ ok: true, value: { agentIds: ["agent-1", "agent-2"] } });
   });
+
+  test("rejects a channel with too many agents", () => {
+    expect(
+      parseChannelInput({
+        agentIds: Array.from({ length: 33 }, (_, index) => `agent-${index}`),
+      }),
+    ).toEqual({
+      ok: false,
+      error: "A channel may include at most 32 agents.",
+    });
+  });
+
+  test("rejects an excessively long agent ID", () => {
+    expect(parseChannelInput({ agentIds: ["a".repeat(161)] })).toEqual({
+      ok: false,
+      error: "Agent IDs must be at most 160 characters.",
+    });
+  });
 });
 
 describe("channel routes", () => {
@@ -246,6 +264,24 @@ describe("channel routes", () => {
       expect(store.calls).toEqual([]);
     },
   );
+
+  test("rejects an oversized create body before calling the store", async () => {
+    const store = fakeStore();
+    const response = await appFor(store).request("http://openbot.test/", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        agentIds: ["agent-1"],
+        ignoredPadding: "x".repeat(40_000),
+      }),
+    });
+
+    expect(response.status).toBe(413);
+    expect(await json(response)).toEqual({
+      error: "Channel request is too large.",
+    });
+    expect(store.calls).toEqual([]);
+  });
 
   test("returns 404 when get returns null", async () => {
     const store = fakeStore({ get: async () => null });

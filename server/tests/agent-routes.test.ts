@@ -14,6 +14,7 @@ import type {
 } from "../src/agents/profile-types";
 import { createAgentRoutes, parseAgentInput } from "../src/agents/routes";
 import { createApp } from "../src/app";
+import type { AuditEventInput, AuditStore } from "../src/audit";
 import type { AppVariables, AuthenticatedActor } from "../src/auth/guards";
 import { loadConfig } from "../src/config";
 import { testEnvironment } from "./support/environment";
@@ -102,6 +103,7 @@ function appFor(
   store: AgentProfileStore,
   middleware: MiddlewareHandler<{ Variables: AppVariables }> = requireUser,
   embed?: AgentEmbedStore,
+  auditStore?: AuditStore,
 ) {
   const app = new Hono<{ Variables: AppVariables }>();
   app.route(
@@ -110,7 +112,7 @@ function appFor(
       store,
       middleware,
       false,
-      undefined,
+      auditStore,
       new Set(),
       undefined,
       embed,
@@ -351,6 +353,13 @@ describe("agent lifecycle routes", () => {
       ["/agent-1/duplicate", { method: "POST" }],
       ["/agent-1/hide", { method: "POST" }],
       ["/agent-1/unhide", { method: "POST" }],
+      [
+        "/agent-1/declined",
+        {
+          method: "POST",
+          body: JSON.stringify({ reason: "Not safe" }),
+        },
+      ],
       ["/agent-1/embed-token", { method: "POST" }],
       ["/agent-1/embed-token", { method: "DELETE" }],
       ["/agent-1", { method: "DELETE" }],
@@ -386,6 +395,74 @@ describe("agent lifecycle routes", () => {
       ["list", actor, false],
       ["list", actor, true],
     ]);
+  });
+
+  test("records a decline only for an agent visible to the authenticated actor", async () => {
+    const events: AuditEventInput[] = [];
+    const auditStore: AuditStore = {
+      insert: async (event) => events.push(event),
+    };
+    const visible = appFor(fakeStore(), requireUser, undefined, auditStore);
+
+    const recorded = await visible.request(
+      "http://openbot.test/agent-1/declined",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason: "Not safe", request: "Delete it" }),
+      },
+    );
+    expect(recorded.status).toBe(200);
+    expect(events).toEqual([
+      expect.objectContaining({
+        eventType: "bot.declined",
+        targetId: "agent-1",
+        payload: expect.objectContaining({ reason: "Not safe" }),
+      }),
+    ]);
+
+    const inaccessibleStore = fakeStore();
+    inaccessibleStore.get = async (receivedActor, id) => {
+      inaccessibleStore.calls.push(["get", receivedActor, id]);
+      return null;
+    };
+    const inaccessible = appFor(
+      inaccessibleStore,
+      requireUser,
+      undefined,
+      auditStore,
+    );
+    const refused = await inaccessible.request(
+      "http://openbot.test/other-agent/declined",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason: "Not safe" }),
+      },
+    );
+
+    expect(refused.status).toBe(404);
+    expect(await json(refused)).toEqual({ error: "Agent not found." });
+    expect(events).toHaveLength(1);
+    expect(inaccessibleStore.calls).toEqual([["get", actor, "other-agent"]]);
+  });
+
+  test("rejects an oversized decline before reading the agent", async () => {
+    const store = fakeStore();
+    const response = await appFor(store).request(
+      "http://openbot.test/agent-1/declined",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason: "x", padding: "x".repeat(20_000) }),
+      },
+    );
+
+    expect(response.status).toBe(413);
+    expect(await json(response)).toEqual({
+      error: "Agent event request is too large.",
+    });
+    expect(store.calls).toEqual([]);
   });
 
   test("serves every lifecycle route with its contract status and store operation", async () => {

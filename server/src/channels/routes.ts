@@ -12,6 +12,7 @@ import {
 } from "drizzle-orm";
 import type { Context, MiddlewareHandler } from "hono";
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import {
   AgentNotFoundError,
   type AgentProfileStore,
@@ -780,6 +781,10 @@ type ChannelInputParseResult =
 
 type ChannelInputObject = { agentIds?: unknown };
 
+const MAX_CHANNEL_AGENTS = 32;
+const MAX_AGENT_ID_LENGTH = 160;
+const MAX_CHANNEL_BODY_BYTES = 32 * 1_024;
+
 export function parseChannelInput(input: unknown): ChannelInputParseResult {
   if (!isChannelInputObject(input)) {
     return { ok: false, error: "Channel input must be a JSON object." };
@@ -788,13 +793,26 @@ export function parseChannelInput(input: unknown): ChannelInputParseResult {
   if (!Array.isArray(input.agentIds) || input.agentIds.length === 0) {
     return { ok: false, error: "Agent IDs must be a non-empty array." };
   }
+  if (input.agentIds.length > MAX_CHANNEL_AGENTS) {
+    return {
+      ok: false,
+      error: `A channel may include at most ${MAX_CHANNEL_AGENTS} agents.`,
+    };
+  }
 
   const agentIds: string[] = [];
   for (const agentId of input.agentIds) {
     if (typeof agentId !== "string" || agentId.trim().length === 0) {
       return { ok: false, error: "Agent IDs must be non-empty strings." };
     }
-    agentIds.push(agentId.trim());
+    const trimmed = agentId.trim();
+    if (trimmed.length > MAX_AGENT_ID_LENGTH) {
+      return {
+        ok: false,
+        error: `Agent IDs must be at most ${MAX_AGENT_ID_LENGTH} characters.`,
+      };
+    }
+    agentIds.push(trimmed);
   }
 
   if (new Set(agentIds).size !== agentIds.length) {
@@ -858,6 +876,11 @@ export function createChannelRoutes(
   auditStore?: AuditStore,
 ) {
   const routes = new Hono<{ Variables: AppVariables }>();
+  const limitChannelBody = bodyLimit({
+    maxSize: MAX_CHANNEL_BODY_BYTES,
+    onError: (context) =>
+      context.json({ error: "Channel request is too large." }, 413),
+  });
 
   /**
    * Write the one audit row this file ever writes, tolerantly.
@@ -928,7 +951,7 @@ export function createChannelRoutes(
     );
   }
 
-  routes.post("/", requireUser, async (context) => {
+  routes.post("/", requireUser, limitChannelBody, async (context) => {
     const parsed = parseChannelInput(
       await context.req.json().catch(() => null),
     );
