@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { Streamdown } from "streamdown";
+import { ThinkingOrb } from "thinking-orbs";
 import { ArtifactCard } from "@/components/channels/artifact-card";
 import { GoogleWorkspaceCard } from "@/components/channels/google-workspace-card";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -1252,7 +1253,12 @@ export function ChatTranscript({
                   data-testid="transcript-run-status"
                   role="status"
                 >
-                  <span className="size-1.5 animate-pulse rounded-full bg-primary motion-reduce:animate-none" />
+                  <span
+                    className="shrink-0"
+                    data-testid="transcript-thinking-orb"
+                  >
+                    <ThinkingOrb state="listening" size={64} />
+                  </span>
                   {run ? agentRunStatusLabel(run.status) : "Сотрудник работает"}
                 </p>
               ) : null}

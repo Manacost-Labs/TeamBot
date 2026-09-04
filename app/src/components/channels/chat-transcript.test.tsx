@@ -69,6 +69,26 @@ function PaginatedTranscriptFixture() {
 }
 
 describe("transcript windowing", () => {
+  test("shows the thinking orb only while the Bot is working", () => {
+    const view = render(
+      <ChatTranscript
+        messages={[{ id: "question", role: "user", content: "Привет" }]}
+      />,
+    );
+
+    expect(view.queryByTestId("transcript-thinking-orb")).toBeNull();
+
+    view.rerender(
+      <ChatTranscript
+        busy
+        messages={[{ id: "question", role: "user", content: "Привет" }]}
+      />,
+    );
+
+    expect(view.getByTestId("transcript-thinking-orb")).toBeTruthy();
+    expect(view.getByRole("img", { name: "Listening…" })).toBeTruthy();
+  });
+
   test("renders authenticated file cards and previews raster images only", () => {
     const view = render(
       <ChatTranscript
