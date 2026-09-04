@@ -34,34 +34,54 @@ describe("the hosted OOMOL Connector transport", () => {
   });
 
   test("discovers action metadata with the personal bearer key", async () => {
-    let request: {
+    const requests: Array<{
       url: string;
       method: string;
       authorization: string | null;
-    } | null = null;
+    }> = [];
     globalThis.fetch = (async (
       input: RequestInfo | URL,
       init?: RequestInit,
     ) => {
       const sent = new Request(input, init);
-      request = {
+      const request = {
         url: sent.url,
         method: sent.method,
         authorization: sent.headers.get("authorization"),
       };
+      requests.push(request);
+      const url = new URL(sent.url);
+      if (url.pathname.endsWith("/apps")) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: [{ service: "gmail" }, { service: "github" }],
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      }
       return new Response(
         JSON.stringify({
           success: true,
-          data: [
-            {
-              id: "gmail.search_threads",
-              description: "Search Gmail threads.",
-              inputSchema: {
-                type: "object",
-                properties: { query: { type: "string" } },
-              },
-            },
-          ],
+          data:
+            url.searchParams.get("service") === "gmail"
+              ? [
+                  {
+                    id: "gmail.search_threads",
+                    description: "Search Gmail threads.",
+                    inputSchema: {
+                      type: "object",
+                      properties: { query: { type: "string" } },
+                    },
+                  },
+                ]
+              : [
+                  {
+                    id: "github.get_current_user",
+                    description: "Get the current GitHub user.",
+                    inputSchema: { type: "object" },
+                  },
+                ],
         }),
         { headers: { "content-type": "application/json" } },
       );
@@ -76,12 +96,29 @@ describe("the hosted OOMOL Connector transport", () => {
           properties: { query: { type: "string" } },
         },
       },
+      {
+        name: "github.get_current_user",
+        description: "Get the current GitHub user.",
+        inputSchema: { type: "object" },
+      },
     ]);
-    expect(request).toEqual({
-      url: "https://connector.oomol.com/v1/actions",
-      method: "GET",
-      authorization: "Bearer api_test_key",
-    });
+    expect(requests).toEqual([
+      {
+        url: "https://connector.oomol.com/v1/apps",
+        method: "GET",
+        authorization: "Bearer api_test_key",
+      },
+      {
+        url: "https://connector.oomol.com/v1/actions?service=gmail",
+        method: "GET",
+        authorization: "Bearer api_test_key",
+      },
+      {
+        url: "https://connector.oomol.com/v1/actions?service=github",
+        method: "GET",
+        authorization: "Bearer api_test_key",
+      },
+    ]);
   });
 
   test("executes an action through the hosted gateway and returns bounded text", async () => {

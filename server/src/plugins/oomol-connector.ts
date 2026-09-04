@@ -12,6 +12,7 @@ const LIST_TIMEOUT_MS = 15_000;
 const CALL_TIMEOUT_MS = 60_000;
 const MAX_DESCRIPTION_CHARS = 4_000;
 const MAX_RESPONSE_BYTES = 2_000_000;
+const ACTION_LIST_CONCURRENCY = 8;
 
 type Connection = {
   /** The stored row URL is intentionally ignored; the catalogue pins OOMOL's hosted gateway here. */
@@ -195,6 +196,65 @@ function actionTools(value: unknown): McpTool[] {
   });
 }
 
+function connectedServices(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error("OOMOL returned an invalid connected-app catalogue.");
+  }
+
+  const seen = new Set<string>();
+  const services: string[] = [];
+  for (const candidate of value) {
+    const app = asRecord(candidate);
+    const service = app?.service;
+    const status = app?.status;
+    if (
+      typeof service !== "string" ||
+      service.length === 0 ||
+      service.length > 255 ||
+      hasControlCharacter(service)
+    ) {
+      throw new Error("OOMOL returned an invalid connected-app service.");
+    }
+    if (status !== undefined && status !== "active") continue;
+    if (seen.has(service)) continue;
+    seen.add(service);
+    services.push(service);
+  }
+  return services;
+}
+
+async function actionToolsForServices(
+  token: string | undefined,
+  services: string[],
+): Promise<McpTool[]> {
+  const byService = new Array<McpTool[]>(services.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (nextIndex < services.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const service = services[index];
+      if (service === undefined) continue;
+      const data = await request(
+        token,
+        "action catalogue",
+        `/actions?service=${encodeURIComponent(service)}`,
+        { method: "GET", timeoutMs: LIST_TIMEOUT_MS },
+      );
+      byService[index] = actionTools(data);
+    }
+  }
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(ACTION_LIST_CONCURRENCY, services.length) },
+      () => worker(),
+    ),
+  );
+  return byService.flat();
+}
+
 function actionResult(data: unknown): McpCallResult {
   const text =
     typeof data === "string"
@@ -214,13 +274,13 @@ function actionResult(data: unknown): McpCallResult {
 /** OOMOL's hosted gateway needs the deployment's personal key to enumerate actions. */
 export const listNeedsCredential = true;
 
-/** Discover the actions available to the OOMOL account behind the stored personal key. */
+/** Discover actions for the apps connected to the OOMOL account behind the stored personal key. */
 export async function listTools(connection: Connection): Promise<McpTool[]> {
-  const data = await request(connection.token, "action catalogue", "/actions", {
+  const apps = await request(connection.token, "connected app list", "/apps", {
     method: "GET",
     timeoutMs: LIST_TIMEOUT_MS,
   });
-  return actionTools(data);
+  return actionToolsForServices(connection.token, connectedServices(apps));
 }
 
 /** Execute one OOMOL action; the gateway selects its default connected account. */
