@@ -13,6 +13,7 @@ import {
   PageSection,
   PageShell,
 } from "@/components/layout/page-shell";
+import { OomolReadiness } from "@/components/plugins/oomol-readiness";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -190,6 +191,8 @@ function RouteComponent() {
   /** Adding is two writes when a token was typed: the credential, then the record pointing at it. */
   const add = async () => {
     setError(null);
+    // Reset this screen's old check before saving; a late response may arrive on another vendor.
+    if (key === "oomol-connector") refresh.reset();
     try {
       const credentialId =
         auth === "deployment-bearer"
@@ -280,6 +283,29 @@ function RouteComponent() {
         <p className="text-destructive text-sm" role="alert">
           {error}
         </p>
+      ) : null}
+
+      {key === "oomol-connector" ? (
+        <OomolReadiness
+          agents={agents}
+          botsMayCallBack={plugins.data?.botsMayCallBack}
+          error={refresh.variables === key ? refresh.error : undefined}
+          onConfigure={() => {
+            setError(null);
+            setDialog("token");
+          }}
+          onGrant={() => {
+            setSelectedBots(new Set());
+            setSelectedRefs(new Set());
+            setDialog("grant");
+          }}
+          onRefresh={() => {
+            setError(null);
+            refresh.mutate(key);
+          }}
+          refreshing={refresh.isPending && refresh.variables === key}
+          server={server}
+        />
       ) : null}
 
       {/*
@@ -618,14 +644,16 @@ function RouteComponent() {
            */
           action={
             <div className="flex gap-1.5">
-              <Button
-                onClick={() => refresh.mutate(key)}
-                size="sm"
-                type="button"
-                variant="ghost"
-              >
-                Refresh tools
-              </Button>
+              {key !== "oomol-connector" ? (
+                <Button
+                  onClick={() => refresh.mutate(key)}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                >
+                  Refresh tools
+                </Button>
+              ) : null}
               {/*
                * Outline where refresh is ghost: granting is the thing an administrator came to
                * this section to do. Hidden rather than disabled with nothing to grant — a dialog
