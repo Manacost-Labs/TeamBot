@@ -213,6 +213,15 @@ jobs:
       # Bot's own tree and not in the root one.
       - run: bun install --frozen-lockfile
         working-directory: agent-langgraph
+      # The canonical gate also runs these isolated Node service suites, each with its own lockfile.
+      - run: npm ci
+        working-directory: pdf-extractor
+      - run: npm ci
+        working-directory: artifact-renderer
+      # The runtime-profile security test starts the real Codex binary. Keep this version aligned
+      # with agent-codex/Dockerfile so the probe covers the shipped runtime on clean runners too.
+      - run: bun add --global @openai/codex@0.150.1
+      - run: codex --version
       # Not the db:migrate script: that one loads ../.env, which does not exist in CI. DATABASE_URL
       # comes from the job env instead, which drizzle.config.ts already reads.
       - run: bunx drizzle-kit migrate --config=drizzle.config.ts

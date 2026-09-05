@@ -242,8 +242,10 @@ describe("OpenRouter personal settings", () => {
     await act(async () => {
       finish?.(response({ connection: activeConnection() }));
     });
+    // Retry primitive values: printing a live React DOM node on each unsuccessful
+    // attempt can itself exhaust Bun's test timeout before the UI update runs.
     await waitFor(() =>
-      expect(view.queryByText("Заменяем ключ OpenRouter…")).toBeNull(),
+      expect(view.getByRole("status").textContent).toBe("OpenRouter подключён"),
     );
 
     globalThis.fetch = mock(() =>
@@ -299,7 +301,7 @@ describe("OpenRouter personal settings", () => {
     const confirm = view.getByRole("button", { name: "Подтвердить замену" });
     expect(document.activeElement).toBe(confirm);
     fireEvent.click(view.getByRole("button", { name: "Отмена" }));
-    await waitFor(() => expect(document.activeElement).toBe(replace));
+    await waitFor(() => expect(document.activeElement === replace).toBe(true));
 
     fireEvent.click(replace);
     fireEvent.click(view.getByRole("button", { name: "Подтвердить замену" }));
@@ -362,7 +364,7 @@ describe("ChatGPT personal settings", () => {
     const confirm = view.getByRole("button", { name: "Подтвердить замену" });
     expect(document.activeElement).toBe(confirm);
     fireEvent.click(view.getByRole("button", { name: "Отмена" }));
-    await waitFor(() => expect(document.activeElement).toBe(replace));
+    await waitFor(() => expect(document.activeElement === replace).toBe(true));
 
     fireEvent.click(replace);
     fireEvent.click(view.getByRole("button", { name: "Подтвердить замену" }));
