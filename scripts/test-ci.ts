@@ -23,7 +23,11 @@ const proc = Bun.spawn(["bun", "run", "test"], {
 
 // Bun writes its summary to stderr, so it is captured and echoed rather than inherited.
 const stderr = await new Response(proc.stderr).text();
-process.stderr.write(stderr);
+// A failing run exits immediately below. Wait for pipe backpressure to drain so the
+// failure summary at the end of a large report is not lost when the process exits.
+await new Promise<void>((resolve, reject) => {
+  process.stderr.write(stderr, (error) => (error ? reject(error) : resolve()));
+});
 
 const status = await proc.exited;
 if (status !== 0) process.exit(status);
