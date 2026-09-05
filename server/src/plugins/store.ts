@@ -3235,7 +3235,9 @@ export function createPluginStore(options: PluginStoreOptions) {
        * with `intent`.
        */
       const context: PolicyContext = {
-        tool: { name: toolNameFor(input.ref) },
+        // Policies predate provider-safe aliases. Keep their identity stable so an existing
+        // tool.name deny cannot silently stop matching when the model's transport name changes.
+        tool: { name: legacyToolName(input.ref) },
         bot: { id: input.botId },
         actor: { id: input.actorId },
         page: { url: "", host: "" },

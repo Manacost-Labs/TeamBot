@@ -311,6 +311,79 @@ describe("a grant is the permission", () => {
 });
 
 describe("the policy is asked as well as the grant", () => {
+  test.each(["github.get_current_user", `tool_${"x".repeat(70)}`])(
+    "preserves existing tool.name denies when %s needs a transport alias",
+    async (name) => {
+      const policyToolName = `${name}_${suite}`;
+      const policyRef = `${serverId}/${policyToolName}`;
+      const rule = `tool.name == "mcp__${serverId}__${policyToolName}"`;
+      let vendorCalls = 0;
+      const guardedStore = createPluginStore({
+        database,
+        auditStore: createAuditStore(database),
+        credentials: {
+          ...createCredentialStore(database),
+          readSecret: async () => null,
+        },
+        encryptionKey: "x".repeat(44),
+        policy: () => ({ mode: "enforce", deny: [rule], allow: ["true"] }),
+        callVendor: async () => {
+          vendorCalls++;
+          return { text: "must not dispatch", isError: false };
+        },
+      });
+      await database.insert(mcpTools).values({
+        serverId,
+        name: policyToolName,
+        description: "Policy identity regression fixture.",
+      });
+      try {
+        await guardedStore.grant(
+          "mcp",
+          policyRef,
+          holderId,
+          "admin@openbot.local",
+        );
+        let thrown: unknown;
+        try {
+          await guardedStore.callTool({
+            ref: policyRef,
+            args: {},
+            botId: holderId,
+            actorId: `policy_alias_${suite}`,
+          });
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBeInstanceOf(PluginRefusedError);
+        expect((thrown as PluginRefusedError).rule).toBe(rule);
+        expect(vendorCalls).toBe(0);
+        expect(await auditRowsFor(policyRef)).toContainEqual({
+          eventType: "mcp.call_rejected",
+          payload: expect.objectContaining({
+            tool: policyToolName,
+            decision: expect.objectContaining({ rule, carriedOut: false }),
+          }),
+        });
+      } finally {
+        await guardedStore.revoke(
+          "mcp",
+          policyRef,
+          holderId,
+          "admin@openbot.local",
+        );
+        await database
+          .delete(mcpTools)
+          .where(
+            and(
+              eq(mcpTools.serverId, serverId),
+              eq(mcpTools.name, policyToolName),
+            ),
+          );
+      }
+    },
+  );
+
   test("a granted tool is still refused by a deny rule, and the rule is named", async () => {
     await store.grant("mcp", ref, holderId, "admin@openbot.local");
     policy = {

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 import { mintRunAssertion } from "../src/agents/callback-token";
 import { type CallbackRunTools, createApp } from "../src/app";
+import type { AuditEventInput } from "../src/audit";
 import { loadConfig } from "../src/config";
 import { toolNameFor } from "../src/plugins/store";
 import type { GrantedTool } from "../src/plugins/tools";
@@ -28,6 +29,7 @@ function testApp(
     testEnvironment({ AGENT_TOOL_TOKEN: LEGACY_TOKEN }),
   );
   const listedBots: string[] = [];
+  const audit: AuditEventInput[] = [];
   const pluginStore = {
     listForAgent: async (botId: string) => {
       listedBots.push(botId);
@@ -54,7 +56,11 @@ function testApp(
     undefined, // agentProfileStore
     undefined, // channelStore
     undefined, // channelEvents
-    undefined, // auditStore
+    {
+      insert: async (event) => {
+        audit.push(event);
+      },
+    }, // auditStore
     undefined, // componentStore
     pluginStore as never,
     undefined, // sandboxedStore
@@ -74,6 +80,7 @@ function testApp(
     app: createApp(...args),
     config,
     listedBots,
+    audit,
   };
 }
 
@@ -82,13 +89,18 @@ describe("the trusted context of an agent tool call", () => {
     test(`hashed remote tool alias ${held ? "dispatches its granted raw ref" : "refuses a missing or revoked grant"}`, async () => {
       const ref = "oomol-connector/github.get_current_user";
       const calls: CapturedCall[] = [];
-      const { app, config, listedBots } = testApp(
+      const { app, config, listedBots, audit } = testApp(
         calls,
         undefined,
         held ? [ref] : [],
       );
       const run = mintRunAssertion(
-        { actorId: "signed-actor", botId: "signed-bot", runId: "signed-run" },
+        {
+          actorId: "signed-actor",
+          botId: "signed-bot",
+          runId: "signed-run",
+          threadId: "signed-thread",
+        },
         config.keyEncryptionKey,
       );
       const response = await app.request(
@@ -119,12 +131,71 @@ describe("the trusted context of an agent tool call", () => {
                 botId: "signed-bot",
                 actorId: "signed-actor",
                 runId: "signed-run",
+                threadId: "signed-thread",
               },
             ]
           : [],
       );
+      expect(audit).toEqual(
+        held
+          ? []
+          : [
+              {
+                eventType: "mcp.call_rejected",
+                targetType: "mcp_tool",
+                targetId: toolNameFor(ref),
+                payload: {
+                  actor: "signed-actor",
+                  bot: "signed-bot",
+                  runId: "signed-run",
+                  threadId: "signed-thread",
+                  refusal: "unresolved_alias",
+                },
+              },
+            ],
+      );
     });
   }
+
+  test("bounds an unresolved alias in the rejection audit without retaining arguments", async () => {
+    const calls: CapturedCall[] = [];
+    const { app, config, audit } = testApp(calls);
+    const name = `mcp_h__${"x".repeat(1000)}`;
+    const run = mintRunAssertion(
+      { actorId: "signed-actor", botId: "signed-bot", runId: "signed-run" },
+      config.keyEncryptionKey,
+    );
+    const response = await app.request(
+      "http://openbot.test/api/agent-tools/call",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-openbot-agent-token": LEGACY_TOKEN,
+        },
+        body: JSON.stringify({
+          name,
+          args: { secret: "private test argument" },
+          run,
+        }),
+      },
+    );
+    expect((await response.json()).isError).toBe(true);
+    expect(calls).toEqual([]);
+    expect(audit).toEqual([
+      {
+        eventType: "mcp.call_rejected",
+        targetType: "mcp_tool",
+        targetId: name.slice(0, 120),
+        payload: {
+          actor: "signed-actor",
+          bot: "signed-bot",
+          runId: "signed-run",
+          refusal: "unresolved_alias",
+        },
+      },
+    ]);
+  });
 
   test("comes only from the signed run assertion, never from tool arguments", async () => {
     const calls: CapturedCall[] = [];

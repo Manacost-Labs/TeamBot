@@ -1194,7 +1194,25 @@ export function createApp(
               ),
             )
           : body.name.replace(/^mcp__/, "").replace("__", "/");
-        if (!ref) throw new Error("That tool is no longer available.");
+        if (!ref) {
+          // No raw ref is known after revocation. Record the bounded alias and verified run,
+          // never tool arguments or a guessed server/action identity.
+          if (auditStore) {
+            await recordAuditEvent(auditStore, {
+              eventType: "mcp.call_rejected",
+              targetType: "mcp_tool",
+              targetId: body.name.slice(0, 120),
+              payload: {
+                actor: verdict.actorId,
+                bot: verdict.botId,
+                runId: verdict.runId,
+                ...(verdict.threadId ? { threadId: verdict.threadId } : {}),
+                refusal: "unresolved_alias",
+              },
+            });
+          }
+          throw new Error("That tool is no longer available.");
+        }
         const result = await pluginStore.callTool({
           ref,
           args: body.args ?? {},
