@@ -234,10 +234,15 @@ export async function readThreadExecution(
   channelId: string,
   threadId: string,
   agentId: string,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   const response = await client(
     `/api/threads/${encodeURIComponent(threadId)}/execution?channelId=${encodeURIComponent(channelId)}&agentId=${encodeURIComponent(agentId)}`,
-    { fallback: "Не удалось проверить состояние запуска" },
+    {
+      fallback: "Не удалось проверить состояние запуска",
+      timeoutMs: 5_000,
+      ...(signal ? { signal } : {}),
+    },
   );
   const body = (await response.json()) as { active?: unknown };
   if (typeof body.active !== "boolean") {

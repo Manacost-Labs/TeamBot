@@ -216,6 +216,8 @@ export async function verifyChatPolish(page: Page, profile: string) {
         await page.getByTestId("transcript-activity").getAttribute("open"),
         null,
       );
+      // Keep keyboard focus coverage above; capture the resting design without its focus ring.
+      await page.keyboard.press("Tab");
       if (screenshotDirectory)
         await page.screenshot({
           path: join(
@@ -256,6 +258,7 @@ export async function verifyChatPolish(page: Page, profile: string) {
     transientMounts,
     handoffOrbStable: true,
     activeReconnectVisible: true,
+    untrackedRemoteVisible: true,
     toolOrbSuppressed: true,
     responsiveWidths: widths,
     themes: ["light", "dark"],

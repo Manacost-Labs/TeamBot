@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ChatTranscript } from "@/components/channels/chat-transcript";
 import { isChannelTurnBusy } from "@/components/channels/channel-turn-activity";
-import "../../src/styles.css";
+import "./styles.css";
 
 type Scenario =
   | "cold_switch"

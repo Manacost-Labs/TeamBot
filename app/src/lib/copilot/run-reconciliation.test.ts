@@ -6,6 +6,7 @@ import {
   isProgressNote,
   monitorRunEvidence,
   monitorRunEvidenceOnce,
+  readThreadExecution,
   RECONCILIATION_DELAYS_MS,
   reconcileRunEvidence,
   reconcileRunEvidenceOnce,
@@ -19,6 +20,65 @@ const answer: Message = {
 };
 
 describe("restored run reconciliation", () => {
+  test("cancels the join execution request when its caller leaves", async () => {
+    const originalFetch = globalThis.fetch;
+    const caller = new AbortController();
+    let requestSignal: AbortSignal | null | undefined;
+    globalThis.fetch = ((_url: unknown, init?: RequestInit) => {
+      requestSignal = init?.signal;
+      return new Promise<Response>((_resolve, reject) => {
+        requestSignal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("Aborted", "AbortError")),
+          { once: true },
+        );
+      });
+    }) as typeof fetch;
+    try {
+      const pending = readThreadExecution(
+        "channel",
+        "thread",
+        "agent",
+        caller.signal,
+      );
+      caller.abort();
+      await expect(pending).rejects.toMatchObject({
+        name: "AbortError",
+      });
+      expect(requestSignal?.aborted).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("reads execution independently from history and validates the server signal", async () => {
+    const originalFetch = globalThis.fetch;
+    const paths: string[] = [];
+    let active: unknown = true;
+    globalThis.fetch = ((url: unknown) => {
+      paths.push(String(url));
+      return Promise.resolve(Response.json({ active }));
+    }) as typeof fetch;
+    try {
+      expect(
+        await readThreadExecution("channel / a", "thread / a", "agent / a"),
+      ).toBe(true);
+      expect(paths).toEqual([
+        "/api/threads/thread%20%2F%20a/execution?channelId=channel%20%2F%20a&agentId=agent%20%2F%20a",
+      ]);
+      active = false;
+      expect(await readThreadExecution("channel", "thread", "agent")).toBe(
+        false,
+      );
+      active = "true";
+      await expect(
+        readThreadExecution("channel", "thread", "agent"),
+      ).rejects.toThrow("неизвестное состояние");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("reports the last result in the matching turn, not progress or a newer answer", () => {
     const progress: Message = {
       id: "progress",

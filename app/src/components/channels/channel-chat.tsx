@@ -48,6 +48,7 @@ import {
   readThreadExecution,
   RECONCILIATION_DELAYS_MS,
 } from "@/lib/copilot/run-reconciliation";
+import { isAgentRunActive } from "@/lib/copilot/run-state";
 import { stoppedReason } from "@/lib/copilot/stopped-turn";
 import {
   cachedThreadMessages,
@@ -423,13 +424,26 @@ export function ChannelChat({
     // `isRunning` is true for both idle replay and a live remote run. Check the existing execution
     // authority independently; do not wait for it to paint history or release the join/send gate.
     setJoinExecutionActive(false);
-    void readThreadExecution(channel.id, channel.threadId, runtimeAgentId)
-      .then((active) => {
-        if (current) setJoinExecutionActive(active);
-      })
-      .catch(() => {
-        // Unavailable is not evidence of activity. Local/tracked turns still have their own signal.
-      });
+    const executionProbe = new AbortController();
+    const tracked = agentRunActivityStore.getSnapshot({
+      channelId: channel.id,
+      agentId: runtimeAgentId,
+    });
+    if (!tracked || !isAgentRunActive(tracked.state.status)) {
+      void readThreadExecution(
+        channel.id,
+        channel.threadId,
+        runtimeAgentId,
+        executionProbe.signal,
+      )
+        .then((active) => {
+          if (current && !executionProbe.signal.aborted)
+            setJoinExecutionActive(active);
+        })
+        .catch(() => {
+          // Unavailable is not evidence of activity. Local/tracked turns have their own signal.
+        });
+    }
     void (async () => {
       try {
         const outcome = await joinWithin({
@@ -441,6 +455,7 @@ export function ChannelChat({
           markChannelTiming(channel.id, "runtime_joined");
         }
       } finally {
+        executionProbe.abort();
         if (attempt === joinAttempt.current) {
           if (current) {
             setJoined(true);
@@ -451,6 +466,7 @@ export function ChannelChat({
     })();
     return () => {
       current = false;
+      executionProbe.abort();
     };
   }, [
     agent,

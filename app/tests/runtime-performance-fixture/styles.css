@@ -1,0 +1,4 @@
+@import "../../src/styles.css";
+
+/* The fixture root is outside src: explicitly scan the real components, not just the harness. */
+@source "../../src";
