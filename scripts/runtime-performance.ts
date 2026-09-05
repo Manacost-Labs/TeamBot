@@ -8,6 +8,7 @@ import {
   type Page,
 } from "../artifact-renderer/node_modules/playwright/index.mjs";
 import { verifyChatReliability } from "./chat-reliability-browser";
+import { verifyChatPolish } from "./chat-polish-browser";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const fixtureConfig = join(
@@ -379,6 +380,7 @@ async function main() {
         reliability.push({
           profile: profile.id,
           ...(await verifyChatReliability(page)),
+          polish: await verifyChatPolish(page, profile.id),
         });
       } finally {
         await context.close();

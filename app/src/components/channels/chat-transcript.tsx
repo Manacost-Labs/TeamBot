@@ -1,6 +1,11 @@
 import type { Message } from "@ag-ui/core";
 import { useRenderToolCall } from "@copilotkit/react-core/v2";
-import { IconBox, IconDownload, IconFile } from "@tabler/icons-react";
+import {
+  IconBox,
+  IconChevronDown,
+  IconDownload,
+  IconFile,
+} from "@tabler/icons-react";
 import {
   memo,
   useCallback,
@@ -47,11 +52,7 @@ import {
   TRANSCRIPT_HISTORY_WINDOW_MAX,
 } from "@/lib/channels/conversation-state";
 import type { HistoryPage } from "@/lib/copilot/conversation-store";
-import {
-  type AgentRunState,
-  agentRunStatusLabel,
-  formatElapsedMs,
-} from "@/lib/copilot/run-state";
+import { type AgentRunState, formatElapsedMs } from "@/lib/copilot/run-state";
 import { StreamTextScheduler } from "@/lib/copilot/stream-text-scheduler";
 import { parseGoogleWorkspaceResult } from "@/lib/google-workspace/result";
 import { markdownComponents, markdownUrlTransform } from "@/lib/markdown";
@@ -387,10 +388,12 @@ const TranscriptMessage = memo(function TranscriptMessage({
             <Bubble
               align={align}
               variant={isUser ? "muted" : "ghost"}
-              className={isUser ? "rounded-2xl" : "w-full"}
+              className={
+                isUser ? "max-w-[92%] rounded-2xl sm:max-w-[82%]" : "w-full"
+              }
             >
               <BubbleContent
-                className={isUser ? "rounded-2xl px-4 py-2.5" : "w-full"}
+                className={isUser ? "rounded-2xl px-4 py-3 sm:px-5" : "w-full"}
               >
                 {isUser ? (
                   // A person's own message is shown exactly as they typed it. Rendering it as markdown
@@ -398,7 +401,7 @@ const TranscriptMessage = memo(function TranscriptMessage({
                   // emphasis. The chip is the one exception, and it is not reformatting: it is drawing
                   // the thing that was already a chip in the composer as a chip here too, so the
                   // transcript shows a skill was used rather than a slash that was typed.
-                  <span className="whitespace-pre-wrap">
+                  <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">
                     {invoked ? (
                       <>
                         {/*
@@ -714,23 +717,29 @@ function ActivitySummary({
     snapshot.elapsedMs > 0 ? ` · ${formatElapsedMs(snapshot.elapsedMs)}` : "";
   return (
     <details
-      className="rounded-xl border border-border/70 bg-muted/20 px-3 py-2"
+      className="group/activity rounded-xl border border-border/60 bg-muted/15 px-3"
       data-testid="transcript-activity"
       open={busy}
     >
-      <summary className="flex cursor-pointer list-none items-center gap-2 text-muted-foreground text-sm [&::-webkit-details-marker]:hidden">
+      <summary className="flex min-h-[44px] cursor-pointer list-none items-center gap-2 rounded-lg py-2 text-muted-foreground text-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 motion-reduce:transition-none [&::-webkit-details-marker]:hidden">
         <span
           aria-hidden="true"
           className={`size-1.5 shrink-0 rounded-full ${busy ? "animate-pulse bg-primary motion-reduce:animate-none" : snapshot.status === "stopped" ? "bg-destructive" : "bg-muted-foreground/60"}`}
         />
-        <span className="min-w-0 truncate">{snapshot.label}</span>
-        <span className="shrink-0 text-xs opacity-70">
-          · {snapshot.toolCount} {activityActionLabel(snapshot.toolCount)}
-          {duration}
+        <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <span className="[overflow-wrap:anywhere]">{snapshot.label}</span>
+          <span className="text-xs">
+            {snapshot.toolCount} {activityActionLabel(snapshot.toolCount)}
+            {duration}
+          </span>
         </span>
+        <IconChevronDown
+          aria-hidden="true"
+          className="size-4 shrink-0 transition-transform group-open/activity:rotate-180 motion-reduce:transition-none"
+        />
       </summary>
       {snapshot.steps.length > 0 ? (
-        <ol className="mt-2 flex flex-col gap-1 border-border border-l pl-3 text-muted-foreground text-xs">
+        <ol className="mb-3 ml-0.5 flex flex-col gap-2 border-border border-l pl-3 text-muted-foreground text-xs leading-relaxed">
           {snapshot.steps.map((step) => (
             <li className="flex items-center gap-2" key={step.id}>
               <span
@@ -803,10 +812,8 @@ export function ChatTranscript({
     startId: historyWindow.startId,
     olderStep: TRANSCRIPT_HISTORY_PAGE_SIZE,
   });
-  const activity = useMemo(
-    () => activitySnapshotFor(visible.items, busy, stopped, run),
-    [busy, run, stopped, visible.items],
-  );
+  // The bounded projection is fresh on every render, so memoising on its array never skips work.
+  const activity = activitySnapshotFor(visible.items, busy, stopped, run);
   const visibleArtifactIds = new Set(
     visible.items.flatMap((item) => {
       if (item.kind !== "tool") return [];
@@ -1078,7 +1085,7 @@ export function ChatTranscript({
           >
             <MessageScrollerContent
               aria-busy={busy}
-              className="mx-auto w-full max-w-3xl gap-5 px-3 py-4 sm:px-4 sm:py-6"
+              className="mx-auto w-full max-w-3xl gap-6 px-3 py-4 sm:gap-7 sm:px-4 sm:py-6"
             >
               {/*
                * The memo boundary is INSIDE the scroller item, not around it. `MessageScrollerItem`
@@ -1208,7 +1215,7 @@ export function ChatTranscript({
               ) : null}
               {busy && activity.toolCount === 0 ? (
                 <p
-                  className="flex items-center gap-2 text-muted-foreground text-sm"
+                  className="flex min-h-16 items-center gap-2 text-muted-foreground text-sm leading-relaxed"
                   data-testid="transcript-run-status"
                   role="status"
                 >
@@ -1218,7 +1225,7 @@ export function ChatTranscript({
                   >
                     <ThinkingOrb state="listening" size={64} />
                   </span>
-                  {run ? agentRunStatusLabel(run.status) : "Сотрудник работает"}
+                  {activity.label}
                 </p>
               ) : null}
               {/*

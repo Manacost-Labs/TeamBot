@@ -4,6 +4,7 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { useState } from "react";
 import { conversationStateCache } from "@/lib/channels/conversation-state";
+import { initialAgentRunState } from "@/lib/copilot/run-state";
 import { ChatTranscript } from "./chat-transcript";
 
 GlobalRegistrator.register();
@@ -128,6 +129,21 @@ describe("transcript windowing", () => {
     expect(view.queryByTestId("transcript-thinking-orb")).toBeNull();
     expect(view.getByTestId("transcript-activity")).toBeTruthy();
   });
+
+  for (const status of ["completed", "failed", "cancelled"] as const) {
+    test(`does not announce a ${status} protocol run as the active turn label`, () => {
+      const history: Message[] = [
+        { id: "question", role: "user", content: "Привет" },
+      ];
+      const run = { ...initialAgentRunState, status, startedAt: 100 };
+      const view = render(<ChatTranscript busy messages={history} run={run} />);
+      const footer = view.getByTestId("transcript-run-status");
+      expect(footer.textContent).toBe("Аналитик работает");
+      expect(view.getByTestId("transcript-thinking-orb")).toBeTruthy();
+      view.rerender(<ChatTranscript messages={history} run={run} />);
+      expect(view.queryByTestId("transcript-run-status")).toBeNull();
+    });
+  }
 
   test("renders authenticated file cards and previews raster images only", () => {
     const view = render(

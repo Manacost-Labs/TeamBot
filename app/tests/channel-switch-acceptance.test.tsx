@@ -3,13 +3,14 @@ import type { Message } from "@ag-ui/core";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { ConversationView } from "../src/components/channels/conversation-view";
+import { isChannelTurnBusy } from "../src/components/channels/channel-turn-activity";
 import { conversationStateCache } from "../src/lib/channels/conversation-state";
 import {
   type AgentRunActivityStore,
   createAgentRunActivityStore,
   useAgentRunActivity,
 } from "../src/lib/copilot/run-activity-store";
-import { isAgentRunActive } from "../src/lib/copilot/run-state";
+import { initialAgentRunState } from "../src/lib/copilot/run-state";
 
 GlobalRegistrator.register();
 
@@ -35,6 +36,9 @@ type ChannelFixture = {
   id: string;
   agentId: string;
   messages: readonly Message[];
+  isRunning?: boolean;
+  joined?: boolean;
+  turnsInFlight?: number;
 };
 
 function history(channel: string, size: number): Message[] {
@@ -73,7 +77,12 @@ function ChannelScreen({
 
   return (
     <ConversationView
-      busy={run ? isAgentRunActive(run.status) : false}
+      busy={isChannelTurnBusy({
+        isRunning: channel.isRunning ?? false,
+        joined: channel.joined ?? true,
+        turnsInFlight: channel.turnsInFlight ?? 0,
+        run: run ?? initialAgentRunState,
+      })}
       conversationKey={channel.id}
       messages={channel.messages}
       onSubmit={() => {}}
@@ -83,6 +92,46 @@ function ChannelScreen({
 }
 
 describe("channel route A to B to A acceptance", () => {
+  test("switching to a completed chat never mounts a transient status or orb during join", () => {
+    const store = createAgentRunActivityStore();
+    const a: ChannelFixture = {
+      id: "idle-a",
+      agentId: "researcher",
+      messages: history("A", 2),
+    };
+    const b: ChannelFixture = {
+      id: "idle-b",
+      agentId: "researcher",
+      messages: history("B", 2),
+      isRunning: true,
+      joined: false,
+    };
+    const token = store.begin(
+      { channelId: b.id, agentId: b.agentId },
+      { at: 100, logicalRunId: "old-turn" },
+    );
+    store.transition(
+      { channelId: b.id, agentId: b.agentId },
+      { type: "finished", at: 200 },
+      { token },
+    );
+    const view = render(<RoutedConversation channel={a} store={store} />);
+    for (let visit = 0; visit < 3; visit += 1) {
+      view.rerender(<RoutedConversation channel={b} store={store} />);
+      expect(view.getByText("B answer 1")).toBeTruthy();
+      expect(view.queryByTestId("transcript-run-status")).toBeNull();
+      expect(view.queryByTestId("transcript-thinking-orb")).toBeNull();
+      view.rerender(
+        <RoutedConversation
+          channel={{ ...b, joined: true, isRunning: false }}
+          store={store}
+        />,
+      );
+      expect(view.queryByTestId("transcript-run-status")).toBeNull();
+      view.rerender(<RoutedConversation channel={a} store={store} />);
+    }
+  });
+
   test("restores history, draft and scroll exactly once while the background run keeps progressing", () => {
     const store = createAgentRunActivityStore();
     const agentId = "researcher";

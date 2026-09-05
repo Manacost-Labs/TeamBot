@@ -2,6 +2,7 @@ import type { Message } from "@ag-ui/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ChatTranscript } from "@/components/channels/chat-transcript";
+import { isChannelTurnBusy } from "@/components/channels/channel-turn-activity";
 import "../../src/styles.css";
 
 type Scenario =
@@ -21,7 +22,11 @@ type BrowserMeasurement = {
 };
 
 type BenchmarkApi = {
-  showTranscript: (messages: readonly Message[], key?: string) => void;
+  showTranscript: (
+    messages: readonly Message[],
+    key?: string,
+    activity?: Parameters<typeof isChannelTurnBusy>[0],
+  ) => void;
   peek: (generation: number) => BrowserMeasurement | null;
   prepare: (scenario: Scenario, iteration: number) => number;
   take: (generation: number) => BrowserMeasurement | null;
@@ -34,6 +39,7 @@ declare global {
 }
 
 type ViewState = {
+  activity: Parameters<typeof isChannelTurnBusy>[0] | null;
   busy: boolean;
   generation: number;
   key: string;
@@ -214,6 +220,7 @@ function historyFor(size: number): readonly Message[] {
 
 function RuntimePerformanceFixture() {
   const [view, setView] = useState<ViewState>(() => ({
+    activity: null,
     busy: false,
     generation: 0,
     key: "initial",
@@ -225,22 +232,25 @@ function RuntimePerformanceFixture() {
   const nextGeneration = useRef(1);
   const prepared = useRef<PreparedScenario | null>(null);
 
-  const commit = useCallback((next: Omit<ViewState, "generation">): number => {
-    if (pending.current) {
-      throw new Error(
-        "A benchmark transition was started before the previous paint",
-      );
-    }
-    const generation = nextGeneration.current;
-    nextGeneration.current += 1;
-    pending.current = {
-      generation,
-      marker: next.marker,
-      startedAt: performance.now(),
-    };
-    setView({ ...next, generation });
-    return generation;
-  }, []);
+  const commit = useCallback(
+    (next: Omit<ViewState, "generation" | "activity">): number => {
+      if (pending.current) {
+        throw new Error(
+          "A benchmark transition was started before the previous paint",
+        );
+      }
+      const generation = nextGeneration.current;
+      nextGeneration.current += 1;
+      pending.current = {
+        generation,
+        marker: next.marker,
+        startedAt: performance.now(),
+      };
+      setView({ ...next, generation, activity: null });
+      return generation;
+    },
+    [],
+  );
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: generation deliberately starts a paint measurement after each requested commit.
   useEffect(() => {
@@ -321,12 +331,13 @@ function RuntimePerformanceFixture() {
 
   useEffect(() => {
     globalThis.runtimePerformanceBenchmark = {
-      showTranscript: (messages, key) => {
+      showTranscript: (messages, key, activity) => {
         setView((previous) => ({
           ...previous,
           key: key ?? previous.key,
           messages,
           busy: false,
+          activity: activity ?? null,
         }));
       },
       peek: (generation) => measurements.current.get(generation) ?? null,
@@ -367,7 +378,8 @@ function RuntimePerformanceFixture() {
         type="button"
       />
       <ChatTranscript
-        busy={view.busy}
+        busy={view.activity ? isChannelTurnBusy(view.activity) : view.busy}
+        {...(view.activity ? { run: view.activity.run } : {})}
         channelId={view.key}
         conversationKey={view.key}
         key={view.key}

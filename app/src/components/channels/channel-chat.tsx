@@ -45,9 +45,9 @@ import {
 import {
   assistantOutputAfter,
   hasAssistantOutputAfter,
+  readThreadExecution,
   RECONCILIATION_DELAYS_MS,
 } from "@/lib/copilot/run-reconciliation";
-import { isAgentRunActive } from "@/lib/copilot/run-state";
 import { stoppedReason } from "@/lib/copilot/stopped-turn";
 import {
   cachedThreadMessages,
@@ -70,6 +70,7 @@ import {
 } from "@/lib/performance/workspace-timing";
 import { useSkillCommands } from "@/lib/plugins/skill-commands";
 import { newId } from "../../lib/new-id";
+import { isChannelTurnBusy } from "./channel-turn-activity";
 
 /**
  * How long a stalled thread join is worth waiting for before it is ended.
@@ -264,6 +265,7 @@ export function ChannelChat({
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyRetryNonce, setHistoryRetryNonce] = useState(0);
   const [joined, setJoined] = useState(false);
+  const [joinExecutionActive, setJoinExecutionActive] = useState(false);
   /**
    * How many stored turns this app could not read.
    *
@@ -418,6 +420,16 @@ export function ChannelChat({
     const attempt = joinAttempt.current + 1;
     joinAttempt.current = attempt;
     let current = true;
+    // `isRunning` is true for both idle replay and a live remote run. Check the existing execution
+    // authority independently; do not wait for it to paint history or release the join/send gate.
+    setJoinExecutionActive(false);
+    void readThreadExecution(channel.id, channel.threadId, runtimeAgentId)
+      .then((active) => {
+        if (current) setJoinExecutionActive(active);
+      })
+      .catch(() => {
+        // Unavailable is not evidence of activity. Local/tracked turns still have their own signal.
+      });
     void (async () => {
       try {
         const outcome = await joinWithin({
@@ -440,7 +452,14 @@ export function ChannelChat({
     return () => {
       current = false;
     };
-  }, [agent, channel.id, copilotkit, isReady]);
+  }, [
+    agent,
+    channel.id,
+    channel.threadId,
+    copilotkit,
+    isReady,
+    runtimeAgentId,
+  ]);
 
   // A cached tail paints additively. A server revision replaces it, retaining only this tab's writes.
   useEffect(() => {
@@ -978,14 +997,16 @@ export function ChannelChat({
         /*
          * THE TURN, not the run. `say` waits for the runtime agent and the join before a run starts,
          * and `agent.isRunning` alone leaves that gap unmarked — which is the one moment the
-         * "Thinking" line exists for. Same value as `pending`, deliberately.
+         * "Thinking" line exists for. Unlike delivery's `pending` guard, presentation must not
+         * announce the initial history join itself as a turn.
          */
-        busy={
-          agent.isRunning ||
-          turnsInFlight > 0 ||
-          (runActivity.state.startedAt !== null &&
-            isAgentRunActive(runActivity.state.status))
-        }
+        busy={isChannelTurnBusy({
+          isRunning: agent.isRunning,
+          joined,
+          joinExecutionActive,
+          turnsInFlight,
+          run: runActivity.state,
+        })}
         // The `/` menu exposes only skills granted to this Bot.
         commands={skillCommands}
         conversationKey={channel.id}
