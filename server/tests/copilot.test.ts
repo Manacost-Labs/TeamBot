@@ -1,7 +1,9 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { HttpAgent } from "@ag-ui/client";
 import { BuiltInAgent } from "@copilotkit/runtime/v2";
+import { z } from "zod";
 import { PROVENANCE_GUIDANCE } from "../../shared/bot-prompt";
+import type { AgentActor } from "../src/agents/profile-types";
 import {
   adaptiveReasoningEffort,
   buildAgents,
@@ -14,8 +16,7 @@ import {
   resolveRuntimeAgents,
   standingRoleMessage,
 } from "../src/copilot";
-import type { AgentActor } from "../src/agents/profile-types";
-import { grantedToolGuidance } from "../src/plugins/tools";
+import { type GrantedTool, grantedToolGuidance } from "../src/plugins/tools";
 
 // Every agent row now joins its profile, so the row a coworker is built from always names it.
 const assistantRow = {
@@ -1025,10 +1026,15 @@ function fakeAgUiEndpoint() {
  * one that failed in the product.
  */
 describe("what a Bot is told it holds", () => {
-  const drive = [
-    { name: "mcp__google-drive__search_files" },
-    { name: "mcp__google-drive__read_file_content" },
-  ] as never[];
+  const drive: GrantedTool[] = ["search_files", "read_file_content"].map(
+    (action) => ({
+      name: `mcp__google-drive__${action}`,
+      ref: `google-drive/${action}`,
+      description: action,
+      parameters: z.object({}),
+      execute: async () => "",
+    }),
+  );
 
   test("names the system and its tools", () => {
     const guidance = grantedToolGuidance(drive);
