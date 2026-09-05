@@ -1,6 +1,6 @@
 # Chat reliability release evidence — 2026-09-04
 
-**Status: pending final serial gate and parent approval.** This record is
+**Status: pending clean-runner CI and release-owner verification.** This record is
 evidence for the chat-reliability change; it is not a deployment approval.
 
 ## Candidate
@@ -20,14 +20,18 @@ evidence for the chat-reliability change; it is not a deployment approval.
 | Chat browser reliability | **PASS** | Desktop and mobile/4× CPU; 12 deltas each, stable rows, corrected history, preserved scroll, reduced motion, zero external requests, no page errors. External artifact filename: `chat-release-browser-20260905.json`; no repository-relative artifact is claimed. |
 | Focused implementation tests | **PASS (historical checkpoint)** | 131/131 across 10 files. |
 | Security slice | **PASS (historical checkpoint)** | RED 4 failing/1 passing, then GREEN 70 passing across 3 files; Semgrep 22 rules/0 findings; Gitleaks staged clean. |
-| Full canonical gate | **PENDING** | A parallel rerun had one known attachment-fixture lease timeout; the parent is rerunning serially without frontend benchmark/scanner parallelism. A CI-only Drizzle metadata repair is also pending: old CI run `33912717186` reported format/tests/migrations failures because existing `0036_manacost_team_autonomy.sql` lacks `server/drizzle/meta/0036_snapshot.json`. Readonly generation showed that generating SQL would duplicate `0036`; no new migration is intended. |
+| Full canonical gate | **PENDING CI** | Clean staged-source format, lint and types passed. Final serial testing on the shared host hit load-sensitive baseline failures; unchanged checks will run on clean GitHub runners before integration. |
+| Migration metadata | **PASS** | Added only the missing `0036_snapshot.json` for existing SQL. Regression RED (missing file) → GREEN (38 assertions). Drizzle check passed; generation reported no schema changes; all migration-file hashes stayed identical. No SQL, journal or runtime schema change. |
 | Production browser/OOMOL | **NOT RUN** | Chrome MCP navigation was policy-blocked; local browser evidence is synthetic and has zero external requests. |
 | Final security commit, main push, deployment | **PENDING** | Earlier local commits are listed above; parent owns the final security commit, main push, and release actions. |
 
 The historical pre-Astra candidate recorded `3325 pass, 23 skip, 0 fail`
 plus PDF 10 and artifact 11 checks. A later parallel candidate recorded
 `3327 pass, 23 skip, 1 fail`; the one failure was the known fixture timing
-race. These counts are historical checkpoints, not current approval.
+race. The final serial local run recorded `3325 pass, 23 skip, 4 fail, 1 error`
+while host load reached 37.72 on 16 CPUs: attachment timing, stream-pull
+scheduling, and settings timeouts. These counts are historical checkpoints,
+not current approval. Test assertions and timeouts were not relaxed.
 
 ## What changed
 
@@ -46,8 +50,8 @@ bounded in audit records and omit arguments.
   400 ms targets. This is follow-up optimization, not a speed claim.
 - The attachment check can time out because a 40 ms lease is created before
   an asynchronous blob write and expires before validation begins. This is a
-  fixture timing race; no runtime change is planned. The parent must still
-  complete the serial canonical gate.
+  fixture timing race; no runtime change is planned. The focused serial
+  attachment suite passed 12/12; full clean-runner verification remains required.
 - `TEST_DATABASE_URL` must point to a migrated disposable database for the
   test phase. No secrets, `.env` values, production database, or live OOMOL
   credentials were used.
@@ -85,9 +89,9 @@ scope guards validate this separately from the clean staged-source candidate.
 
 ## Parent completion record
 
-The parent must append the current serial canonical-gate result here before
-calling this candidate releasable. Until then, the correct state is
-**pending**, with the final security commit, main push, and deployment still
-unclaimed. The parent may add
-only the missing Drizzle snapshot and its regression test for the CI metadata
-repair; no SQL, journal, schema, or production-data change is intended.
+The security fix is committed as `64e2838`; Astra and Luna reviews closed all
+Critical/Required code findings. Astra also verified the generated snapshot
+matches the existing SQL exactly. Recovery/verification entrypoint tests passed
+17/17. The release owner must verify clean-runner CI before integrating into
+main and deploying. No main push or deployment is claimed in this pre-release
+record; actual release outcomes belong to the subsequent handoff.
