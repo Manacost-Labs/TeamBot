@@ -95,23 +95,38 @@ describe("transcript windowing", () => {
   });
 
   test("shows the thinking orb only while the Bot is working", () => {
-    const view = render(
-      <ChatTranscript
-        messages={[{ id: "question", role: "user", content: "Привет" }]}
-      />,
-    );
+    const messagesWithoutTools = [
+      { id: "question", role: "user" as const, content: "Привет" },
+    ];
+    const messagesWithInFlightTool = [
+      ...messagesWithoutTools,
+      {
+        id: "assistant-tool",
+        role: "assistant" as const,
+        toolCalls: [
+          {
+            id: "search-call",
+            type: "function" as const,
+            function: { name: "search", arguments: '{"query":"test"}' },
+          },
+        ],
+      },
+    ] as Message[];
+    const view = render(<ChatTranscript messages={messagesWithoutTools} />);
 
     expect(view.queryByTestId("transcript-thinking-orb")).toBeNull();
 
-    view.rerender(
-      <ChatTranscript
-        busy
-        messages={[{ id: "question", role: "user", content: "Привет" }]}
-      />,
-    );
+    view.rerender(<ChatTranscript busy messages={messagesWithoutTools} />);
 
     expect(view.getByTestId("transcript-thinking-orb")).toBeTruthy();
     expect(view.getByRole("img", { name: "Listening…" })).toBeTruthy();
+
+    view.rerender(<ChatTranscript messages={messagesWithoutTools} />);
+    expect(view.queryByTestId("transcript-thinking-orb")).toBeNull();
+
+    view.rerender(<ChatTranscript busy messages={messagesWithInFlightTool} />);
+    expect(view.queryByTestId("transcript-thinking-orb")).toBeNull();
+    expect(view.getByTestId("transcript-activity")).toBeTruthy();
   });
 
   test("renders authenticated file cards and previews raster images only", () => {
