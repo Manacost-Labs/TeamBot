@@ -137,10 +137,7 @@ export function SignScreen() {
           variants={{ hidden, shown }}
         >
           {telegram ? (
-            <form
-              action="/api/auth/telegram/start?returnPath=/"
-              method="post"
-            >
+            <form action="/api/auth/telegram/start?returnPath=/" method="post">
               <Button
                 className="h-10 w-full tracking-tight"
                 size="lg"

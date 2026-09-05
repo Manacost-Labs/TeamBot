@@ -89,7 +89,9 @@ describe("Telegram sign-in", () => {
     });
 
     expect(oauth.getByText("Продолжить через Google")).toBeTruthy();
-    expect(oauth.container.querySelector("form[action*='telegram']")).toBeNull();
+    expect(
+      oauth.container.querySelector("form[action*='telegram']"),
+    ).toBeNull();
     expect(fetchOAuth).not.toHaveBeenCalled();
   });
 

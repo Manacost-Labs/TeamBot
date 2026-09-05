@@ -368,7 +368,9 @@ function createTelegramFixture(
           },
           verifyIdToken: async (idToken, input) => {
             if (options.failOidcVerification) {
-              throw new Error("synthetic Telegram ID token verification failure");
+              throw new Error(
+                "synthetic Telegram ID token verification failure",
+              );
             }
             return {
               id: idToken.endsWith(OWNER_TELEGRAM_ID)
@@ -427,7 +429,10 @@ function createTelegramFixture(
     );
   }
 
-  async function startOidc(returnPath = "/settings", origin = TELEGRAM_BASE_URL) {
+  async function startOidc(
+    returnPath = "/settings",
+    origin = TELEGRAM_BASE_URL,
+  ) {
     return auth.handler(
       new Request(
         `${TELEGRAM_BASE_URL}/api/auth/telegram/start?returnPath=${encodeURIComponent(returnPath)}`,
@@ -486,7 +491,9 @@ describe("Telegram OIDC session flow", () => {
       `${TELEGRAM_BASE_URL}/api/auth/telegram/callback`,
     );
     expect(authorization.searchParams.get("scope")).toBe("openid profile");
-    expect(authorization.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(authorization.searchParams.get("code_challenge_method")).toBe(
+      "S256",
+    );
     expect(authorization.searchParams.get("code_challenge")).toMatch(
       /^[A-Za-z0-9_-]{43}$/,
     );

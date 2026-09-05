@@ -24,16 +24,14 @@ describe("public ManacostTeam reverse proxy", () => {
 
   test("keeps Telegram codes out of access logs and removes the legacy edge gate", () => {
     const config = readFileSync(
-      join(
-        import.meta.dir,
-        "..",
-        "ops/nginx/work.kolodahearthstone.com.conf",
-      ),
+      join(import.meta.dir, "..", "ops/nginx/work.kolodahearthstone.com.conf"),
       "utf8",
     );
 
     expect(config).toContain("server_name work.kolodahearthstone.com;");
-    expect(config).toContain('add_header Referrer-Policy "same-origin" always;');
+    expect(config).toContain(
+      'add_header Referrer-Policy "same-origin" always;',
+    );
     expect(config).not.toContain('add_header Referrer-Policy "no-referrer"');
     expect(config).toMatch(
       /location = \/api\/auth\/telegram\/callback\s*\{[\s\S]*?access_log off;/,

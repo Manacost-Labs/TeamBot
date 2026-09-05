@@ -32,9 +32,7 @@ jobs:
         with:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
-      - run: bun run format:check
-      - run: bun run lint
-      - run: bun run typecheck
+      - run: make verify-static
 
   # The two packages that are deployables in their own right rather than root workspaces. Root
   # `typecheck` is `bun run --filter '*' typecheck`, and `--filter '*'` enumerates `workspaces`, which
@@ -221,7 +219,9 @@ jobs:
         working-directory: server
       # A passing job must include the expected test floor. Import-time failures can otherwise skip
       # files before their tests are registered.
-      - run: bun run test:ci
+      - run: make verify-tests
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
 
   build:
     name: build
@@ -234,7 +234,7 @@ jobs:
         with:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
-      - run: bun run build
+      - run: make verify-build
 
   # Migration files and the schema they were generated from, checked against each other. A snapshot
   # that has drifted from the schema produces a migration nobody wrote, applied to somebody's

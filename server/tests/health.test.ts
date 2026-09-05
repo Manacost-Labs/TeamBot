@@ -115,38 +115,41 @@ describe("runtime capabilities", () => {
   ] as const)(
     "turns private Telegram %s failures into one generic sign-in result",
     async (_flow, path, method) => {
-    const telegramApp = createApp(
-      loadConfig(
-        testEnvironment({
-          GOOGLE_OAUTH_CLIENT_ID: undefined,
-          GOOGLE_OAUTH_CLIENT_SECRET: undefined,
-          INITIAL_ADMIN_EMAILS: undefined,
-          BETTER_AUTH_URL: undefined,
-          OPENBOT_PUBLIC_URL: "https://work.kolodahearthstone.com",
-          TELEGRAM_LOGIN_BOT_USERNAME: "ManacostTeamBot",
-          TELEGRAM_LOGIN_BOT_TOKEN: "123456:not-for-the-browser",
-          TELEGRAM_OIDC_CLIENT_ID: "123456",
-          TELEGRAM_OIDC_CLIENT_SECRET: "oidc-not-for-the-browser",
-          TELEGRAM_ALLOWED_USER_IDS: "810001",
-          TELEGRAM_OWNER_USER_IDS: "810001",
-        }),
-      ),
-      {
-        handler: () =>
-          new Response("private verification detail", {
-            status: 401,
-            headers: {
-              "set-cookie":
-                "telegram_login_binding=; Path=/; Max-Age=0; HttpOnly; Secure",
-            },
+      const telegramApp = createApp(
+        loadConfig(
+          testEnvironment({
+            GOOGLE_OAUTH_CLIENT_ID: undefined,
+            GOOGLE_OAUTH_CLIENT_SECRET: undefined,
+            INITIAL_ADMIN_EMAILS: undefined,
+            BETTER_AUTH_URL: undefined,
+            OPENBOT_PUBLIC_URL: "https://work.kolodahearthstone.com",
+            TELEGRAM_LOGIN_BOT_USERNAME: "ManacostTeamBot",
+            TELEGRAM_LOGIN_BOT_TOKEN: "123456:not-for-the-browser",
+            TELEGRAM_OIDC_CLIENT_ID: "123456",
+            TELEGRAM_OIDC_CLIENT_SECRET: "oidc-not-for-the-browser",
+            TELEGRAM_ALLOWED_USER_IDS: "810001",
+            TELEGRAM_OWNER_USER_IDS: "810001",
           }),
-        api: { getSession: async () => null },
-      },
-    );
+        ),
+        {
+          handler: () =>
+            new Response("private verification detail", {
+              status: 401,
+              headers: {
+                "set-cookie":
+                  "telegram_login_binding=; Path=/; Max-Age=0; HttpOnly; Secure",
+              },
+            }),
+          api: { getSession: async () => null },
+        },
+      );
 
-      const response = await telegramApp.request(`http://openbot.local${path}`, {
-        method,
-      });
+      const response = await telegramApp.request(
+        `http://openbot.local${path}`,
+        {
+          method,
+        },
+      );
 
       expect(response.status).toBe(303);
       expect(response.headers.get("location")).toBe("/sign?telegramError=1");
